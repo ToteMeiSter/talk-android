@@ -13,6 +13,8 @@
         window:finishSecondaryWithPrimary="always"
         window:splitMaxAspectRatioInPortrait="alwaysAllow"
         window:splitMinWidthDp="600"
+        window:splitMinHeightDp="0"
+        window:splitMinSmallestWidthDp="0"
         window:splitRatio="0.40">
         <SplitPairFilter
             window:primaryActivityName="com.nextcloud.talk.conversationlist.ConversationsListActivity"
@@ -26,6 +28,8 @@
         window:finishSecondaryWithPrimary="always"
         window:splitMaxAspectRatioInPortrait="alwaysAllow"
         window:splitMinWidthDp="600"
+        window:splitMinHeightDp="0"
+        window:splitMinSmallestWidthDp="0"
         window:splitRatio="0.40">
         <SplitPairFilter
             window:primaryActivityName="com.nextcloud.talk.contacts.ContactsActivity"
@@ -46,6 +50,8 @@
         window:placeholderActivityName="com.nextcloud.talk.conversationlist.ChatPlaceholderActivity"
         window:splitMaxAspectRatioInPortrait="alwaysAllow"
         window:splitMinWidthDp="600"
+        window:splitMinHeightDp="0"
+        window:splitMinSmallestWidthDp="0"
         window:splitRatio="0.40"
         window:stickyPlaceholder="false">
         <ActivityFilter window:activityName="com.nextcloud.talk.conversationlist.ConversationsListActivity" />
