@@ -439,7 +439,7 @@ class AccountVerificationActivity : BaseActivity() {
             }
             val intent = Intent(context, ConversationsListActivity::class.java)
             intent.putExtra(BundleKeys.KEY_INTERNAL_USER_ID, userToSetAsActive.id)
-            intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK)
             startActivity(intent)
         } else {
             logger.e(TAG, "failed to set active user")

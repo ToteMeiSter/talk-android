@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ~ Nextcloud Talk - Android Client
+  ~
+  ~ SPDX-FileCopyrightText: 2026 Julius Linus <julius.linus@nextcloud.com>
+  ~ SPDX-License-Identifier: GPL-3.0-or-later
+-->
+<resources xmlns:window="http://schemas.android.com/apk/res-auto">
+
+    <SplitPairRule
+        window:clearTop="true"
+        window:finishPrimaryWithSecondary="never"
+        window:finishSecondaryWithPrimary="always"
+        window:splitMaxAspectRatioInPortrait="alwaysAllow"
+        window:splitMinWidthDp="600"
+        window:splitMinHeightDp="0"
+        window:splitMinSmallestWidthDp="0"
+        window:splitRatio="0.40">
+        <SplitPairFilter
+            window:primaryActivityName="com.nextcloud.talk.conversationlist.ConversationsListActivity"
+            window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
+    </SplitPairRule>
+
+    <!-- Chats opened from other screens next to the list: show them in the secondary pane, not in the launcher -->
+    <SplitPairRule
+        window:clearTop="false"
+        window:finishPrimaryWithSecondary="never"
+        window:finishSecondaryWithPrimary="always"
+        window:splitMaxAspectRatioInPortrait="alwaysAllow"
+        window:splitMinWidthDp="600"
+        window:splitMinHeightDp="0"
+        window:splitMinSmallestWidthDp="0"
+        window:splitRatio="0.40">
+        <SplitPairFilter
+            window:primaryActivityName="com.nextcloud.talk.contacts.ContactsActivity"
+            window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
+        <SplitPairFilter
+            window:primaryActivityName="com.nextcloud.talk.invitation.InvitationsActivity"
+            window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
+        <SplitPairFilter
+            window:primaryActivityName="com.nextcloud.talk.openconversations.ListOpenConversationsActivity"
+            window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
+        <SplitPairFilter
+            window:primaryActivityName="com.nextcloud.talk.threadsoverview.ThreadsOverviewActivity"
+            window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
+    </SplitPairRule>
+
+    <SplitPlaceholderRule
+        window:finishPrimaryWithPlaceholder="always"
+        window:placeholderActivityName="com.nextcloud.talk.conversationlist.ChatPlaceholderActivity"
+        window:splitMaxAspectRatioInPortrait="alwaysAllow"
+        window:splitMinWidthDp="600"
+        window:splitMinHeightDp="0"
+        window:splitMinSmallestWidthDp="0"
+        window:splitRatio="0.40"
+        window:stickyPlaceholder="false">
+        <ActivityFilter window:activityName="com.nextcloud.talk.conversationlist.ConversationsListActivity" />
+    </SplitPlaceholderRule>
+
+</resources>

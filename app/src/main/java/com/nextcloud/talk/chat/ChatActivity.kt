@@ -40,6 +40,7 @@ import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
@@ -69,6 +70,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -90,6 +92,9 @@ import androidx.media3.common.Player
 import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.recyclerview.widget.LinearLayoutManager
+import androidx.window.embedding.ActivityEmbeddingController
+import androidx.window.embedding.SplitController
+import androidx.window.embedding.SplitController.SplitSupportStatus
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequest
 import com.nextcloud.talk.dagger.modules.assistedViewModels
@@ -113,6 +118,7 @@ import com.nextcloud.talk.attachmentpreview.FileAttachmentPreviewFragment
 import com.nextcloud.talk.chat.data.io.VoiceMessageMediaService
 import com.nextcloud.talk.chat.data.model.ChatMessage
 import com.nextcloud.talk.chat.data.model.FileParameters
+import com.nextcloud.talk.chat.ui.ChatConversationListPane
 import com.nextcloud.talk.chat.ui.ChatEmptyState
 import com.nextcloud.talk.chat.ui.ChatEmptyStateType
 import com.nextcloud.talk.chat.ui.ChatToolbar
@@ -131,6 +137,7 @@ import com.nextcloud.talk.chat.viewmodels.MessageInputViewModel
 import com.nextcloud.talk.conversationinfo.ConversationInfoActivity
 import com.nextcloud.talk.conversationinfo.viewmodel.ConversationInfoViewModel
 import com.nextcloud.talk.conversationlist.ConversationsListActivity
+import com.nextcloud.talk.conversationlist.viewmodels.ConversationsListViewModel
 import com.nextcloud.talk.data.database.model.SendStatus
 import com.nextcloud.talk.data.network.NetworkMonitor
 import com.nextcloud.talk.data.user.model.User
@@ -305,6 +312,13 @@ class ChatActivity :
             roomToken,
             conversationThreadId
         )
+    }
+
+    @Inject
+    lateinit var conversationsListViewModelFactory: ConversationsListViewModel.Factory
+
+    private val conversationsListViewModel: ConversationsListViewModel by assistedViewModels {
+        conversationsListViewModelFactory.build(initialUser)
     }
 
     lateinit var conversationInfoViewModel: ConversationInfoViewModel
@@ -510,6 +524,8 @@ class ChatActivity :
             if (!openedViaNotification && isChatThread()) {
                 isEnabled = false
                 onBackPressedDispatcher.onBackPressed()
+            } else if (isEmbeddedNextToConversationList()) {
+                finish()
             } else {
                 val intent = Intent(this@ChatActivity, ConversationsListActivity::class.java)
                 intent.putExtra(KEY_INTERNAL_USER_ID, conversationUserId)
@@ -535,7 +551,9 @@ class ChatActivity :
                     getRoomInfoTimerHandler?.removeCallbacksAndMessages(null)
                 }
 
-                ApplicationWideCurrentRoomHolder.getInstance().clear()
+                if (!isAnotherRoomCurrent()) {
+                    ApplicationWideCurrentRoomHolder.getInstance().clear()
+                }
             }
 
             else -> {}
@@ -605,7 +623,13 @@ class ChatActivity :
         initialUser = setUpBoundUserOrFinish() ?: return
 
         binding = ActivityChatBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+        setContentView(
+            if (isConversationListPaneEnabled()) {
+                wrapWithConversationListPane(binding.root)
+            } else {
+                binding.root
+            }
+        )
 
         setupChatToolbarView()
         setupChatEmptyStateView()
@@ -2174,7 +2198,8 @@ class ChatActivity :
             supportsSilentCall = capabilitiesReady &&
                 hasSpreedFeatureCapability(spreedCapabilities, SpreedFeatures.SILENT_CALL) &&
                 !isChatThread(),
-            isClassified = isClassified
+            isClassified = isClassified,
+            showNavigateUp = isChatThread() || !isEmbeddedNextToConversationList()
         )
     }
 
@@ -3014,7 +3039,9 @@ class ChatActivity :
                 leaveRoom(null)
             } else {
                 Log.d(TAG, "not leaving room (validSessionId is false)")
-                ApplicationWideCurrentRoomHolder.getInstance().clear()
+                if (!isAnotherRoomCurrent()) {
+                    ApplicationWideCurrentRoomHolder.getInstance().clear()
+                }
             }
         } else {
             Log.d(TAG, "not leaving room...")
@@ -3102,7 +3129,7 @@ class ChatActivity :
         // Send the HPB "leave room" immediately, before waiting for the backend DELETE to
         // confirm. This minimises the window in which the HPB could still consider the user
         // "in" the room and cause the server to delete a freshly-created notification.
-        if (webSocketInstance != null && currentConversation != null) {
+        if (webSocketInstance != null && currentConversation != null && !isAnotherRoomCurrent()) {
             webSocketInstance?.joinRoomWithRoomTokenAndSession("", sessionIdAfterRoomJoined)
         }
         sessionIdAfterRoomJoined = "0"
@@ -3121,6 +3148,15 @@ class ChatActivity :
             ),
             functionToCallAfterLeave
         )
+    }
+
+    /**
+     * True when another chat has already joined a room, e.g. when a new chat replaced this one in the split pane
+     * next to the conversation list. Leaving must then not reset the shared room and signaling state.
+     */
+    private fun isAnotherRoomCurrent(): Boolean {
+        val currentRoomToken = ApplicationWideCurrentRoomHolder.getInstance().currentRoomToken
+        return !currentRoomToken.isNullOrEmpty() && currentRoomToken != roomToken
     }
 
     private fun setupWebsocket() {
@@ -4175,6 +4211,38 @@ class ChatActivity :
 
     private fun isChatThread(): Boolean = conversationThreadId != null && conversationThreadId!! > 0
 
+    private fun isConversationListPaneEnabled(): Boolean =
+        resources.getBoolean(R.bool.chat_two_pane_fallback) &&
+            SplitController.getInstance(this).splitSupportStatus != SplitSupportStatus.SPLIT_AVAILABLE &&
+            !isEmbeddedNextToConversationList()
+
+    private fun wrapWithConversationListPane(chatRoot: View): View {
+        val pane = ComposeView(this).apply {
+            setContent {
+                ChatConversationListPane(
+                    viewModel = conversationsListViewModel,
+                    viewThemeUtils = viewThemeUtils,
+                    onConversationClick = {
+                        if (it.token != roomToken) {
+                            switchToRoom(it.token, false, false)
+                        }
+                    }
+                )
+            }
+        }
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(pane, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, CONVERSATION_PANE_WEIGHT))
+            addView(
+                chatRoot,
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - CONVERSATION_PANE_WEIGHT)
+            )
+        }
+    }
+
+    private fun isEmbeddedNextToConversationList(): Boolean =
+        ActivityEmbeddingController.getInstance(this).isActivityEmbedded(this)
+
     fun openThread(messageId: Long) {
         val bundle = Bundle()
         bundle.putLong(KEY_THREAD_ID, messageId)
@@ -4283,6 +4351,9 @@ class ChatActivity :
 
     companion object {
         val TAG = ChatActivity::class.java.simpleName
+
+        // same as splitRatio of main_split_config.xml
+        private const val CONVERSATION_PANE_WEIGHT = 0.4f
 
         /**
          * Creates an intent that opens the conversation [roomToken] of the account with the internal id [userId].
