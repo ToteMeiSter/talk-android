@@ -2384,6 +2384,10 @@ class ChatActivity :
             bundle.putBoolean(KEY_CALL_VOICE_ONLY, isVoiceOnlyCall)
         }
 
+        reopenWithRoom(token, bundle)
+    }
+
+    private fun reopenWithRoom(token: String, bundle: Bundle) {
         leaveRoom {
             val chatIntent = createIntent(context, conversationUserId, token, bundle)
             chatIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -4224,7 +4228,7 @@ class ChatActivity :
                     viewThemeUtils = viewThemeUtils,
                     onConversationClick = {
                         if (it.token != roomToken) {
-                            switchToRoom(it.token, false, false)
+                            reopenWithRoom(it.token, Bundle())
                         }
                     }
                 )
