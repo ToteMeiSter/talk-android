@@ -252,7 +252,7 @@ class MainActivity :
                 } else {
                     // Open conversation list first so it is shown next to the chat on wide screens
                     val listIntent = Intent(context, ConversationsListActivity::class.java)
-                    listIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                    listIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
                     listIntent.putExtra(BundleKeys.KEY_INTERNAL_USER_ID, user.id)
 
                     val chatIntent = Intent(context, ChatActivity::class.java)
