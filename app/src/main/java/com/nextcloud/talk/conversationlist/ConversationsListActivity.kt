@@ -209,6 +209,7 @@ class ConversationsListActivity : BaseActivity() {
         super.onCreate(savedInstanceState)
         NextcloudTalkApplication.sharedApplication!!.componentApplication.inject(this)
         currentUser = setUpBoundUserOrFinish() ?: return
+        SplitDiagnostics.show(this)
         ecosystemManager = EcosystemManager(this@ConversationsListActivity)
 
         if (!currentUser.current) {
