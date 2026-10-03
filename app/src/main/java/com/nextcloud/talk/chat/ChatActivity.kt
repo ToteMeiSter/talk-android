@@ -42,7 +42,6 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.view.ViewOutlineProvider
 import android.view.WindowManager
-import android.widget.LinearLayout
 import android.widget.PopupWindow
 import android.widget.TextView
 import android.widget.Toast
@@ -122,6 +121,7 @@ import com.nextcloud.talk.chat.data.io.VoiceMessageMediaService
 import com.nextcloud.talk.chat.data.model.ChatMessage
 import com.nextcloud.talk.chat.data.model.FileParameters
 import com.nextcloud.talk.chat.ui.ChatConversationListPane
+import com.nextcloud.talk.chat.ui.createConversationListPaneLayout
 import com.nextcloud.talk.chat.ui.ChatEmptyState
 import com.nextcloud.talk.chat.ui.ChatEmptyStateType
 import com.nextcloud.talk.chat.ui.ChatToolbar
@@ -4326,14 +4326,7 @@ class ChatActivity :
                 )
             }
         }
-        return LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            addView(pane, LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, CONVERSATION_PANE_WEIGHT))
-            addView(
-                chatRoot,
-                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f - CONVERSATION_PANE_WEIGHT)
-            )
-        }
+        return createConversationListPaneLayout(this, pane, chatRoot)
     }
 
     private fun isEmbeddedNextToConversationList(): Boolean =
@@ -4447,9 +4440,6 @@ class ChatActivity :
 
     companion object {
         val TAG = ChatActivity::class.java.simpleName
-
-        // same as splitRatio of main_split_config.xml
-        private const val CONVERSATION_PANE_WEIGHT = 0.4f
 
         /**
          * Creates an intent that opens the conversation [roomToken] of the account with the internal id [userId].
