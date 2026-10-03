@@ -19,6 +19,28 @@
             window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
     </SplitPairRule>
 
+    <!-- Chats opened from other screens next to the list: show them in the secondary pane, not in the launcher -->
+    <SplitPairRule
+        window:clearTop="false"
+        window:finishPrimaryWithSecondary="never"
+        window:finishSecondaryWithPrimary="always"
+        window:splitMaxAspectRatioInPortrait="alwaysAllow"
+        window:splitMinWidthDp="600"
+        window:splitRatio="0.40">
+        <SplitPairFilter
+            window:primaryActivityName="com.nextcloud.talk.contacts.ContactsActivity"
+            window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
+        <SplitPairFilter
+            window:primaryActivityName="com.nextcloud.talk.invitation.InvitationsActivity"
+            window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
+        <SplitPairFilter
+            window:primaryActivityName="com.nextcloud.talk.openconversations.ListOpenConversationsActivity"
+            window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
+        <SplitPairFilter
+            window:primaryActivityName="com.nextcloud.talk.threadsoverview.ThreadsOverviewActivity"
+            window:secondaryActivityName="com.nextcloud.talk.chat.ChatActivity" />
+    </SplitPairRule>
+
     <SplitPlaceholderRule
         window:finishPrimaryWithPlaceholder="always"
         window:placeholderActivityName="com.nextcloud.talk.conversationlist.ChatPlaceholderActivity"
