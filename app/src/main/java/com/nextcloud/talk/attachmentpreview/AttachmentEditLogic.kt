@@ -14,6 +14,7 @@ import kotlin.math.ceil
  */
 
 private const val EDITED_SUFFIX = "_edited_"
+private const val SHARED_URI_SEGMENT = "shared_attachments"
 private val editedSuffixRegex = Regex("${EDITED_SUFFIX}[0-9-]+$")
 private const val MAX_DECODE_PIXELS = 20_000_000L
 
@@ -64,6 +65,29 @@ internal fun editedFileName(originalName: String, stamp: String, extension: Stri
 /** True for names produced by [editedFileName], i.e. intermediates of an earlier edit. */
 internal fun isEditedFileName(fileName: String): Boolean =
     editedSuffixRegex.containsMatchIn(fileName.substringBeforeLast('.', fileName))
+
+/**
+ * The edited file's name when [pathSegments] of a URI under [authority] address exactly
+ * `shared_attachments/<edit-suffixed name>` in our own FileProvider; null for anything else
+ * (foreign authority, an original/camera file, a nested path). Only those are ours to delete.
+ */
+internal fun ownEditedName(authority: String?, ownAuthority: String, pathSegments: List<String>): String? {
+    val name = pathSegments.getOrNull(1)
+    val matches = authority == ownAuthority &&
+        pathSegments.size == 2 &&
+        pathSegments.first() == SHARED_URI_SEGMENT &&
+        name != null &&
+        isEditedFileName(name)
+    return if (matches) name else null
+}
+
+/**
+ * Whether drawing must turn the pixels upright instead of carrying the EXIF orientation tag over.
+ * Mirrored orientations (2/4/5/7) are not understood downstream, and PNG is not rotated by EXIF at
+ * all; only JPEG with the plain rotations 3/6/8 keeps the tag.
+ */
+internal fun rotatesPixels(png: Boolean, rotationDegrees: Int, flipped: Boolean): Boolean =
+    flipped || (png && rotationDegrees != 0)
 
 /** Output extension and whether it is PNG (lossless, keeps transparency) for a source MIME type. */
 internal fun editOutputIsPng(sourceMimeType: String?): Boolean = sourceMimeType == "image/png"

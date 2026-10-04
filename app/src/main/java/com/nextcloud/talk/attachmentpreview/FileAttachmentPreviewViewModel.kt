@@ -110,7 +110,7 @@ internal class FileAttachmentPreviewViewModel @Inject constructor(private val co
                         file,
                         editOutputIsPng(description.mimeType)
                     )
-                    if (saved) editedFileUri(context, file) else null
+                    (if (saved) editedFileUri(context, file) else null).also { if (it == null) file.delete() }
                 }
             }
             finishEdit(description.uri, output)
@@ -119,7 +119,9 @@ internal class FileAttachmentPreviewViewModel @Inject constructor(private val co
 
     /** Swaps in the file uCrop wrote to [croppedFile]; reports a failure if it can't be shared. */
     fun applyCrop(sourceUri: String, croppedFile: File) {
-        finishEdit(sourceUri, editedFileUri(context, croppedFile))
+        val uri = editedFileUri(context, croppedFile)
+        if (uri == null) croppedFile.delete()
+        finishEdit(sourceUri, uri)
     }
 
     private fun finishEdit(oldUri: String, newUri: Uri?) {
@@ -156,7 +158,9 @@ internal class FileAttachmentPreviewViewModel @Inject constructor(private val co
                 ensureActive()
                 describeFile(context, it, compress)
             }
-            publishDescriptions(described)
+            ensureActive()
+            // files is mutated on the main thread, so publish there
+            withContext(Dispatchers.Main) { publishDescriptions(described) }
         }
     }
 
