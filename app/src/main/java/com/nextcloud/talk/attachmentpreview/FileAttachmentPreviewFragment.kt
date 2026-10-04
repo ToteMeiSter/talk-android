@@ -14,7 +14,6 @@ import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.ViewCompositionStrategy
 import androidx.core.view.WindowCompat
@@ -90,11 +89,10 @@ class FileAttachmentPreviewFragment : DialogFragment() {
             statusBarColor = Color.TRANSPARENT
             navigationBarColor = Color.TRANSPARENT
 
-            val surfaceColor = viewThemeUtils.getColorScheme(requireActivity()).surface
-            val isLightSurface = surfaceColor.luminance() > LIGHT_LUMINANCE_THRESHOLD
+            // The screen is always dark (photo on black), so system bar icons are always light.
             WindowInsetsControllerCompat(this, decorView).apply {
-                isAppearanceLightStatusBars = isLightSurface
-                isAppearanceLightNavigationBars = isLightSurface
+                isAppearanceLightStatusBars = false
+                isAppearanceLightNavigationBars = false
             }
         }
     }
@@ -133,7 +131,6 @@ class FileAttachmentPreviewFragment : DialogFragment() {
 
     companion object {
 
-        private const val LIGHT_LUMINANCE_THRESHOLD = 0.5f
         private const val FILES_TO_UPLOAD_ARG = "FILES_TO_UPLOAD_ARG"
         private const val CONVERSATION_NAME_ARG = "CONVERSATION_NAME_ARG"
         private const val FILE_PERMISSIONS_OPTION_ARG = "FILE_PERMISSIONS_OPTION_ARG"
