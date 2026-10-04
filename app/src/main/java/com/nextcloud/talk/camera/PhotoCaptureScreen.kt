@@ -215,12 +215,18 @@ private fun CaptureControls(
                 .clickable(enabled = enabled, onClick = onShutter)
         )
         if (camera.canSwitchLens) {
+            // Beside the shutter along the edge, and centered on it across the edge
             val beside = BodyPoint(1, 0).inWindow(displayRotation)
+            val inward = BodyPoint(0, -1).inWindow(displayRotation)
+            val centering = (ShutterSize - ControlSize) / 2
             CaptureIconButton(
                 icon = R.drawable.ic_baseline_flip_camera_android_24,
                 description = stringResource(R.string.nc_video_recording_switch_camera),
                 angle = iconAngle,
-                modifier = at(0, 1).offset(LensSwitchGap * beside.x, LensSwitchGap * beside.y),
+                modifier = at(0, 1).offset(
+                    LensSwitchGap * beside.x + centering * inward.x,
+                    LensSwitchGap * beside.y + centering * inward.y
+                ),
                 onClick = camera::switchLens
             )
         }
