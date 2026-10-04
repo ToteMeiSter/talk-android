@@ -76,7 +76,6 @@ import com.nextcloud.talk.models.json.signaling.NCSignalingMessageDto
 import com.nextcloud.talk.presenters.MentionAutocompletePresenter
 import com.nextcloud.talk.ui.CallStartedBanner
 import com.nextcloud.talk.ui.MicInputCloud
-import com.nextcloud.talk.ui.dialog.AttachmentDialog
 import com.nextcloud.talk.ui.theme.ViewThemeUtils
 import com.nextcloud.talk.ui.theme.hostViewThemeUtils
 import com.nextcloud.talk.users.UserManager
@@ -524,7 +523,7 @@ class MessageInputFragment : Fragment() {
         }
 
         binding.fragmentMessageInputView.setAttachmentsListener {
-            AttachmentDialog(requireActivity(), requireActivity() as ChatActivity).show()
+            chatActivity.showAttachmentSheet()
         }
 
         binding.fragmentMessageInputView.attachmentButton.setOnLongClickListener {
