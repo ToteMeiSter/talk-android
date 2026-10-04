@@ -51,7 +51,6 @@ import androidx.core.widget.doAfterTextChanged
 import androidx.emoji2.emojipicker.RecentEmojiProvider
 import androidx.emoji2.widget.EmojiTextView
 import androidx.fragment.app.Fragment
-import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
@@ -120,7 +119,9 @@ class MessageInputFragment : Fragment() {
 
     private enum class KeyboardSendTarget { NONE, EDIT, THREAD, SEND }
 
-    private val messageInputViewModel: MessageInputViewModel by activityViewModels()
+    // owned by the shown room of the activity, so it is replaced when the chat switches to another room
+    private val messageInputViewModel: MessageInputViewModel
+        get() = chatActivity.messageInputViewModel
     lateinit var binding: FragmentMessageInputBinding
     private lateinit var conversationInternalId: String
     private var typedWhileTypingTimerIsRunning: Boolean = false

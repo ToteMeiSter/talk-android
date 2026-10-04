@@ -2657,13 +2657,15 @@ class ChatViewModel @AssistedInject constructor(
     }
 
     fun saveMessageDraft() {
-        viewModelScope.launch {
+        // The draft must outlive this view model: the chat can switch to another room, which clears it.
+        val draft = messageDraft
+        appScope.launch {
             val model = conversationRepository.getLocallyStoredConversation(
                 currentUser,
                 chatRoomToken
             )
             model?.let {
-                it.messageDraft = messageDraft
+                it.messageDraft = draft
                 conversationRepository.updateConversation(it)
             }
         }
