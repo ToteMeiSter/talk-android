@@ -13,8 +13,9 @@ import java.io.File
 import java.io.IOException
 
 /**
- * What the counter in the viewer's top bar shows. [position] counts from the newest item (1 = newest),
- * so it stays the same when older items are paged in behind the current one; only [total] grows then.
+ * What the counter in the viewer's top bar shows. [position] counts from the oldest loaded item, so the
+ * newest item is "M of M", as in other messengers. When older items are paged in, both [position] and
+ * [total] grow by their number while the viewer stays on the same item.
  * [totalIsLowerBound] is true while older items may still be loaded, shown as "N of M+".
  */
 data class MediaViewerCounter(val position: Int, val total: Int, val totalIsLowerBound: Boolean)
@@ -27,7 +28,7 @@ fun mediaViewerCounter(index: Int, total: Int, hasMoreOlder: Boolean): MediaView
     if (total <= 0 || index !in 0 until total) {
         null
     } else {
-        MediaViewerCounter(position = total - index, total = total, totalIsLowerBound = hasMoreOlder)
+        MediaViewerCounter(position = index + 1, total = total, totalIsLowerBound = hasMoreOlder)
     }
 
 /** Photos only: GIFs would lose their animation and SVG cannot be edited by the crop/draw tools. */

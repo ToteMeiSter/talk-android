@@ -58,20 +58,25 @@ class MediaViewerActionsTest {
     // counter
 
     @Test
-    fun counter_countsFromTheNewestItem() {
-        // pager order is oldest first: index 0 of 5 is the oldest item = 5 of 5
-        assertEquals(MediaViewerCounter(5, 5, false), mediaViewerCounter(0, 5, false))
-        assertEquals(MediaViewerCounter(1, 5, false), mediaViewerCounter(4, 5, false))
+    fun counter_newestItemIsTheLast() {
+        // pager order is oldest first: the newest item (index 4 of 5) = 5 of 5, the oldest = 1 of 5
+        assertEquals(MediaViewerCounter(5, 5, false), mediaViewerCounter(4, 5, false))
+        assertEquals(MediaViewerCounter(1, 5, false), mediaViewerCounter(0, 5, false))
     }
 
     @Test
-    fun counter_positionIsStableWhenOlderItemsArePagedIn() {
-        val before = mediaViewerCounter(index = 2, total = 5, hasMoreOlder = true)!!
-        // 50 older items are loaded: the pager index moves by 50, the viewed item stays the same
-        val after = mediaViewerCounter(index = 52, total = 55, hasMoreOlder = true)!!
-        assertEquals(before.position, after.position)
-        assertEquals(55, after.total)
-        assertTrue(after.totalIsLowerBound)
+    fun counter_positionMovesWithTheItemWhenOlderItemsArePagedIn() {
+        val newest = mediaViewerCounter(index = 4, total = 5, hasMoreOlder = true)!!
+        assertEquals(MediaViewerCounter(5, 5, true), newest)
+        // 50 older items are loaded: the pager index of the viewed item moves by 50, it is still the newest
+        val after = mediaViewerCounter(index = 54, total = 55, hasMoreOlder = true)!!
+        assertEquals(MediaViewerCounter(55, 55, true), after)
+
+        val middle = mediaViewerCounter(index = 2, total = 5, hasMoreOlder = true)!!
+        val middleAfter = mediaViewerCounter(index = 52, total = 55, hasMoreOlder = false)!!
+        assertEquals(3, middle.position)
+        assertEquals(middle.position + 50, middleAfter.position)
+        assertFalse(middleAfter.totalIsLowerBound)
     }
 
     @Test
