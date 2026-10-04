@@ -12,6 +12,8 @@ import android.os.SystemClock
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.view.ViewGroup.LayoutParams.WRAP_CONTENT
+import android.widget.LinearLayout
 import android.widget.SeekBar
 import android.widget.SeekBar.OnSeekBarChangeListener
 import androidx.core.content.ContextCompat
@@ -37,6 +39,7 @@ class MessageInputVoiceRecordingFragment : Fragment() {
     companion object {
         val TAG: String = MessageInputVoiceRecordingFragment::class.java.simpleName
         private const val SEEK_LIMIT = 98
+        private const val PROGRESS_MAX = 1000
 
         @JvmStatic
         fun newInstance() = MessageInputVoiceRecordingFragment()
@@ -127,7 +130,7 @@ class MessageInputVoiceRecordingFragment : Fragment() {
         }
 
         if (isVideoRecording()) {
-            binding.micInputCloud.visibility = View.INVISIBLE
+            showCompactVideoRow()
         } else {
             binding.micInputCloud.setOnClickListener {
                 togglePreviewVisibility()
@@ -156,6 +159,34 @@ class MessageInputVoiceRecordingFragment : Fragment() {
                 pause = false
             }
         })
+    }
+
+    /**
+     * Video is recorded with a one-line panel (delete, red dot in the progress ring, timer, send) so that the preview
+     * gets the height. The views are the ones of the voice panel, only arranged differently; the voice panel stays
+     * as it is. The fragment is recreated after a rotation and arranges the row again. The buttons get new layout
+     * params here, so their vertical margins from the layout do not apply in this row (48dp + 2 x 8dp padding).
+     */
+    private fun showCompactVideoRow() {
+        val row = binding.recordingControlsRow
+        val timer = binding.audioRecordDuration
+        val margin = resources.getDimensionPixelSize(R.dimen.standard_half_margin)
+        (timer.parent as ViewGroup).removeView(timer)
+        row.addView(timer, row.indexOfChild(binding.micInputCloud), LinearLayout.LayoutParams(0, WRAP_CONTENT, 1f))
+        timer.setPaddingRelative(margin, 0, 0, 0)
+        row.setPadding(margin, margin, margin, margin)
+        row.weightSum = 0f
+        for (button in listOf(binding.deleteVoiceRecording, binding.sendVoiceRecording)) {
+            button.layoutParams = LinearLayout.LayoutParams(button.layoutParams.width, button.layoutParams.height)
+        }
+        binding.micInputCloud.visibility = View.GONE
+        binding.videoRecordingIndicator.visibility = View.VISIBLE
+        binding.videoRecordingProgress.max = PROGRESS_MAX
+        timer.setOnChronometerTickListener {
+            val elapsed = SystemClock.elapsedRealtime() - it.base
+            binding.videoRecordingProgress.progress =
+                (elapsed * PROGRESS_MAX / VideoMessageRecorder.MAX_DURATION_MS).toInt().coerceIn(0, PROGRESS_MAX)
+        }
     }
 
     private fun isVideoRecording() = chatActivity.chatViewModel.activeRecordingMode == RecordInputMode.VIDEO
