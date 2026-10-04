@@ -8,7 +8,6 @@ package com.nextcloud.talk.camera
 
 import android.content.Context
 import android.util.Log
-import android.view.Surface
 import androidx.camera.core.Camera
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
@@ -61,11 +60,10 @@ internal class PhotoCamera(
         whenCameraProviderReady(context) { readyProvider ->
             if (released || readyProvider == null) return@whenCameraProviderReady
             provider = readyProvider
-            val rotation = previewView.display?.rotation ?: Surface.ROTATION_0
-            preview = Preview.Builder().setTargetRotation(rotation).build()
+            // No target rotation: the preview follows the display, the photo follows setTargetRotation().
+            preview = Preview.Builder().build()
             imageCapture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                .setTargetRotation(rotation)
                 .build()
             canSwitchLens = readyProvider.hasCamera(cameraSelectorFor(CameraSelector.LENS_FACING_BACK)) &&
                 readyProvider.hasCamera(cameraSelectorFor(CameraSelector.LENS_FACING_FRONT))

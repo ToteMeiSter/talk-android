@@ -31,6 +31,10 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
@@ -83,6 +87,7 @@ internal fun PhotoCaptureScreen(
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
         CaptureTopBar(camera, onClose)
         CaptureBottomBar(camera) {
+            if (camera.isCapturing || !camera.isBound) return@CaptureBottomBar
             val file = newPhotoFile()
             if (file == null) {
                 onFailed()
@@ -125,6 +130,7 @@ private fun BoxScope.CaptureTopBar(camera: PhotoCamera, onClose: () -> Unit) {
 private fun BoxScope.CaptureBottomBar(camera: PhotoCamera, onShutter: () -> Unit) {
     Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().systemBarsPadding().padding(ScreenPadding)) {
         val enabled = camera.isBound && !camera.isCapturing
+        val shutterDescription = stringResource(R.string.take_photo)
         Box(
             modifier = Modifier
                 .align(Alignment.Center)
@@ -134,7 +140,11 @@ private fun BoxScope.CaptureBottomBar(camera: PhotoCamera, onShutter: () -> Unit
                 .padding(ShutterRingWidth * 2)
                 .clip(CircleShape)
                 .background(Color.White)
-                .clickable(enabled = enabled, onClickLabel = stringResource(R.string.take_photo), onClick = onShutter)
+                .semantics {
+                    contentDescription = shutterDescription
+                    role = Role.Button
+                }
+                .clickable(enabled = enabled, onClick = onShutter)
         )
         if (camera.canSwitchLens) {
             CaptureIconButton(
@@ -154,7 +164,7 @@ private fun CaptureIconButton(icon: Int, description: String, modifier: Modifier
             .size(ControlSize)
             .clip(CircleShape)
             .background(Color.Black.copy(alpha = 0.4f))
-            .clickable(onClick = onClick),
+            .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
         Icon(painter = painterResource(icon), contentDescription = description, tint = Color.White)

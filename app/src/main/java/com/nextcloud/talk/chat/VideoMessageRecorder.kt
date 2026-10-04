@@ -155,9 +155,11 @@ class VideoMessageRecorder(
 
     private fun bindUseCases(provider: ProcessCameraProvider): Boolean {
         lensFacing = resolveLens(provider, lensFacing)
-        val previewUseCase = requireNotNull(preview)
+        val previewUseCase = preview
+        val videoUseCase = videoCapture
+        if (previewUseCase == null || videoUseCase == null) return false
         previewUseCase.surfaceProvider = previewView.surfaceProvider
-        return provider.bindSafely(lifecycleOwner, lensFacing, previewUseCase, requireNotNull(videoCapture)) != null
+        return provider.bindSafely(lifecycleOwner, lensFacing, previewUseCase, videoUseCase) != null
     }
 
     @SuppressLint("MissingPermission")
