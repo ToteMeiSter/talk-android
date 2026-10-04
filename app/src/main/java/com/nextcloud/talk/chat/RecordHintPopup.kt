@@ -49,23 +49,30 @@ class RecordHintPopup(private val anchor: View) {
 
         val metrics = context.resources.displayMetrics
         val margin = (SCREEN_MARGIN_DP * metrics.density).toInt()
+        val windowWidth = anchor.rootView.width
         content.measure(
-            View.MeasureSpec.makeMeasureSpec(metrics.widthPixels - 2 * margin, View.MeasureSpec.AT_MOST),
+            View.MeasureSpec.makeMeasureSpec(windowWidth - 2 * margin, View.MeasureSpec.AT_MOST),
             View.MeasureSpec.makeMeasureSpec(0, View.MeasureSpec.UNSPECIFIED)
         )
-        val width = content.measuredWidth
-        val height = content.measuredHeight
 
+        // showAtLocation positions relative to the window of the anchor, so the anchor is measured in its window:
+        // the screen position is shifted by the status bar, a display cutout or the pane of a split layout
         val location = IntArray(2)
-        anchor.getLocationOnScreen(location)
-        val anchorCenterX = location[0] + anchor.width / 2
-        val x = (anchorCenterX - width / 2).coerceIn(margin, maxOf(margin, metrics.widthPixels - margin - width))
-        val y = location[1] - height - (GAP_DP * metrics.density).toInt()
+        anchor.getLocationInWindow(location)
+        val placement = hintPlacement(
+            anchorLeft = location[0],
+            anchorTop = location[1],
+            anchorWidth = anchor.width,
+            windowWidth = windowWidth,
+            hintWidth = content.measuredWidth,
+            hintHeight = content.measuredHeight,
+            margin = margin,
+            gap = (GAP_DP * metrics.density).toInt(),
+            arrowWidth = (ARROW_WIDTH_DP * metrics.density).toInt()
+        )
 
         val arrowParams = arrow.layoutParams as LinearLayout.LayoutParams
-        val arrowMax = width - (ARROW_WIDTH_DP * metrics.density).toInt()
-        arrowParams.leftMargin = (anchorCenterX - x - (ARROW_WIDTH_DP * metrics.density).toInt() / 2)
-            .coerceIn(0, maxOf(0, arrowMax))
+        arrowParams.leftMargin = placement.arrowLeftMargin
         arrow.layoutParams = arrowParams
 
         popup = PopupWindow(content, ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT, false)
@@ -73,7 +80,7 @@ class RecordHintPopup(private val anchor: View) {
                 isTouchable = false
                 isFocusable = false
                 isOutsideTouchable = false
-                showAtLocation(anchor, Gravity.TOP or Gravity.LEFT, x, y)
+                showAtLocation(anchor, Gravity.TOP or Gravity.LEFT, placement.x, placement.y)
             }
         handler.postDelayed(dismissRunnable, SHOW_DURATION_MS)
     }
@@ -84,10 +91,38 @@ class RecordHintPopup(private val anchor: View) {
         popup = null
     }
 
+    /**
+     * Where the hint goes, in the coordinates of the window of the anchor.
+     */
+    data class Placement(val x: Int, val y: Int, val arrowLeftMargin: Int)
+
     companion object {
         const val SHOW_DURATION_MS = 1500L
         private const val SCREEN_MARGIN_DP = 8
         private const val GAP_DP = 4
         private const val ARROW_WIDTH_DP = 16
+
+        /**
+         * The hint sits above the anchor with [gap] between them, centred on it and kept [margin] away from the edges
+         * of the window; the arrow points at the centre of the anchor.
+         */
+        @Suppress("LongParameterList")
+        fun hintPlacement(
+            anchorLeft: Int,
+            anchorTop: Int,
+            anchorWidth: Int,
+            windowWidth: Int,
+            hintWidth: Int,
+            hintHeight: Int,
+            margin: Int,
+            gap: Int,
+            arrowWidth: Int
+        ): Placement {
+            val anchorCenterX = anchorLeft + anchorWidth / 2
+            val x = (anchorCenterX - hintWidth / 2).coerceIn(margin, maxOf(margin, windowWidth - margin - hintWidth))
+            val y = anchorTop - hintHeight - gap
+            val arrow = (anchorCenterX - x - arrowWidth / 2).coerceIn(0, maxOf(0, hintWidth - arrowWidth))
+            return Placement(x, y, arrow)
+        }
     }
 }
