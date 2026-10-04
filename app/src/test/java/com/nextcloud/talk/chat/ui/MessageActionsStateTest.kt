@@ -8,7 +8,10 @@ package com.nextcloud.talk.chat.ui
 
 import com.nextcloud.talk.chat.data.model.ChatMessage
 import com.nextcloud.talk.data.user.model.User
+import com.nextcloud.talk.models.domain.ConversationModel
 import com.nextcloud.talk.models.json.capabilities.SpreedCapabilityDto
+import com.nextcloud.talk.models.json.conversations.ConversationEnums
+import com.nextcloud.talk.models.json.participants.ParticipantDto
 import com.nextcloud.talk.utils.DateUtils
 import org.junit.Assert
 import org.junit.Test
@@ -18,18 +21,50 @@ class MessageActionsStateTest {
 
     private val dateUtils = Mockito.mock(DateUtils::class.java)
 
-    private fun buildStateFor(message: ChatMessage, isOnline: Boolean = true, hasChatPermission: Boolean = true) =
-        buildMessageActionsState(
-            message = message,
-            user = User().apply { userId = "alice" },
-            conversation = null,
-            hasChatPermission = hasChatPermission,
-            hasReactPermission = true,
-            spreedCapabilities = SpreedCapabilityDto(),
-            isOnline = isOnline,
-            dateUtils = dateUtils,
-            conversationThreadId = null
+    private fun conversation(remoteServer: String? = null) =
+        ConversationModel(
+            internalId = "1@abc",
+            accountId = 1L,
+            token = "abc",
+            name = "abc",
+            displayName = "abc",
+            description = "",
+            type = ConversationEnums.ConversationType.ROOM_GROUP_CALL,
+            participantType = ParticipantDto.ParticipantType.USER,
+            sessionId = "0",
+            actorId = "alice",
+            actorType = "users",
+            objectType = ConversationEnums.ObjectType.DEFAULT,
+            notificationLevel = ConversationEnums.NotificationLevel.DEFAULT,
+            conversationReadOnlyState = ConversationEnums.ConversationReadOnlyState.CONVERSATION_READ_WRITE,
+            lobbyState = ConversationEnums.LobbyState.LOBBY_STATE_ALL_PARTICIPANTS,
+            lobbyTimer = 0L,
+            canLeaveConversation = true,
+            canDeleteConversation = false,
+            unreadMentionDirect = false,
+            notificationCalls = 0,
+            avatarVersion = "",
+            hasCustomAvatar = false,
+            callStartTime = 0L,
+            remoteServer = remoteServer
         )
+
+    private fun buildStateFor(
+        message: ChatMessage,
+        isOnline: Boolean = true,
+        hasChatPermission: Boolean = true,
+        conversation: ConversationModel? = null
+    ) = buildMessageActionsState(
+        message = message,
+        user = User().apply { userId = "alice" },
+        conversation = conversation,
+        hasChatPermission = hasChatPermission,
+        hasReactPermission = true,
+        spreedCapabilities = SpreedCapabilityDto(),
+        isOnline = isOnline,
+        dateUtils = dateUtils,
+        conversationThreadId = null
+    )
 
     @Test
     fun showCopyMessageLink_trueForRegularMessage() {
@@ -79,6 +114,13 @@ class MessageActionsStateTest {
         Assert.assertFalse(buildStateFor(fileMessage(), isOnline = false).showForwardFile)
         Assert.assertFalse(buildStateFor(fileMessage().apply { isDeleted = true }).showForwardFile)
         Assert.assertFalse(buildStateFor(ChatMessage(jsonMessageId = 8, message = "hi")).showForwardFile)
+    }
+
+    @Test
+    fun showForwardFile_falseInFederatedConversation() {
+        val federated = conversation(remoteServer = "https://other.example")
+        Assert.assertFalse(buildStateFor(fileMessage(), conversation = federated).showForwardFile)
+        Assert.assertTrue(buildStateFor(fileMessage(), conversation = conversation()).showForwardFile)
     }
 
     @Test

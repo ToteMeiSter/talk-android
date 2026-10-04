@@ -56,12 +56,7 @@ data class MediaViewerMenuState(
  * is not in the local database ([actions] null) none of them is offered, as their permissions can't be checked.
  * Sharing and saving only act on the local copy, so they just need the file to be downloaded.
  */
-fun mediaViewerMenuState(
-    mimeType: String,
-    remotePath: String,
-    hasLocalFile: Boolean,
-    actions: MessageActionsState?
-): MediaViewerMenuState =
+fun mediaViewerMenuState(mimeType: String, hasLocalFile: Boolean, actions: MessageActionsState?): MediaViewerMenuState =
     MediaViewerMenuState(
         saveToGallery = hasLocalFile && (actions?.showSave ?: true),
         share = hasLocalFile && (actions?.showShare ?: true),
@@ -69,7 +64,7 @@ fun mediaViewerMenuState(
         showInChat = true,
         reply = actions?.showReply == true,
         delete = actions?.showDelete == true,
-        forward = actions?.showForwardFile == true && remotePath.isNotBlank(),
+        forward = actions?.showForwardFile == true,
         draw = hasLocalFile && isDrawableImage(mimeType) && actions?.canSendToConversation == true
     )
 
@@ -83,36 +78,29 @@ enum class MediaViewerChatAction {
 
 /**
  * The request the viewer sends to ChatActivity through intent extras (the KEY_ constants below).
- * [localPath] is the cached copy (drawing), [remotePath] the file's path in the user's own storage (forwarding).
+ * [localPath] is the cached copy (drawing). Nothing else is trusted from the intent: what is forwarded is read from the
+ * message in the database.
  */
 data class MediaViewerChatRequest(
     val action: MediaViewerChatAction,
     val messageId: Long,
-    val localPath: String? = null,
-    val remotePath: String? = null
+    val localPath: String? = null
 ) {
     companion object {
         const val KEY_ACTION = "MEDIA_VIEWER_CHAT_ACTION"
         const val KEY_MESSAGE_ID = "MEDIA_VIEWER_CHAT_MESSAGE_ID"
         const val KEY_LOCAL_PATH = "MEDIA_VIEWER_CHAT_LOCAL_PATH"
-        const val KEY_REMOTE_PATH = "MEDIA_VIEWER_CHAT_REMOTE_PATH"
 
         /** Null for a missing or unknown action, a missing message id, or an action without the data it needs. */
-        fun parse(
-            actionName: String?,
-            messageId: Long,
-            localPath: String?,
-            remotePath: String?
-        ): MediaViewerChatRequest? {
+        fun parse(actionName: String?, messageId: Long, localPath: String?): MediaViewerChatRequest? {
             val action = MediaViewerChatAction.entries.firstOrNull { it.name == actionName }
             val complete = when (action) {
                 null -> false
                 MediaViewerChatAction.DRAW -> !localPath.isNullOrBlank()
-                MediaViewerChatAction.FORWARD -> !remotePath.isNullOrBlank()
                 else -> true
             }
             return if (action != null && complete && messageId > 0L) {
-                MediaViewerChatRequest(action, messageId, localPath, remotePath)
+                MediaViewerChatRequest(action, messageId, localPath)
             } else {
                 null
             }
@@ -132,7 +120,7 @@ fun isMediaActionAllowed(action: MediaViewerChatAction, state: MessageActionsSta
 /** The path of a file in the user's own storage as the share API expects it: with exactly one leading slash. */
 fun remoteSharePath(path: String): String = "/" + path.trimStart('/')
 
-/** True when [file] is [directory] or lies below it, after resolving "..", symlinks and the like. */
+/** True when [file] lies below [directory] (not [directory] itself), after resolving "..", symlinks and the like. */
 fun isInsideDirectory(directory: File, file: File): Boolean =
     try {
         val base = directory.canonicalFile

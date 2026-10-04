@@ -46,6 +46,7 @@ import io.reactivex.Observable
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.drop
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -120,6 +121,17 @@ class MediaViewerViewModel @Inject constructor(
         _uiState.value = UiState(groups = groups, currentGlobalIndex = startIndex)
         ensureCachedAround(startIndex)
         loadConversation(roomToken)
+        observeOnlineState()
+    }
+
+    /** What the chat offers depends on being online (forwarding, deleting), so the states are worked out again. */
+    private fun observeOnlineState() {
+        viewModelScope.launch {
+            networkMonitor.isOnline.drop(1).collect {
+                _uiState.update { state -> state.copy(actionStates = emptyMap()) }
+                _uiState.value.currentItem?.let(::loadActionState)
+            }
+        }
     }
 
     private fun loadConversation(roomToken: String) {

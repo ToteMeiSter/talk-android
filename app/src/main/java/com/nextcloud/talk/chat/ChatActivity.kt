@@ -167,6 +167,7 @@ import com.nextcloud.talk.jobs.DownloadFileToCacheWorker
 import com.nextcloud.talk.jobs.ShareOperationWorker
 import com.nextcloud.talk.mediaviewer.model.MediaViewerChatAction
 import com.nextcloud.talk.mediaviewer.model.MediaViewerChatRequest
+import com.nextcloud.talk.mediaviewer.model.PendingFileForward
 import com.nextcloud.talk.mediaviewer.model.isInsideDirectory
 import com.nextcloud.talk.mediaviewer.model.isMediaActionAllowed
 import com.nextcloud.talk.mediaviewer.model.remoteSharePath
@@ -272,6 +273,7 @@ import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.onEach
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 import org.greenrobot.eventbus.Subscribe
 import org.greenrobot.eventbus.ThreadMode
@@ -673,13 +675,16 @@ class ChatActivity :
         initialUser = setUpBoundUserOrFinish() ?: return
         roomToken = resolveRoomToken(savedInstanceState)
         registerAttachmentPreviewResultListener()
-        // a request of the media viewer which was not run yet when the activity was recreated
-        savedInstanceState?.let {
-            pendingMediaRequest = MediaViewerChatRequest.parse(
-                it.getString(MediaViewerChatRequest.KEY_ACTION),
-                it.getLong(MediaViewerChatRequest.KEY_MESSAGE_ID),
-                it.getString(MediaViewerChatRequest.KEY_LOCAL_PATH),
-                it.getString(MediaViewerChatRequest.KEY_REMOTE_PATH)
+        // The request of the media viewer comes from the intent only on a fresh start. When the activity is restored
+        // (rotation, process death) the system hands over the original intent again, which must not run it twice:
+        // then only what was saved, i.e. not yet run, counts.
+        pendingMediaRequest = if (savedInstanceState == null) {
+            readMediaRequest(intent)
+        } else {
+            MediaViewerChatRequest.parse(
+                savedInstanceState.getString(MediaViewerChatRequest.KEY_ACTION),
+                savedInstanceState.getLong(MediaViewerChatRequest.KEY_MESSAGE_ID),
+                savedInstanceState.getString(MediaViewerChatRequest.KEY_LOCAL_PATH)
             )
         }
 
@@ -810,18 +815,7 @@ class ChatActivity :
         initObservers()
         resumeRecordingAfterRecreation()
 
-        pendingTargetMessageId?.let { messageId ->
-            lifecycleScope.launch {
-                chatViewModel.openMessageFromGlobalSearch(
-                    messageId = messageId,
-                    threadId = pendingTargetThreadId,
-                    searchQuery = pendingTargetSearchQuery
-                )
-            }
-            pendingTargetMessageId = null
-            pendingTargetThreadId = null
-            pendingTargetSearchQuery = null
-        }
+        openPendingTargetMessage()
     }
 
     /**
@@ -949,6 +943,7 @@ class ChatActivity :
         lastMessageId = 0
         sharedText = ""
         sharedFilePaths = emptyList()
+        pendingMediaRequest = null
         filesToUpload.clear()
         pendingCameraUri = null
         _participantPermissionsFlow.value = null
@@ -1655,24 +1650,13 @@ class ChatActivity :
             startActivity(intent)
         } else {
             handleIntent(intent)
+            readMediaRequest(intent)?.let { pendingMediaRequest = it }
             applyIntentTargetsToJoinedRoom()
         }
     }
 
-    private fun isForOtherRoom(extras: Bundle?): Boolean {
-        val requestedToken = extras?.getString(KEY_ROOM_TOKEN)
-        return requestedToken != null && requestedToken != roomToken
-    }
-
-    /**
-     * An intent for the chat which is already open: [startRoomSession] ran for it before, so what the intent asks
-     * for (scrolling to a message, a request of the media viewer) is done here, once the room is joined. When it is
-     * not yet, the joined-room handler does it.
-     */
-    private fun applyIntentTargetsToJoinedRoom() {
-        if (roomSession == null || currentConversation == null) {
-            return
-        }
+    /** Scrolls to the message the intent asked for (a search hit, "show in chat"), once. */
+    private fun openPendingTargetMessage() {
         pendingTargetMessageId?.let { messageId ->
             lifecycleScope.launch {
                 chatViewModel.openMessageFromGlobalSearch(
@@ -1685,6 +1669,24 @@ class ChatActivity :
             pendingTargetThreadId = null
             pendingTargetSearchQuery = null
         }
+    }
+
+    private fun isForOtherRoom(extras: Bundle?): Boolean {
+        val requestedToken = extras?.getString(KEY_ROOM_TOKEN)
+        return requestedToken != null && requestedToken != roomToken
+    }
+
+    /**
+     * An intent for the chat which is already open ([startRoomSession] ran for it before): scrolls to the message it
+     * names and runs the request of the media viewer, but only when the conversation is already loaded. Otherwise the
+     * request stays pending and is run when the joined-room state arrives; the scroll target is not kept for that
+     * case here, as [startRoomSession] does not run again.
+     */
+    private fun applyIntentTargetsToJoinedRoom() {
+        if (roomSession == null || currentConversation == null) {
+            return
+        }
+        openPendingTargetMessage()
         runPendingMediaRequest()
     }
 
@@ -1722,15 +1724,18 @@ class ChatActivity :
         pendingTargetThreadId = extras?.getString(KEY_THREAD_ID)?.toLongOrNull()?.takeIf { it > 0L }
             ?: extras?.getLong(KEY_THREAD_ID)?.takeIf { it > 0L }
         pendingTargetSearchQuery = extras?.getString(BundleKeys.KEY_SEARCH_QUERY)
+    }
 
-        MediaViewerChatRequest.parse(
+    /** The request of the media viewer in [source], if any; removes it from the intent so it is read only once. */
+    private fun readMediaRequest(source: Intent): MediaViewerChatRequest? {
+        val extras = source.extras
+        val request = MediaViewerChatRequest.parse(
             actionName = extras?.getString(MediaViewerChatRequest.KEY_ACTION),
             messageId = extras?.getLong(MediaViewerChatRequest.KEY_MESSAGE_ID) ?: 0L,
-            localPath = extras?.getString(MediaViewerChatRequest.KEY_LOCAL_PATH),
-            remotePath = extras?.getString(MediaViewerChatRequest.KEY_REMOTE_PATH)
-        )?.let { pendingMediaRequest = it }
-        // Like the shared file paths: a recreated activity must not run the request a second time.
-        intent.removeExtra(MediaViewerChatRequest.KEY_ACTION)
+            localPath = extras?.getString(MediaViewerChatRequest.KEY_LOCAL_PATH)
+        )
+        source.removeExtra(MediaViewerChatRequest.KEY_ACTION)
+        return request
     }
 
     override fun onStart() {
@@ -1777,7 +1782,6 @@ class ChatActivity :
             outState.putString(MediaViewerChatRequest.KEY_ACTION, it.action.name)
             outState.putLong(MediaViewerChatRequest.KEY_MESSAGE_ID, it.messageId)
             outState.putString(MediaViewerChatRequest.KEY_LOCAL_PATH, it.localPath)
-            outState.putString(MediaViewerChatRequest.KEY_REMOTE_PATH, it.remotePath)
         }
         super.onSaveInstanceState(outState)
     }
@@ -4282,15 +4286,10 @@ class ChatActivity :
         )
     }
 
-    /** Forwards the text of [message]; with [remoteFilePath] the file at that path of the user's storage instead. */
-    fun forwardMessage(message: ChatMessage?, remoteFilePath: String? = null) {
+    fun forwardMessage(message: ChatMessage?) {
         val bundle = Bundle()
         bundle.putBoolean(BundleKeys.KEY_FORWARD_MSG_FLAG, true)
-        if (remoteFilePath != null) {
-            bundle.putString(BundleKeys.KEY_FORWARD_FILE_PATH, remoteFilePath)
-        } else {
-            bundle.putString(BundleKeys.KEY_FORWARD_MSG_TEXT, message?.message)
-        }
+        bundle.putString(BundleKeys.KEY_FORWARD_MSG_TEXT, message?.message)
         bundle.putString(BundleKeys.KEY_FORWARD_HIDE_SOURCE_ROOM, roomToken)
 
         val intent = Intent(this, ConversationsListActivity::class.java)
@@ -4325,7 +4324,7 @@ class ChatActivity :
             when (request.action) {
                 MediaViewerChatAction.REPLY -> replyTo(message)
                 MediaViewerChatAction.DELETE -> deleteMessage(message)
-                MediaViewerChatAction.FORWARD -> forwardMessage(message, remoteSharePath(request.remotePath.orEmpty()))
+                MediaViewerChatAction.FORWARD -> forwardFile(message)
                 MediaViewerChatAction.DRAW -> startDrawingOnCopy(request.localPath)
             }
         }
@@ -4334,7 +4333,7 @@ class ChatActivity :
     @Suppress("TooGenericExceptionCaught")
     private suspend fun loadMessageOrNull(messageId: Long): ChatMessage? =
         try {
-            chatViewModel.getMessageById(messageId).first()
+            withTimeoutOrNull(MESSAGE_LOAD_TIMEOUT_MS) { chatViewModel.getMessageById(messageId).first() }
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -4355,6 +4354,28 @@ class ChatActivity :
         }
         val uri = FileProvider.getUriForFile(this, BuildConfig.APPLICATION_ID, file)
         showFileAttachmentPreview(mutableListOf(uri.toString()), startDrawing = true)
+    }
+
+    /**
+     * Forwards the file of [message] to a conversation to be picked. The path comes from the message in the database
+     * and goes to the conversation list as the key of an entry in [PendingFileForward], never as a path in an intent.
+     */
+    private fun forwardFile(message: ChatMessage) {
+        val path = message.fileParameters.path
+        if (path.isNullOrBlank()) {
+            Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
+            return
+        }
+        val caption = message.message?.takeIf { it != "{file}" }.orEmpty()
+        val key = PendingFileForward.put(PendingFileForward.Entry(conversationUserId, remoteSharePath(path), caption))
+        val intent = Intent(this, ConversationsListActivity::class.java)
+        intent.putExtra(BundleKeys.KEY_FORWARD_MSG_FLAG, true)
+        intent.putExtra(BundleKeys.KEY_FORWARD_FILE_KEY, key)
+        intent.putExtra(BundleKeys.KEY_FORWARD_HIDE_SOURCE_ROOM, roomToken)
+        intent.putExtra(KEY_INTERNAL_USER_ID, conversationUserId)
+        intent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+        startActivity(intent)
+        finish()
     }
 
     fun remindMeLater(message: ChatMessage?) {
@@ -5043,6 +5064,7 @@ class ChatActivity :
         private const val GET_ROOM_INFO_DELAY_NORMAL: Long = 30000
         private const val GET_ROOM_INFO_DELAY_LOBBY: Long = 5000
         private const val MILLIS_250 = 250L
+        private const val MESSAGE_LOAD_TIMEOUT_MS = 10_000L
         private const val MILLIS_150 = 150L
         private const val MILLIS_1000 = 1000L
         private const val FLOAT_100 = 100f

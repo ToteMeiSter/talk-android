@@ -248,10 +248,12 @@ internal fun buildMessageActionsState(
             !(message.isDeletedCommentMessage || message.isDeleted) &&
             isOnline &&
             !isClassifiedRoom,
+        // a file of a federated conversation does not lie in the user's own storage, so it can't be shared on
         showForwardFile = messageHasFileAttachment &&
             !message.isDeleted &&
             isOnline &&
-            !isClassifiedRoom,
+            !isClassifiedRoom &&
+            conversation?.remoteServer.isNullOrEmpty(),
         canSendToConversation = hasChatPermission && !isConversationReadOnly,
         showEdit = isMessageEditable,
         showCopy = !message.isDeleted,
@@ -786,7 +788,7 @@ private fun EditedInfo(editedBy: String, editedAt: String) {
 }
 
 @Composable
-private fun DeleteConfirmationDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
+internal fun DeleteConfirmationDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
     AlertDialog(
         onDismissRequest = onDismiss,
         icon = {

@@ -55,30 +55,63 @@ class MediaViewerChatRequestTest {
     fun request_parsesWhatTheViewerSends() {
         assertEquals(
             MediaViewerChatRequest(MediaViewerChatAction.REPLY, 12L),
-            MediaViewerChatRequest.parse("REPLY", 12L, null, null)
+            MediaViewerChatRequest.parse("REPLY", 12L, null)
         )
         assertEquals(
             MediaViewerChatRequest(MediaViewerChatAction.DRAW, 12L, localPath = "/c/a.jpg"),
-            MediaViewerChatRequest.parse("DRAW", 12L, "/c/a.jpg", "Talk/a.jpg")?.copy(remotePath = null)
+            MediaViewerChatRequest.parse("DRAW", 12L, "/c/a.jpg")
+        )
+        assertEquals(
+            MediaViewerChatRequest(MediaViewerChatAction.FORWARD, 12L),
+            MediaViewerChatRequest.parse("FORWARD", 12L, null)
         )
     }
 
     @Test
     fun request_rejectsIncompleteOrUnknown() {
-        assertNull(MediaViewerChatRequest.parse(null, 12L, null, null))
-        assertNull(MediaViewerChatRequest.parse("EXPLODE", 12L, null, null))
-        assertNull(MediaViewerChatRequest.parse("REPLY", 0L, null, null))
-        assertNull(MediaViewerChatRequest.parse("DRAW", 12L, null, "Talk/a.jpg"))
-        assertNull(MediaViewerChatRequest.parse("FORWARD", 12L, "/c/a.jpg", ""))
+        assertNull(MediaViewerChatRequest.parse(null, 12L, null))
+        assertNull(MediaViewerChatRequest.parse("EXPLODE", 12L, null))
+        assertNull(MediaViewerChatRequest.parse("REPLY", 0L, null))
+        assertNull(MediaViewerChatRequest.parse("DRAW", 12L, null))
     }
 
     @Test
-    fun chatRecheck_usesTheRuleOfEachAction() {
-        val denied = state(false)
-        MediaViewerChatAction.entries.forEach {
-            assertFalse(it.name, isMediaActionAllowed(it, denied))
-            assertTrue(it.name, isMediaActionAllowed(it, state(true)))
+    fun chatRecheck_eachActionFollowsExactlyItsOwnFlag() {
+        val none = state(false)
+        val only = mapOf(
+            MediaViewerChatAction.REPLY to none.copy(showReply = true),
+            MediaViewerChatAction.DELETE to none.copy(showDelete = true),
+            MediaViewerChatAction.FORWARD to none.copy(showForwardFile = true),
+            MediaViewerChatAction.DRAW to none.copy(canSendToConversation = true)
+        )
+        MediaViewerChatAction.entries.forEach { action ->
+            assertFalse(action.name, isMediaActionAllowed(action, none))
+            MediaViewerChatAction.entries.forEach { flagOf ->
+                val allowed = isMediaActionAllowed(action, only.getValue(flagOf))
+                assertEquals("$action with only the flag of $flagOf", action == flagOf, allowed)
+            }
         }
+    }
+
+    // forward entries
+
+    @Test
+    fun pendingForward_worksOnceAndNeedsTheKey() {
+        val entry = PendingFileForward.Entry(1L, "/Talk/a.jpg", "caption")
+        val key = PendingFileForward.put(entry)
+        assertEquals(entry, PendingFileForward.take(key))
+        assertNull(PendingFileForward.take(key))
+        assertNull(PendingFileForward.take(null))
+        assertNull(PendingFileForward.take("not-a-key"))
+    }
+
+    @Test
+    fun pendingForward_restoreMakesTheKeyWorkAgain() {
+        val entry = PendingFileForward.Entry(1L, "/Talk/a.jpg", "")
+        val key = PendingFileForward.put(entry)
+        PendingFileForward.take(key)
+        PendingFileForward.restore(key, entry)
+        assertEquals(entry, PendingFileForward.take(key))
     }
 
     // paths

@@ -191,7 +191,6 @@ class MediaViewerActivity : BaseActivity() {
             putExtra(MediaViewerChatRequest.KEY_ACTION, action.name)
             putExtra(MediaViewerChatRequest.KEY_MESSAGE_ID, item.messageId)
             putExtra(MediaViewerChatRequest.KEY_LOCAL_PATH, safeLocalPath)
-            putExtra(MediaViewerChatRequest.KEY_REMOTE_PATH, item.path)
         }
         startActivity(intent)
         finish()

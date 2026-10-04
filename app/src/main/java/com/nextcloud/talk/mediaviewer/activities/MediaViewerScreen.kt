@@ -42,12 +42,9 @@ import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.Brush
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.Icon
-import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -90,6 +87,7 @@ import coil.request.SuccessResult
 import com.github.chrisbanes.photoview.PhotoView
 import com.nextcloud.talk.R
 import com.nextcloud.talk.components.AppBarAction
+import com.nextcloud.talk.chat.ui.DeleteConfirmationDialog
 import com.nextcloud.talk.components.StandardAppBar
 import com.nextcloud.talk.mediaviewer.model.MediaViewerGroup
 import com.nextcloud.talk.mediaviewer.model.MediaViewerChatAction
@@ -206,7 +204,7 @@ fun MediaViewerScreen(viewModel: MediaViewerViewModel, callbacks: MediaViewerCal
 
     var confirmDelete by rememberSaveable { mutableStateOf(false) }
     if (confirmDelete && currentItem != null) {
-        DeleteConfirmDialog(
+        DeleteConfirmationDialog(
             onConfirm = {
                 confirmDelete = false
                 callbacks.onChatAction(MediaViewerChatAction.DELETE, currentItem, currentLocalPath)
@@ -259,7 +257,6 @@ fun MediaViewerScreen(viewModel: MediaViewerViewModel, callbacks: MediaViewerCal
             val menuState = currentItem?.let {
                 mediaViewerMenuState(
                     mimeType = it.mimeType,
-                    remotePath = it.path,
                     hasLocalFile = currentLocalPath != null,
                     actions = uiState.actionStates[it.messageId]
                 )
@@ -385,17 +382,6 @@ private fun buildActionButtons(
             )
         }
     }
-}
-
-@Composable
-private fun DeleteConfirmDialog(onConfirm: () -> Unit, onDismiss: () -> Unit) {
-    AlertDialog(
-        onDismissRequest = onDismiss,
-        title = { Text(stringResource(R.string.nc_delete_message)) },
-        text = { Text(stringResource(R.string.message_delete_are_you_sure)) },
-        confirmButton = { TextButton(onClick = onConfirm) { Text(stringResource(R.string.nc_delete)) } },
-        dismissButton = { TextButton(onClick = onDismiss) { Text(stringResource(R.string.nc_cancel)) } }
-    )
 }
 
 @OptIn(UnstableApi::class)

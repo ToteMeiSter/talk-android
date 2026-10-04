@@ -102,20 +102,20 @@ class MediaViewerActionsTest {
 
     @Test
     fun menu_allEntriesForAnOwnPhotoWithAllRights() {
-        val menu = mediaViewerMenuState("image/jpeg", "Talk/a.jpg", hasLocalFile = true, actions = actions())
+        val menu = mediaViewerMenuState("image/jpeg", hasLocalFile = true, actions = actions())
         assertEquals(MediaViewerMenuState(true, true, true, true, true, true, true, true), menu)
     }
 
     @Test
     fun menu_videoGetsEverythingButDrawing() {
-        val menu = mediaViewerMenuState("video/mp4", "Talk/a.mp4", hasLocalFile = true, actions = actions())
+        val menu = mediaViewerMenuState("video/mp4", hasLocalFile = true, actions = actions())
         assertFalse(menu.draw)
         assertTrue(menu.forward && menu.reply && menu.delete && menu.share && menu.saveToGallery)
     }
 
     @Test
     fun menu_withoutTheMessageInTheDatabaseOnlyWhatNeedsNoRightsRemains() {
-        val menu = mediaViewerMenuState("image/jpeg", "Talk/a.jpg", hasLocalFile = true, actions = null)
+        val menu = mediaViewerMenuState("image/jpeg", hasLocalFile = true, actions = null)
         assertEquals(MediaViewerMenuState(true, true, true, true, false, false, false, false), menu)
     }
 
@@ -123,7 +123,6 @@ class MediaViewerActionsTest {
     fun menu_followsTheChatRules() {
         val menu = mediaViewerMenuState(
             "image/jpeg",
-            "Talk/a.jpg",
             hasLocalFile = true,
             actions = actions(reply = false, delete = false, forwardFile = false, canSend = false)
         )
@@ -136,15 +135,10 @@ class MediaViewerActionsTest {
 
     @Test
     fun menu_shareSaveAndDrawNeedTheDownloadedFile_forwardDoesNot() {
-        val menu = mediaViewerMenuState("image/jpeg", "Talk/a.jpg", hasLocalFile = false, actions = actions())
+        val menu = mediaViewerMenuState("image/jpeg", hasLocalFile = false, actions = actions())
         assertFalse(menu.share)
         assertFalse(menu.saveToGallery)
         assertFalse(menu.draw)
         assertTrue(menu.forward)
-    }
-
-    @Test
-    fun menu_forwardNeedsThePathOfTheFile() {
-        assertFalse(mediaViewerMenuState("image/jpeg", "", true, actions()).forward)
     }
 }
