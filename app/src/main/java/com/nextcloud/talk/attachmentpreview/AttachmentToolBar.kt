@@ -10,11 +10,13 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -40,11 +42,13 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.SubcomposeLayout
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.nextcloud.talk.R
 
@@ -53,6 +57,7 @@ private const val BADGE_CORNER_RADIUS_DP = 4
 private const val BADGE_HORIZONTAL_PADDING_DP = 3
 private const val QUALITY_TOGGLE_SIZE_DP = 48
 private const val PERMISSION_ICON_SIZE_DP = 18
+private const val PERMISSION_COMPACT_PADDING_DP = 15
 
 /** Where more files can come from: the "add" button next to the caption offers these. */
 internal data class AddMoreActions(
@@ -77,15 +82,41 @@ internal data class ToolBarActions(
     val onAllowUpdateChange: (Boolean) -> Unit
 )
 
-/** Telegram-style pill with edit tools (images only), the SD/HD switch and the View-only/Editable choice. */
+/**
+ * Telegram-style pill with edit tools (images only), the SD/HD switch and the View-only/Editable choice.
+ * Buttons keep their size. When the full pill is wider than its slot, the permission choice shrinks to its icon;
+ * should the pill still be too wide (large font), its content scrolls.
+ */
 @Composable
 internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, modifier: Modifier = Modifier) {
-    Row(
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    SubcomposeLayout(
         modifier = modifier
             .clip(RoundedCornerShape(percent = 50))
             .background(ScrimColor)
+    ) { constraints ->
+        val full = subcompose(PermissionStyle.LABELED) { ToolBarContent(state, actions, compactPermission = false) }
+        val fullWidth = full.maxOfOrNull { it.maxIntrinsicWidth(Constraints.Infinity) } ?: 0
+        val measurables = if (state.showPermission && shouldCompactPermission(fullWidth, constraints.maxWidth)) {
+            subcompose(PermissionStyle.ICON_ONLY) { ToolBarContent(state, actions, compactPermission = true) }
+        } else {
+            full
+        }
+        val placeables = measurables.map { it.measure(constraints.copy(minWidth = 0)) }
+        layout(placeables.maxOfOrNull { it.width } ?: 0, placeables.maxOfOrNull { it.height } ?: 0) {
+            placeables.forEach { it.place(0, 0) }
+        }
+    }
+}
+
+private enum class PermissionStyle { LABELED, ICON_ONLY }
+
+@Composable
+private fun ToolBarContent(state: ToolBarState, actions: ToolBarActions, compactPermission: Boolean) {
+    Row(
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+        modifier = Modifier
+            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 4.dp)
     ) {
         actions.onCrop?.let { onCrop ->
@@ -98,7 +129,7 @@ internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, mod
             QualityToggle(state.highQuality, actions.onHighQualityChange)
         }
         if (state.showPermission) {
-            PermissionChoice(state.allowUpdate, actions.onAllowUpdateChange)
+            PermissionChoice(state.allowUpdate, compactPermission, actions.onAllowUpdateChange)
         }
     }
 }
@@ -140,32 +171,38 @@ private fun QualityToggle(highQuality: Boolean, onHighQualityChange: (Boolean) -
 }
 
 @Composable
-private fun PermissionChoice(allowUpdate: Boolean, onAllowUpdateChange: (Boolean) -> Unit) {
+private fun PermissionChoice(allowUpdate: Boolean, compact: Boolean, onAllowUpdateChange: (Boolean) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
+    val label = stringResource(
+        if (allowUpdate) R.string.nc_file_permission_editable else R.string.nc_file_permission_view_only
+    )
 
     Box {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clip(RoundedCornerShape(percent = 50))
-                .clickable { expanded = true }
-                .padding(horizontal = 10.dp, vertical = 12.dp)
+                .clickable(role = Role.Button, onClickLabel = label) { expanded = true }
+                .padding(
+                    horizontal = if (compact) PERMISSION_COMPACT_PADDING_DP.dp else 10.dp,
+                    vertical = if (compact) PERMISSION_COMPACT_PADDING_DP.dp else 12.dp
+                )
         ) {
             Icon(
                 imageVector = if (allowUpdate) Icons.Filled.Edit else Icons.Filled.EditOff,
-                contentDescription = null,
+                contentDescription = if (compact) label else null,
                 tint = Color.White,
                 modifier = Modifier.size(PERMISSION_ICON_SIZE_DP.dp)
             )
-            Text(
-                text = stringResource(
-                    if (allowUpdate) R.string.nc_file_permission_editable else R.string.nc_file_permission_view_only
-                ),
-                style = MaterialTheme.typography.labelMedium,
-                color = Color.White,
-                maxLines = 1,
-                modifier = Modifier.padding(start = 6.dp)
-            )
+            if (!compact) {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = Color.White,
+                    maxLines = 1,
+                    modifier = Modifier.padding(start = 6.dp)
+                )
+            }
         }
         DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
             DropdownMenuItem(
@@ -189,3 +226,6 @@ private fun PermissionChoice(allowUpdate: Boolean, onAllowUpdateChange: (Boolean
         }
     }
 }
+
+/** The labeled View-only/Editable choice is used while the full pill fits the slot; otherwise only its icon. */
+internal fun shouldCompactPermission(fullWidthPx: Int, availableWidthPx: Int): Boolean = fullWidthPx > availableWidthPx

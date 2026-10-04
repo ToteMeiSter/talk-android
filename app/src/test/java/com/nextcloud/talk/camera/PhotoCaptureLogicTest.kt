@@ -9,11 +9,14 @@ package com.nextcloud.talk.camera
 import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import com.nextcloud.talk.chat.oppositeLens
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -101,6 +104,22 @@ class PhotoCaptureLogicTest {
         val text = formatCaptureTimestamp(Date(0))
 
         assertTrue(Regex("\\d{4}-\\d{2}-\\d{2} \\d{2}-\\d{2}-\\d{2}").matches(text))
+    }
+
+    @Test
+    fun photoSelectorAsksForHighestResolutionAtFourToThree() {
+        val selector = photoResolutionSelector()
+
+        assertSame(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY, selector.aspectRatioStrategy)
+        assertSame(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY, selector.resolutionStrategy)
+    }
+
+    @Test
+    fun captureResolutionIsDescribedInDisplayOrientation() {
+        assertEquals("4000x3000", describeCaptureResolution(4000, 3000, 0))
+        assertEquals("4000x3000", describeCaptureResolution(4000, 3000, 180))
+        assertEquals("3000x4000", describeCaptureResolution(4000, 3000, 90))
+        assertEquals("3000x4000", describeCaptureResolution(4000, 3000, 270))
     }
 
     private companion object {

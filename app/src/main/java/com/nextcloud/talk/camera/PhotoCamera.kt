@@ -64,6 +64,7 @@ internal class PhotoCamera(
             preview = Preview.Builder().build()
             imageCapture = ImageCapture.Builder()
                 .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                .setResolutionSelector(photoResolutionSelector())
                 .build()
             canSwitchLens = readyProvider.hasCamera(cameraSelectorFor(CameraSelector.LENS_FACING_BACK)) &&
                 readyProvider.hasCamera(cameraSelectorFor(CameraSelector.LENS_FACING_FRONT))
@@ -147,6 +148,17 @@ internal class PhotoCamera(
         lensFacing = lens
         hasFlashUnit = camera.cameraInfo.hasFlashUnit()
         imageCapture?.flashMode = effectiveFlashMode(flash, hasFlashUnit)
+        logCaptureResolution()
+    }
+
+    private fun logCaptureResolution() {
+        val info = imageCapture?.resolutionInfo ?: return
+        val size = info.resolution
+        Log.d(
+            TAG,
+            "photo resolution ${size.width}x${size.height}, " +
+                "displayed ${describeCaptureResolution(size.width, size.height, info.rotationDegrees)}"
+        )
     }
 
     private fun unbind() {

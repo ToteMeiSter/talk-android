@@ -229,7 +229,7 @@ internal fun FileAttachmentPreviewContent(
 /** The edit tools / quality / permission pill on the left, the round send button on the right. */
 @Suppress("LongParameterList")
 @Composable
-private fun BottomToolRow(
+internal fun BottomToolRow(
     options: ToolBarState,
     current: FileDescription?,
     onCrop: (FileDescription) -> Unit,
@@ -246,17 +246,18 @@ private fun BottomToolRow(
         horizontalArrangement = Arrangement.spacedBy(TOOL_ROW_SPACING_DP.dp),
         modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, bottom = 12.dp)
     ) {
-        AttachmentToolBar(
-            state = options,
-            actions = ToolBarActions(
-                onCrop = image?.let { { onCrop(it) } },
-                onDraw = image?.takeIf { it.aspectRatio != null }?.let { { onDraw(it) } },
-                onHighQualityChange = onHighQualityChange,
-                onAllowUpdateChange = onAllowUpdateChange
-            ),
-            modifier = Modifier.weight(1f, fill = false)
-        )
-        Box(modifier = Modifier.weight(1f))
+        // The pill gets all the width the send button leaves; it scrolls instead of squeezing its buttons.
+        Box(modifier = Modifier.weight(1f), contentAlignment = Alignment.CenterStart) {
+            AttachmentToolBar(
+                state = options,
+                actions = ToolBarActions(
+                    onCrop = image?.let { { onCrop(it) } },
+                    onDraw = image?.takeIf { it.aspectRatio != null }?.let { { onDraw(it) } },
+                    onHighQualityChange = onHighQualityChange,
+                    onAllowUpdateChange = onAllowUpdateChange
+                )
+            )
+        }
         SendButton(enabled = sendEnabled, onClick = onSend)
     }
 }

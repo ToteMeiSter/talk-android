@@ -8,6 +8,9 @@ package com.nextcloud.talk.camera
 
 import android.view.Surface
 import androidx.camera.core.ImageCapture
+import androidx.camera.core.resolutionselector.AspectRatioStrategy
+import androidx.camera.core.resolutionselector.ResolutionSelector
+import androidx.camera.core.resolutionselector.ResolutionStrategy
 import com.nextcloud.talk.utils.FileUtils
 import java.io.File
 import java.text.SimpleDateFormat
@@ -20,6 +23,7 @@ private const val MAX_FILE_VARIANTS = 100
 private const val ORIENTATION_QUARTER = 90
 private const val ORIENTATION_EIGHTH = 45
 private const val FULL_CIRCLE = 360
+private const val HALF_TURN = 180
 
 // Device turned clockwise by 0, 90, 180, 270 degrees: the display rotates the other way.
 private val rotationByQuadrant = intArrayOf(
@@ -54,6 +58,22 @@ internal fun rotationForDeviceOrientation(degrees: Int): Int? {
     if (degrees < 0) return null
     return rotationByQuadrant[((degrees + ORIENTATION_EIGHTH) % FULL_CIRCLE) / ORIENTATION_QUARTER]
 }
+
+/**
+ * Full sensor resolution at 4:3 (the aspect ratio of the sensor), falling back to the closest ratio the camera
+ * offers. Ask for it explicitly so the photo size doesn't depend on the library's defaults.
+ */
+internal fun photoResolutionSelector(): ResolutionSelector =
+    ResolutionSelector.Builder()
+        .setAspectRatioStrategy(AspectRatioStrategy.RATIO_4_3_FALLBACK_AUTO_STRATEGY)
+        .setResolutionStrategy(ResolutionStrategy.HIGHEST_AVAILABLE_STRATEGY)
+        .build()
+
+/**
+ * Pixel size of the photo as it looks once the EXIF [rotationDegrees] is applied, e.g. "3000x4000".
+ */
+internal fun describeCaptureResolution(width: Int, height: Int, rotationDegrees: Int): String =
+    if (rotationDegrees % HALF_TURN == 0) "${width}x$height" else "${height}x$width"
 
 internal fun formatCaptureTimestamp(date: Date): String = SimpleDateFormat(FILE_DATE_PATTERN, Locale.ROOT).format(date)
 
