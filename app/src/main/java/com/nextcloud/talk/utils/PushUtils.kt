@@ -9,6 +9,7 @@
 package com.nextcloud.talk.utils
 
 import android.content.Context
+import android.net.Uri
 import android.util.Base64
 import android.util.Log
 import autodagger.AutoInjector
@@ -193,6 +194,7 @@ class PushUtils {
 
         if (pushToken.isNotEmpty()) {
             Log.d(TAG, "pushRegistrationToServer will be done with pushToken: $pushToken")
+            PushDiag.i("pushRegistrationToServer: start, tokenLength=${pushToken.length}")
             val pushTokenHash = generateSHA512Hash(pushToken).lowercase(Locale.getDefault())
             val devicePublicKey = readKeyFromFile(true) as PublicKey?
             if (devicePublicKey != null) {
@@ -215,6 +217,7 @@ class PushUtils {
             }
         } else {
             Log.e(TAG, "push token was empty when trying to register at server")
+            PushDiag.w("pushRegistrationToServer: skipped, push token is empty")
         }
     }
 
@@ -226,6 +229,7 @@ class PushUtils {
     ) {
         val credentials = ApiUtils.getCredentials(user.username, user.token)
         Log.d(TAG, "Registering proxy push with ${user.userId}'s server.")
+        PushDiag.i("Registering at Nextcloud server: user.id=${user.id} host=${Uri.parse(user.baseUrl).host}")
         ncApi.registerDeviceForNotificationsWithNextcloud(
             credentials,
             ApiUtils.getUrlNextcloudPush(user.baseUrl!!),
@@ -245,6 +249,7 @@ class PushUtils {
                     )
 
                     Log.d(TAG, "pushTokenHash successfully registered at nextcloud server.")
+                    PushDiag.i("Nextcloud server registration OK, user.id=${user.id}")
                     val proxyMap: MutableMap<String, String?> = HashMap()
                     proxyMap["pushToken"] = token
                     proxyMap["deviceIdentifier"] = pushRegistrationOverall.ocs!!.data!!.deviceIdentifier
@@ -255,6 +260,10 @@ class PushUtils {
 
                 override fun onError(e: Throwable) {
                     Log.e(TAG, "Failed to register device with nextcloud", e)
+                    PushDiag.w(
+                        "Nextcloud server registration FAILED, user.id=${user.id}: " +
+                            PushDiag.describeHttp(e, token)
+                    )
                     eventBus!!.post(EventStatus(user.id!!, EventStatus.EventType.PUSH_REGISTRATION, false))
                 }
 
@@ -265,6 +274,7 @@ class PushUtils {
     }
 
     private fun registerDeviceWithPushProxy(ncApi: NcApi, proxyMap: Map<String, String?>, user: User) {
+        PushDiag.i("Registering at push proxy: user.id=${user.id} url=${ApiUtils.getUrlPushProxy()}")
         ncApi.registerDeviceForNotificationsWithPushProxy(ApiUtils.getUrlPushProxy(), proxyMap)
             .subscribeOn(Schedulers.io())
             .subscribe(object : Observer<Unit> {
@@ -282,6 +292,7 @@ class PushUtils {
                         )
 
                         Log.d(TAG, "pushToken successfully registered at pushproxy.")
+                        PushDiag.i("Push proxy registration OK, user.id=${user.id}")
                         updatePushStateForUser(proxyMap, user)
                     } catch (e: IOException) {
                         Log.e(TAG, "IOException while updating user", e)
@@ -290,6 +301,15 @@ class PushUtils {
 
                 override fun onError(e: Throwable) {
                     Log.e(TAG, "Failed to register device with pushproxy", e)
+                    PushDiag.w(
+                        "Push proxy registration FAILED, user.id=${user.id}: " +
+                            PushDiag.describeHttp(
+                                e,
+                                proxyMap["pushToken"],
+                                proxyMap["deviceIdentifier"],
+                                proxyMap["deviceIdentifierSignature"]
+                            )
+                    )
                     eventBus!!.post(EventStatus(user.id!!, EventStatus.EventType.PUSH_REGISTRATION, false))
                 }
 

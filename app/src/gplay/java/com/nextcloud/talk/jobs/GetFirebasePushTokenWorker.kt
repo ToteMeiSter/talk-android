@@ -18,6 +18,7 @@ import autodagger.AutoInjector
 import com.google.android.gms.tasks.OnCompleteListener
 import com.google.firebase.messaging.FirebaseMessaging
 import com.nextcloud.talk.application.NextcloudTalkApplication
+import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.preferences.AppPreferences
 import javax.inject.Inject
 
@@ -31,15 +32,18 @@ class GetFirebasePushTokenWorker(val context: Context, workerParameters: WorkerP
     @SuppressLint("LongLogTag")
     override fun doWork(): Result {
         NextcloudTalkApplication.sharedApplication!!.componentApplication.inject(this)
+        PushDiag.i("GetFirebasePushTokenWorker started, attempt=$runAttemptCount")
 
         FirebaseMessaging.getInstance().token.addOnCompleteListener(
             OnCompleteListener { task ->
                 if (!task.isSuccessful) {
+                    PushDiag.w("FCM token fetch failed", task.exception)
                     Log.w(TAG, "Fetching FCM registration token failed", task.exception)
                     return@OnCompleteListener
                 }
 
                 val pushToken = task.result
+                PushDiag.i("FCM token fetched: present=${!pushToken.isNullOrEmpty()} length=${pushToken?.length ?: 0}")
                 Log.d(TAG, "Fetched firebase push token is: $pushToken")
 
                 appPreferences.pushToken = pushToken
