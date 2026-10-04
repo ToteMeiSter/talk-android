@@ -59,12 +59,27 @@ class DrawingGeometryTest {
     @Test
     fun decodeSampleSizeKeepsFullResolutionBelowLimit() {
         assertEquals(1, decodeSampleSize(4000, 3000))
-        assertEquals(1, decodeSampleSize(8000, 6000))
+        assertEquals(1, decodeSampleSize(5000, 4000))
     }
 
     @Test
     fun decodeSampleSizeDownsamplesHugeImagesByPowersOfTwo() {
-        assertEquals(2, decodeSampleSize(12000, 9000))
-        assertEquals(4, decodeSampleSize(20000, 20000))
+        // 48 MP -> 12 MP, 108 MP -> 6.75 MP, 400 MP -> 6.25 MP
+        assertEquals(2, decodeSampleSize(8000, 6000))
+        assertEquals(4, decodeSampleSize(12000, 9000))
+        assertEquals(8, decodeSampleSize(20000, 20000))
+    }
+
+    @Test
+    fun drawingSessionKeepsStrokesAndUndoesThem() {
+        val session = DrawingSession()
+        val first = DrawStroke(1, 0.01f, listOf(NormalizedPoint(0f, 0f)))
+        val second = DrawStroke(2, 0.01f, listOf(NormalizedPoint(1f, 1f)))
+        session.add(first)
+        session.add(second)
+        session.undo()
+        assertEquals(listOf(first), session.strokes)
+        session.clear()
+        assertEquals(emptyList<DrawStroke>(), session.strokes)
     }
 }

@@ -1030,6 +1030,15 @@ How to translate with transifex:
     <string name="nc_attachment_crop">Crop and rotate</string>
     <string name="nc_attachment_draw">Draw</string>
     <string name="nc_attachment_undo">Undo</string>
+    <string name="nc_attachment_add_menu">Add photos or video</string>
+    <string name="nc_attachment_excluded">Not included in the message</string>
+    <string name="nc_attachment_edit_failed">Could not save the changes to the picture</string>
+    <string name="nc_attachment_color_white">White</string>
+    <string name="nc_attachment_color_black">Black</string>
+    <string name="nc_attachment_color_red">Red</string>
+    <string name="nc_attachment_color_yellow">Yellow</string>
+    <string name="nc_attachment_color_green">Green</string>
+    <string name="nc_attachment_color_blue">Blue</string>
     <string name="nc_add_more_files">Add more files</string>
     <string name="languages_error_title">Retrieval failed</string>
     <string name="languages_error_message">Languages could not be retrieved</string>

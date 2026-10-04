@@ -39,6 +39,10 @@ import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import com.nextcloud.talk.R
@@ -206,12 +210,17 @@ private fun StripThumbnail(
 ) {
     val borderColor = if (current) Color.White else Color.Transparent
     val shape = RoundedCornerShape(THUMBNAIL_CORNER_RADIUS_DP.dp)
+    val excludedState = stringResource(R.string.nc_attachment_excluded)
     Box(
         modifier = modifier
             .size(STRIP_THUMBNAIL_SIZE_DP.dp)
             .clip(shape)
             .border(SELECTED_BORDER_WIDTH_DP.dp, borderColor, shape)
             .clickable(onClick = onClick)
+            .semantics {
+                selected = current
+                if (!included) stateDescription = excludedState
+            }
     ) {
         FileThumbnailImage(
             description,

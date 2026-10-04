@@ -77,6 +77,14 @@ class AttachmentSelectionAndNamingTest {
     }
 
     @Test
+    fun editedFileNamesAreRecognisedAndOriginalsAreNot() {
+        assertTrue(isEditedFileName(editedFileName("photo.jpg", "20261004-115100-123", "jpg")))
+        assertFalse(isEditedFileName("photo.jpg"))
+        assertFalse(isEditedFileName("2026-10-04 11-51-00.jpg"))
+        assertFalse(isEditedFileName("my_edited_notes.jpg"))
+    }
+
+    @Test
     fun onlyPngSourcesStayPng() {
         assertTrue(editOutputIsPng("image/png"))
         assertFalse(editOutputIsPng("image/jpeg"))
