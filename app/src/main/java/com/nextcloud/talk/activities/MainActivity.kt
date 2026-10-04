@@ -25,6 +25,7 @@ import com.google.android.material.snackbar.Snackbar
 import com.nextcloud.talk.BuildConfig
 import com.nextcloud.talk.R
 import com.nextcloud.talk.account.BrowserLoginActivity
+import com.nextcloud.talk.account.LoginDiag
 import com.nextcloud.talk.account.ServerSelectionActivity
 import com.nextcloud.talk.account.data.PendingBrowserLoginStore
 import com.nextcloud.talk.api.NcApi
@@ -238,11 +239,20 @@ class MainActivity :
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         Log.d(TAG, "onNewIntent Activity: " + System.identityHashCode(this).toString())
+        LoginDiag.event(
+            "MainActivity onNewIntent action=${intent.action} " +
+                "launcher=${intent.hasCategory(Intent.CATEGORY_LAUNCHER)} hasData=${intent.data != null} " +
+                "pendingLogin=${PendingBrowserLoginStore.active() != null}"
+        )
         handleIntent(intent)
     }
 
     @Suppress("TooGenericExceptionCaught")
     private fun handleIntent(intent: Intent) {
+        LoginDiag.event(
+            "MainActivity handleIntent action=${intent.action} " +
+                "launcher=${intent.hasCategory(Intent.CATEGORY_LAUNCHER)} hasData=${intent.data != null}"
+        )
         // Handle deep links first (nextcloudtalk:// scheme)
         if (handleDeepLink(intent)) {
             return
@@ -290,7 +300,9 @@ class MainActivity :
                     }
                     if (isFinishing || isDestroyed) return@launch
 
-                    if (PendingBrowserLoginStore.active() != null) {
+                    val resuming = PendingBrowserLoginStore.active() != null
+                    LoginDiag.event("MainActivity routing accounts=${users.size} resumePendingLogin=$resuming")
+                    if (resuming) {
                         resumeBrowserLogin(users.isNotEmpty())
                     } else if (users.isNotEmpty()) {
                         openConversationList()
