@@ -2126,7 +2126,8 @@ class ChatViewModel @AssistedInject constructor(
         keepMarkedAsUnread = false
         _uiState.update { it.copy(markedAsUnreadByUser = false) }
         chatRepository.markPendingReadMarker(lastReadMessage)
-        viewModelScope.launch {
+        // leaving the chat for another room clears this view model right after, so the write must outlive it
+        appScope.launch {
             chatRepository.updateLocalReadState(lastReadMessage)
         }
         ReadMarkerSyncWorker.enqueue(

@@ -13,6 +13,7 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import com.nextcloud.talk.dagger.modules.ViewModelFactoryWithParams
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -111,6 +112,54 @@ class ChatRoomScopeTest {
     }
 
     @Test
+    fun retiredStoreKeepsItsViewModelsUntilCleared() {
+        val store = ChatRoomStore()
+        val old = viewModelOf(store, "room1")
+
+        val retired = store.retire()
+        val new = viewModelOf(store, "room2")
+
+        assertFalse(old.cleared)
+        assertFalse(new.cleared)
+        assertNotSame(old, new)
+
+        store.clearRetired(requireNotNull(retired))
+        assertTrue(old.cleared)
+        assertFalse(new.cleared)
+    }
+
+    @Test
+    fun retiredStoreIsClearedWhenTheStoreOwnerIsCleared() {
+        val owner = ViewModelStore()
+        val store = ViewModelProvider(
+            owner,
+            ViewModelFactoryWithParams(ChatRoomStore::class.java) { ChatRoomStore() }
+        )[ChatRoomStore::class.java]
+        val old = viewModelOf(store, "room1")
+        store.retire()
+        val current = viewModelOf(store, "room2")
+
+        owner.clear()
+
+        assertTrue(old.cleared)
+        assertTrue(current.cleared)
+    }
+
+    @Test
+    fun retiringWithoutRoomOrTwiceDoesNothing() {
+        val store = ChatRoomStore()
+        assertNull(store.retire())
+
+        val old = viewModelOf(store, "room1")
+        val retired = requireNotNull(store.retire())
+        store.clearRetired(retired)
+        store.clearRetired(retired)
+
+        assertTrue(old.cleared)
+        assertNull(store.token)
+    }
+
+    @Test
     fun roomLifecycleFollowsTheActivity() {
         val activity = FakeActivity().apply { moveTo(Lifecycle.State.RESUMED) }
         val room = RoomLifecycleOwner(activity.lifecycle)
@@ -140,17 +189,10 @@ class ChatRoomScopeTest {
         )
         assertEquals(Lifecycle.State.DESTROYED, room.lifecycle.currentState)
         assertEquals(Lifecycle.State.RESUMED, activity.lifecycle.currentState)
-    }
 
-    @Test
-    fun closedRoomLifecycleIgnoresTheActivity() {
-        val activity = FakeActivity().apply { moveTo(Lifecycle.State.RESUMED) }
-        val room = RoomLifecycleOwner(activity.lifecycle)
-        room.close()
-
+        // a closed room does not follow the activity any more
         activity.moveTo(Lifecycle.State.CREATED)
         activity.moveTo(Lifecycle.State.DESTROYED)
-
         assertEquals(Lifecycle.State.DESTROYED, room.lifecycle.currentState)
     }
 

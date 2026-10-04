@@ -31,6 +31,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.ContactsContract
 import android.provider.MediaStore
@@ -601,7 +602,11 @@ class ChatActivity :
                         displayName = context.resources?.getString(R.string.nc_guest)!!
                     }
 
+                    val session = roomSession
                     runOnUiThread {
+                        if (session !== roomSession) {
+                            return@runOnUiThread
+                        }
                         val typingParticipant = TypingParticipant(userIdOrGuestSession!!, displayName) {
                             typingParticipants.remove(userIdOrGuestSession)
                             updateTypingIndicator()
@@ -791,6 +796,7 @@ class ChatActivity :
             RoomSwitchContext(
                 isThread = conversationThreadId != null,
                 isRecording = chatViewModel.getVoiceRecordingInProgress.value == true ||
+                    chatViewModel.getVoiceRecordingLocked.value == true ||
                     videoMessageRecorder?.isActive == true,
                 isInCall = CallActivity.active || !isNotInCall(),
                 isLeavingRoom = isLeavingRoom
@@ -817,10 +823,23 @@ class ChatActivity :
             supportFragmentManager.commitNow(allowStateLoss = true) { remove(it) }
         }
 
+        // leaving the room does not pass onPause, so the read marker of the old room is sent here
+        updateRemoteLastReadMessageIfNeeded()
+
         // no signaling message of the old room may reach the new room
         webSocketInstance?.getSignalingMessageReceiver()?.removeListener(localParticipantMessageListener)
         webSocketInstance?.getSignalingMessageReceiver()?.removeListener(conversationMessageListener)
-        leaveRoom(null)
+        // Its view models still run operations like edit or delete. They are cleared when the room is left, or
+        // after a timeout if leaving fails, as the callback is not called then.
+        val store = roomStore
+        val retired = store.retire()
+        if (retired != null) {
+            Handler(Looper.getMainLooper()).postDelayed(
+                { store.clearRetired(retired) },
+                RETIRED_STORE_TIMEOUT_MS
+            )
+        }
+        leaveRoom { retired?.let(store::clearRetired) }
         // Nobody waits for the leave to finish, as the new room is independent of the old one. What its success
         // would do in leaveRoomObserver is done here, as the observer is removed with the old view model.
         isLeavingRoom = false
@@ -1115,76 +1134,83 @@ class ChatActivity :
                 val uploadProgressMap by chatViewModel.uploadProgressMap.collectAsStateWithLifecycle()
                 val uploadedLocalPreviewMap by chatViewModel.uploadedLocalPreviewMap.collectAsStateWithLifecycle()
 
-                CompositionLocalProvider(
-                    LocalViewThemeUtils provides viewThemeUtils,
-                    LocalMessageUtils provides messageUtils,
-                    LocalOpenGraphFetcher provides { url -> chatViewModel.fetchOpenGraph(url) },
-                    LocalUploadProgressProvider provides { refId -> uploadProgressMap[refId] },
-                    LocalUploadedLocalPreviewProvider provides { refId -> uploadedLocalPreviewMap[refId] }
-                ) {
-                    val isOneToOneConversation = uiState.isOneToOneConversation
+                // everything remembered in here belongs to one room
+                key(roomSession) {
+                    CompositionLocalProvider(
+                        LocalViewThemeUtils provides viewThemeUtils,
+                        LocalMessageUtils provides messageUtils,
+                        LocalOpenGraphFetcher provides { url -> chatViewModel.fetchOpenGraph(url) },
+                        LocalUploadProgressProvider provides { refId -> uploadProgressMap[refId] },
+                        LocalUploadedLocalPreviewProvider provides { refId -> uploadedLocalPreviewMap[refId] }
+                    ) {
+                        val isOneToOneConversation = uiState.isOneToOneConversation
 
-                    // list of the file ids of messages being downloaded
-                    val downloadingFileState = remember(roomSession) { mutableStateOf(listOf<String>()) }
+                        // list of the file ids of messages being downloaded
+                        val downloadingFileState = remember { mutableStateOf(listOf<String>()) }
 
-                    // openWhenDownloaded is a derived boolean state of the visible chat message list on the condition
-                    // that if any of the messages that are present contain a fileId that is within downloadingFileState
-                    val openWhenDownloadState = remember(roomSession) { mutableStateOf(false) }
+                        // openWhenDownloaded is a derived boolean state of the visible chat message list on the
+                        // condition that if any of the messages that are present contain a fileId that is within
+                        // downloadingFileState
+                        val openWhenDownloadState = remember { mutableStateOf(false) }
 
-                    val visibleIds = listState.visibleItemsWithThreshold()
-                    LaunchedEffect(visibleIds, downloadingFileState.value) {
-                        openWhenDownloadState.value = (downloadingFileState.value.intersect(visibleIds).isNotEmpty())
-                    }
+                        val visibleIds = listState.visibleItemsWithThreshold()
+                        LaunchedEffect(visibleIds, downloadingFileState.value) {
+                            openWhenDownloadState.value =
+                                downloadingFileState.value.intersect(visibleIds).isNotEmpty()
+                        }
 
-                    val overflowHeightDp = with(LocalDensity.current) {
-                        overflowContainerHeightPx.intValue.toDp()
-                    }
-                    ChatView(
-                        state = ChatViewState(
-                            chatItems = uiState.items,
-                            isOneToOneConversation = isOneToOneConversation,
-                            conversationThreadId = conversationThreadId,
-                            chatMode = chatMode,
-                            highlightedMessageId = uiState.highlightedMessageId,
-                            highlightedSearchTerm = uiState.highlightedSearchTerm,
-                            markedAsUnreadByUser = uiState.markedAsUnreadByUser,
-                            hasChatPermission = participantPermissions?.hasChatPermission() == true,
-                            downloadingFileState = downloadingFileState.value,
-                            stickyHeaderTopOffset = overflowHeightDp
-                        ),
-                        callbacks = ChatViewCallbacks(
-                            onLoadMore = { messageId, direction -> loadMoreMessages(messageId, direction) },
-                            onJumpToBottom = { chatViewModel.switchToDefaultMode() },
-                            advanceLocalLastReadMessageIfNeeded = { advanceLocalLastReadMessageIfNeeded(it) },
-                            updateRemoteLastReadMessageIfNeeded = { updateRemoteLastReadMessageIfNeeded() },
-                            onLoadQuotedMessageClick = { messageId -> onLoadQuotedMessage(messageId) },
-                            messageCallbacks = ChatMessageCallbacks(
-                                onLongClick = { openMessageActionsDialog(it) },
-                                onSwipeReply = { handleSwipeToReply(it) },
-                                onFileClick = { downloadAndOpenFile(it, openWhenDownloadState, downloadingFileState) },
-                                onPollClick = { pollId, pollName -> openPollDialog(pollId, pollName) },
-                                onVoicePlayPauseClick = { onVoiceClick(it) },
-                                onVoiceSeek = { id, progress ->
-                                    mediaController?.let { controller ->
-                                        if (id.toString() == controller.currentMediaItem?.mediaId) {
-                                            val pos = controller.duration * progress / 100f
-                                            controller.seekTo(pos.toLong())
+                        val overflowHeightDp = with(LocalDensity.current) {
+                            overflowContainerHeightPx.intValue.toDp()
+                        }
+                        ChatView(
+                            state = ChatViewState(
+                                chatItems = uiState.items,
+                                isOneToOneConversation = isOneToOneConversation,
+                                conversationThreadId = conversationThreadId,
+                                chatMode = chatMode,
+                                highlightedMessageId = uiState.highlightedMessageId,
+                                highlightedSearchTerm = uiState.highlightedSearchTerm,
+                                markedAsUnreadByUser = uiState.markedAsUnreadByUser,
+                                hasChatPermission = participantPermissions?.hasChatPermission() == true,
+                                downloadingFileState = downloadingFileState.value,
+                                stickyHeaderTopOffset = overflowHeightDp
+                            ),
+                            callbacks = ChatViewCallbacks(
+                                onLoadMore = { messageId, direction -> loadMoreMessages(messageId, direction) },
+                                onJumpToBottom = { chatViewModel.switchToDefaultMode() },
+                                advanceLocalLastReadMessageIfNeeded = { advanceLocalLastReadMessageIfNeeded(it) },
+                                updateRemoteLastReadMessageIfNeeded = { updateRemoteLastReadMessageIfNeeded() },
+                                onLoadQuotedMessageClick = { messageId -> onLoadQuotedMessage(messageId) },
+                                messageCallbacks = ChatMessageCallbacks(
+                                    onLongClick = { openMessageActionsDialog(it) },
+                                    onSwipeReply = { handleSwipeToReply(it) },
+                                    onFileClick = {
+                                        downloadAndOpenFile(it, openWhenDownloadState, downloadingFileState)
+                                    },
+                                    onPollClick = { pollId, pollName -> openPollDialog(pollId, pollName) },
+                                    onVoicePlayPauseClick = { onVoiceClick(it) },
+                                    onVoiceSeek = { id, progress ->
+                                        mediaController?.let { controller ->
+                                            if (id.toString() == controller.currentMediaItem?.mediaId) {
+                                                val pos = controller.duration * progress / 100f
+                                                controller.seekTo(pos.toLong())
+                                            }
                                         }
-                                    }
-                                },
-                                onVoiceSpeedClick = { onVoiceSpeedClickCompose(it) },
-                                onReactionClick = { messageId, emoji -> handleReactionClick(messageId, emoji) },
-                                onReactionLongClick = { messageId -> openReactionsDialog(messageId) },
-                                onOpenThreadClick = { messageId -> openThread(messageId.toLong()) },
-                                onSystemMessageExpandClick = { messageId ->
-                                    chatViewModel.toggleSystemMessageCollapse(messageId)
-                                },
-                                onAvatarClick = { messageId -> chatViewModel.showProfileSheet(messageId.toLong()) },
-                                onCancelUpload = { referenceId -> chatViewModel.cancelUpload(referenceId) }
-                            )
-                        ),
-                        listState = listState
-                    )
+                                    },
+                                    onVoiceSpeedClick = { onVoiceSpeedClickCompose(it) },
+                                    onReactionClick = { messageId, emoji -> handleReactionClick(messageId, emoji) },
+                                    onReactionLongClick = { messageId -> openReactionsDialog(messageId) },
+                                    onOpenThreadClick = { messageId -> openThread(messageId.toLong()) },
+                                    onSystemMessageExpandClick = { messageId ->
+                                        chatViewModel.toggleSystemMessageCollapse(messageId)
+                                    },
+                                    onAvatarClick = { messageId -> chatViewModel.showProfileSheet(messageId.toLong()) },
+                                    onCancelUpload = { referenceId -> chatViewModel.cancelUpload(referenceId) }
+                                )
+                            ),
+                            listState = listState
+                        )
+                    }
                 }
 
                 val reactionsSheetMessageId by chatViewModel.reactionsSheetMessageId.collectAsStateWithLifecycle()
@@ -1548,9 +1574,12 @@ class ChatActivity :
     }
 
     private fun handleReactionClick(messageId: Int, emoji: String) {
+        val session = roomSession
         lifecycleScope.launch {
             val chatMessage = chatViewModel.getMessageById(messageId.toLong()).first()
-            onClickReaction(chatMessage, emoji)
+            if (session === roomSession) {
+                onClickReaction(chatMessage, emoji)
+            }
         }
     }
 
@@ -3943,15 +3972,22 @@ class ChatActivity :
 
     // just a temporary helper class to get ChatMessage by id. Should be improved after migrationto Compose
     private fun openMessageActionsDialog(messageId: Int) {
+        val session = roomSession
         this.lifecycleScope.launch {
             val chatMessage = chatViewModel.getMessageById(messageId.toLong()).first()
-            openMessageActionsDialog(chatMessage)
+            if (session === roomSession) {
+                openMessageActionsDialog(chatMessage)
+            }
         }
     }
 
     private fun handleSwipeToReply(messageId: Int) {
+        val session = roomSession
         lifecycleScope.launch {
             val chatMessage = chatViewModel.getMessageById(messageId.toLong()).first()
+            if (session !== roomSession) {
+                return@launch
+            }
             if (chatMessage.isThread && conversationThreadId == null) {
                 openThread(chatMessage)
             } else {
@@ -4688,6 +4724,7 @@ class ChatActivity :
         private const val ACTOR_TYPE = "users"
         const val CONVERSATION_INTERNAL_ID = "CONVERSATION_INTERNAL_ID"
         private const val STATE_ROOM_TOKEN = "STATE_ROOM_TOKEN"
+        private const val RETIRED_STORE_TIMEOUT_MS = 60_000L
         const val NO_OFFLINE_MESSAGES_FOUND = "NO_OFFLINE_MESSAGES_FOUND"
         private const val NO_MORE_RESULTS_TOAST_THROTTLE_MS: Long = 2000
         const val VOICE_MESSAGE_CONTINUOUS_BEFORE = -5

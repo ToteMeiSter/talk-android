@@ -62,6 +62,7 @@ internal fun roomSwitchFallback(context: RoomSwitchContext): RoomSwitchFallback?
  */
 internal class ChatRoomStore : ViewModel() {
     private var store = ViewModelStore()
+    private val retired = mutableSetOf<ViewModelStore>()
 
     /** Token of the room the current [store] belongs to. */
     var token: String? = null
@@ -87,8 +88,33 @@ internal class ChatRoomStore : ViewModel() {
         token = null
     }
 
+    /**
+     * Detaches the store of the current room without clearing it, so operations of its view models which are still
+     * running (edit, delete, reaction, scheduled send) can finish. The caller must hand the returned store to
+     * [clearRetired] once the room is left. Whatever is left when this view model is cleared is cleared with it.
+     *
+     * @return the detached store, or null if no room was shown
+     */
+    fun retire(): ViewModelStore? {
+        val old = store.takeIf { token != null }
+        store = ViewModelStore()
+        token = null
+        old?.let { retired += it }
+        return old
+    }
+
+    /**
+     * Clears a store detached by [retire]. Does nothing if that already happened.
+     */
+    fun clearRetired(retiredStore: ViewModelStore) {
+        if (retired.remove(retiredStore)) {
+            retiredStore.clear()
+        }
+    }
+
     override fun onCleared() {
         release()
+        retired.toList().forEach { clearRetired(it) }
     }
 }
 

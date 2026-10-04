@@ -174,6 +174,9 @@ class MessageInputFragment : Fragment() {
         cancelPendingRecordStart()
         recordHintPopup?.dismiss()
         recordHintPopup = null
+        // the timer would otherwise report typing to the signaling of the room shown next
+        typingTimer?.cancel()
+        sendStopTypingMessage()
         super.onDestroyView()
         if (mentionAutocomplete != null && mentionAutocomplete!!.isPopupShowing) {
             mentionAutocomplete?.dismissPopup()
