@@ -7,7 +7,6 @@
 package com.nextcloud.talk.chat
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RecordHintPopupPlacementTest {
@@ -18,19 +17,26 @@ class RecordHintPopupPlacementTest {
             anchorTop = anchorTop,
             anchorWidth = 100,
             windowWidth = windowWidth,
+            windowHeight = 2000,
             hintWidth = 300,
-            hintHeight = 80,
             margin = 20,
             gap = 10,
             arrowWidth = 40
         )
 
     @Test
-    fun hintEndsAboveTheAnchorWithTheGap() {
-        val placement = place(anchorLeft = 450)
-        assertEquals(1000 - 80 - 10, placement.y)
-        // the whole hint, from y to y + height, stays above the top edge of the anchor
-        assertTrue(placement.y + 80 <= 1000)
+    fun hintBottomIsTheGapAboveTheAnchorTop() {
+        val placement = place(anchorLeft = 450, anchorTop = 1000)
+        // measured from the bottom of the window: the bottom of the hint is 10 px above the top of the anchor
+        assertEquals(2000 - 1000 + 10, placement.bottomOffset)
+    }
+
+    @Test
+    fun hintFollowsAnAnchorWhichMovedUp() {
+        val before = place(anchorLeft = 450, anchorTop = 1000)
+        val after = place(anchorLeft = 450, anchorTop = 900)
+        // a button moved up by 100 px takes the hint up by 100 px, however high the hint is
+        assertEquals(before.bottomOffset + 100, after.bottomOffset)
     }
 
     @Test
