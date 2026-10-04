@@ -120,6 +120,8 @@
 
         <FrameLayout
             android:id="@+id/videoRecordingContainer"
+            android:clickable="true"
+            android:focusable="false"
             android:layout_width="@dimen/video_recording_preview_width"
             android:layout_height="@dimen/video_recording_preview_height"
             android:layout_alignParentBottom="true"
