@@ -16,7 +16,6 @@ import android.widget.SeekBar
 import android.widget.SeekBar.OnSeekBarChangeListener
 import androidx.core.content.ContextCompat
 import androidx.fragment.app.Fragment
-import androidx.fragment.app.activityViewModels
 import androidx.lifecycle.lifecycleScope
 import autodagger.AutoInjector
 import com.nextcloud.android.common.ui.theme.utils.ColorRole
@@ -46,7 +45,8 @@ class MessageInputVoiceRecordingFragment : Fragment() {
     @Inject
     lateinit var viewThemeUtils: ViewThemeUtils
 
-    private val messageInputViewModel: MessageInputViewModel by activityViewModels()
+    private val messageInputViewModel: MessageInputViewModel
+        get() = chatActivity.messageInputViewModel
 
     lateinit var binding: FragmentMessageInputVoiceRecordingBinding
     private lateinit var chatActivity: ChatActivity
