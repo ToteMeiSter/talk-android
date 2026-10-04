@@ -38,6 +38,7 @@ import android.provider.MediaStore
 import android.provider.Settings
 import android.text.TextUtils
 import android.util.Log
+import android.view.Surface
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.ViewGroup
@@ -291,7 +292,7 @@ class ChatActivity :
 
     private lateinit var binding: ActivityChatBinding
 
-    private var videoMessageRecorder: VideoMessageRecorder? = null
+    private val orientationTracker by lazy { DeviceOrientationTracker(this) }
 
     @Inject
     lateinit var ncApi: NcApi
@@ -787,6 +788,7 @@ class ChatActivity :
         messageInputViewModel.setData(chatViewModel.getChatRepository())
 
         initObservers()
+        resumeRecordingAfterRecreation()
 
         pendingTargetMessageId?.let { messageId ->
             lifecycleScope.launch {
@@ -815,7 +817,7 @@ class ChatActivity :
                 isThread = conversationThreadId != null,
                 isRecording = chatViewModel.getVoiceRecordingInProgress.value == true ||
                     chatViewModel.getVoiceRecordingLocked.value == true ||
-                    videoMessageRecorder?.isActive == true,
+                    chatViewModel.activeVideoMessageRecorder?.isActive == true,
                 isInCall = CallActivity.active || !isNotInCall(),
                 isLeavingRoom = isLeavingRoom
             )
@@ -1687,6 +1689,7 @@ class ChatActivity :
     override fun onStart() {
         super.onStart()
         active = true
+        orientationTracker.enable()
         this.lifecycle.addObserver(AudioUtils)
 
         val sessionToken = SessionToken(this, ComponentName(this, VoiceMessageMediaService::class.java))
@@ -1727,8 +1730,16 @@ class ChatActivity :
     }
 
     override fun onStop() {
+        // before super: the view model of the chat reads it when the lifecycle stops
+        val changingConfigurations = isChangingConfigurations
+        roomSession?.chatViewModel?.keepRecordingOnStop = changingConfigurations
         super.onStop()
         active = false
+        orientationTracker.disable()
+        if (!changingConfigurations) {
+            // the user leaves the chat: a video recording must not go on with camera and microphone
+            roomSession?.chatViewModel?.activeVideoMessageRecorder?.cancel()
+        }
         this.lifecycle.removeObserver(AudioUtils)
 
         mediaController?.removeListener(playerListener)
@@ -2164,8 +2175,13 @@ class ChatActivity :
             }
         }
 
+        // The observer also gets the current value when the activity is recreated: no feedback for that
+        var lastRecordingInProgress = chatViewModel.getVoiceRecordingInProgress.value
         chatViewModel.getVoiceRecordingInProgress.observe(roomLifecycle) { voiceRecordingInProgress ->
-            VibrationUtils.vibrateShort(context)
+            if (shouldVibrateOnRecordingChange(lastRecordingInProgress, voiceRecordingInProgress)) {
+                VibrationUtils.vibrateShort(context)
+            }
+            lastRecordingInProgress = voiceRecordingInProgress
             if (voiceRecordingInProgress) {
                 window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
             } else {
@@ -2764,21 +2780,26 @@ class ChatActivity :
      * @return true if the recording was started
      */
     fun startVideoRecording(): Boolean {
-        val recorder = videoMessageRecorder
-            ?: VideoMessageRecorder(this, this, binding.videoRecordingPreview, ::onVideoRecordingFinished)
-                .also { videoMessageRecorder = it }
+        val recorder = chatViewModel.videoMessageRecorder(this)
         val file = if (recorder.isActive) null else createAttachmentFile(R.string.nc_video_filename, VIDEO_SUFFIX)
         if (file == null || !chatViewModel.onVideoRecordingStarted()) {
             return false
         }
         showVideoRecordingPreview(true)
-        recorder.start(file)
+        recorder.attach(this, binding.videoRecordingPreview, ::onVideoRecordingFinished)
+        recorder.start(
+            file,
+            VideoMessageRecorder.videoTargetRotation(
+                orientationTracker.degrees,
+                binding.videoRecordingPreview.display?.rotation ?: Surface.ROTATION_0
+            )
+        )
         return true
     }
 
     fun stopAndSendRecording() {
         if (chatViewModel.activeRecordingMode == RecordInputMode.VIDEO) {
-            videoMessageRecorder?.stopAndSend()
+            chatViewModel.activeVideoMessageRecorder?.stopAndSend()
         } else {
             chatViewModel.stopAndSendAudioRecording(
                 roomToken = roomToken,
@@ -2790,7 +2811,7 @@ class ChatActivity :
 
     fun stopAndDiscardRecording() {
         if (chatViewModel.activeRecordingMode == RecordInputMode.VIDEO) {
-            videoMessageRecorder?.cancel()
+            chatViewModel.activeVideoMessageRecorder?.cancel()
         } else {
             chatViewModel.stopAndDiscardAudioRecording()
         }
@@ -2819,7 +2840,38 @@ class ChatActivity :
             VideoMessageRecorder.Outcome.FAILED ->
                 Snackbar.make(binding.root, R.string.nc_video_message_recording_failed, Snackbar.LENGTH_LONG).show()
 
+            VideoMessageRecorder.Outcome.INTERRUPTED -> file?.let {
+                showCapturedFile(FileProvider.getUriForFile(context, context.packageName, it))
+            }
+
             VideoMessageRecorder.Outcome.CANCELLED -> Unit
+        }
+    }
+
+    /**
+     * After a recreation of the activity: picks up the recording which went on in the view model of the chat. The
+     * finger of the record button is gone with the old activity, so a recording which was held is locked, and the
+     * locked recording UI (timer, stop, send, cancel) is shown by the observer of the locked state.
+     */
+    private fun resumeRecordingAfterRecreation() {
+        val recorder = chatViewModel.activeVideoMessageRecorder
+        val action = resolveRecordingResume(
+            recorderActive = recorder?.isActive == true,
+            hasPendingResult = recorder?.hasPendingResult == true,
+            recordingInProgress = chatViewModel.getVoiceRecordingInProgress.value == true,
+            recordingLocked = chatViewModel.getVoiceRecordingLocked.value == true
+        )
+        if (recorder != null && recorder.isActive) {
+            showVideoRecordingPreview(true)
+        }
+        val attach = action == RecordingResume.ATTACH ||
+            action == RecordingResume.ATTACH_AND_LOCK ||
+            action == RecordingResume.DELIVER_RESULT
+        if (recorder != null && attach) {
+            recorder.attach(this, binding.videoRecordingPreview, ::onVideoRecordingFinished)
+        }
+        if (action == RecordingResume.ATTACH_AND_LOCK) {
+            chatViewModel.setVoiceRecordingLocked(true)
         }
     }
 
@@ -2832,7 +2884,9 @@ class ChatActivity :
                     outline.setRoundRect(0, 0, view.width, view.height, radius)
                 }
             }
-            binding.videoRecordingSwitchCamera.setOnClickListener { videoMessageRecorder?.switchCamera() }
+            binding.videoRecordingSwitchCamera.setOnClickListener {
+                chatViewModel.activeVideoMessageRecorder?.switchCamera()
+            }
         }
         binding.videoRecordingContainer.visibility = if (show) View.VISIBLE else View.GONE
     }
@@ -3408,8 +3462,6 @@ class ChatActivity :
 
     override fun onPause() {
         super.onPause()
-
-        videoMessageRecorder?.cancel()
 
         logConversationInfos("onPause")
 
