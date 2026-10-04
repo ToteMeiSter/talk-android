@@ -229,7 +229,7 @@ internal fun FileAttachmentPreviewContent(
 /** The edit tools / quality / permission pill on the left, the round send button on the right. */
 @Suppress("LongParameterList")
 @Composable
-private fun BottomToolRow(
+internal fun BottomToolRow(
     options: ToolBarState,
     current: FileDescription?,
     onCrop: (FileDescription) -> Unit,
