@@ -23,7 +23,6 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.AssetFileDescriptor
-import android.content.res.Configuration
 import android.database.Cursor
 import android.graphics.Outline
 import android.location.LocationManager
@@ -656,13 +655,6 @@ class ChatActivity :
             }
         )
         keepContentOutOfDisplayCutout()
-
-        RotationDiag.logConfiguration(this, "onCreate", savedInstanceState, isConversationListPaneEnabled())
-        RotationDiag.watchWidth("content", findViewById(android.R.id.content))
-        RotationDiag.watchCutout("decor", window.decorView)
-        RotationDiag.watchWidth("chatRoot", binding.root)
-        RotationDiag.watchWidth("messagesList", binding.messagesListViewCompose)
-        RotationDiag.watchWidth("messageInput", binding.fragmentContainerActivityChat)
 
         setupChatToolbarView()
         setupChatEmptyStateView()
@@ -4541,11 +4533,6 @@ class ChatActivity :
     fun createPoll() {
         val pollVoteDialog = PollCreateDialogFragment.newInstance(conversationUser, roomToken)
         pollVoteDialog.show(supportFragmentManager, TAG)
-    }
-
-    override fun onConfigurationChanged(newConfig: Configuration) {
-        super.onConfigurationChanged(newConfig)
-        RotationDiag.logConfiguration(this, "onConfigurationChanged", null, null)
     }
 
     fun createThread() {
