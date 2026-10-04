@@ -882,7 +882,7 @@ class ConversationsListActivity : BaseActivity() {
      */
     private fun confirmForwardFile(key: String) {
         val conversation = selectedConversation ?: return
-        val entry = PendingFileForward.take(key)
+        val entry = PendingFileForward.peek(key)
         if (entry == null || entry.userId != currentUser.id) {
             forwardMessageState.value = false
             intent.removeExtra(KEY_FORWARD_FILE_KEY)
@@ -894,14 +894,16 @@ class ConversationsListActivity : BaseActivity() {
             .setTitle(title)
             .setMessage(entry.remotePath.substringAfterLast('/'))
             .setPositiveButton(R.string.nc_yes) { _, _ ->
-                val metaData = entry.caption.takeIf { it.isNotEmpty() }?.let { Gson().toJson(mapOf("caption" to it)) }
-                ShareOperationWorker.shareFile(conversation.token, currentUser, entry.remotePath, metaData)
+                // taken only now: until then a rotation (which drops the dialog) must not lose the file
+                val confirmed = PendingFileForward.take(key) ?: return@setPositiveButton
+                val caption = confirmed.caption
+                val metaData = if (caption.isNotEmpty()) Gson().toJson(mapOf("caption" to caption)) else null
+                ShareOperationWorker.shareFile(conversation.token, currentUser, confirmed.remotePath, metaData)
                 intent.removeExtra(KEY_FORWARD_FILE_KEY)
                 forwardMessageState.value = false
                 openConversation()
             }
-            .setNegativeButton(R.string.nc_no) { _, _ -> PendingFileForward.restore(key, entry) }
-            .setOnCancelListener { PendingFileForward.restore(key, entry) }
+            .setNegativeButton(R.string.nc_no, null)
         viewThemeUtils.dialog.colorMaterialAlertDialogBackground(this, dialogBuilder)
         val dialog = dialogBuilder.show()
         viewThemeUtils.platform.colorTextButtons(

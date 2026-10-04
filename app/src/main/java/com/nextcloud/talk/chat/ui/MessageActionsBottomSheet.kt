@@ -253,7 +253,8 @@ internal fun buildMessageActionsState(
             !message.isDeleted &&
             isOnline &&
             !isClassifiedRoom &&
-            conversation?.remoteServer.isNullOrEmpty(),
+            conversation?.remoteServer.isNullOrEmpty() &&
+            !message.fileParameters.path.isNullOrBlank(),
         canSendToConversation = hasChatPermission && !isConversationReadOnly,
         showEdit = isMessageEditable,
         showCopy = !message.isDeleted,

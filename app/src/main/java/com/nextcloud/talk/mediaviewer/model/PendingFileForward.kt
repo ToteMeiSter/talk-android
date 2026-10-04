@@ -26,11 +26,9 @@ object PendingFileForward {
         return key
     }
 
+    /** Reads the entry without removing it, e.g. to show the confirmation (a rotation must not lose it). */
+    fun peek(key: String?): Entry? = key?.let { entries[it] }
+
     /** Reads the entry and removes it, so that a key works once. */
     fun take(key: String?): Entry? = key?.let { entries.remove(it) }
-
-    /** Puts a taken entry back under its key, e.g. when the user declined the confirmation. */
-    fun restore(key: String, entry: Entry) {
-        entries[key] = entry
-    }
 }

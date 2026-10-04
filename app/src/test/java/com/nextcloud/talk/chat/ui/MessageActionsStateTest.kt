@@ -99,7 +99,7 @@ class MessageActionsStateTest {
         ChatMessage(
             jsonMessageId = 7,
             message = "{file}",
-            messageParameters = hashMapOf("file" to hashMapOf("id" to "1", "name" to "a.jpg"))
+            messageParameters = hashMapOf("file" to hashMapOf("id" to "1", "name" to "a.jpg", "path" to "Talk/a.jpg"))
         )
 
     @Test
@@ -114,6 +114,22 @@ class MessageActionsStateTest {
         Assert.assertFalse(buildStateFor(fileMessage(), isOnline = false).showForwardFile)
         Assert.assertFalse(buildStateFor(fileMessage().apply { isDeleted = true }).showForwardFile)
         Assert.assertFalse(buildStateFor(ChatMessage(jsonMessageId = 8, message = "hi")).showForwardFile)
+    }
+
+    @Test
+    fun showForwardFile_falseWithoutThePathOfTheFile() {
+        val noPath = ChatMessage(
+            jsonMessageId = 9,
+            message = "{file}",
+            messageParameters = hashMapOf("file" to hashMapOf("id" to "1", "name" to "a.jpg"))
+        )
+        val withPath = ChatMessage(
+            jsonMessageId = 9,
+            message = "{file}",
+            messageParameters = hashMapOf("file" to hashMapOf("id" to "1", "name" to "a.jpg", "path" to "Talk/a.jpg"))
+        )
+        Assert.assertFalse(buildStateFor(noPath).showForwardFile)
+        Assert.assertTrue(buildStateFor(withPath).showForwardFile)
     }
 
     @Test
