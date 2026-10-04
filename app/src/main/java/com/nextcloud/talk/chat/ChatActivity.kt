@@ -23,6 +23,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.AssetFileDescriptor
+import android.content.res.Configuration
 import android.database.Cursor
 import android.graphics.Outline
 import android.location.LocationManager
@@ -224,6 +225,7 @@ import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_ROOM_TOKEN
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_START_CALL_AFTER_ROOM_SWITCH
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_SWITCH_TO_ROOM
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_THREAD_ID
+import com.nextcloud.talk.utils.keepContentOutOfDisplayCutout
 import com.nextcloud.talk.utils.permissions.PlatformPermissionUtil
 import com.nextcloud.talk.utils.rx.DisposableSet
 import com.nextcloud.talk.utils.singletons.ApplicationWideCurrentRoomHolder
@@ -635,6 +637,14 @@ class ChatActivity :
                 binding.root
             }
         )
+        keepContentOutOfDisplayCutout()
+
+        RotationDiag.logConfiguration(this, "onCreate", savedInstanceState, isConversationListPaneEnabled())
+        RotationDiag.watchWidth("content", findViewById(android.R.id.content))
+        RotationDiag.watchCutout("decor", window.decorView)
+        RotationDiag.watchWidth("chatRoot", binding.root)
+        RotationDiag.watchWidth("messagesList", binding.messagesListViewCompose)
+        RotationDiag.watchWidth("messageInput", binding.fragmentContainerActivityChat)
 
         setupChatToolbarView()
         setupChatEmptyStateView()
@@ -4299,6 +4309,11 @@ class ChatActivity :
     fun createPoll() {
         val pollVoteDialog = PollCreateDialogFragment.newInstance(conversationUser, roomToken)
         pollVoteDialog.show(supportFragmentManager, TAG)
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        RotationDiag.logConfiguration(this, "onConfigurationChanged", null, null)
     }
 
     fun createThread() {
