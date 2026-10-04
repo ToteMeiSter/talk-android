@@ -411,8 +411,11 @@ class ChatActivity :
 
     var openedViaNotification: Boolean = false
     var conversationThreadInfo: ThreadInfoDto? = null
+
+    // Before the first room session exists, onCreate (handleIntent) already needs the user, which is the one the
+    // session is created with.
     val conversationUser: User
-        get() = chatViewModel.currentUser
+        get() = roomSession?.chatViewModel?.currentUser ?: initialUser
     lateinit var spreedCapabilities: SpreedCapabilityDto
     private var capabilitiesLoaded = false
     var chatApiVersion: Int = 1
