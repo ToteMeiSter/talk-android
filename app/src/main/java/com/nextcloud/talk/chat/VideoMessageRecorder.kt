@@ -100,12 +100,8 @@ class VideoMessageRecorder(
         val provider = cameraProvider
         if (state == State.IDLE || provider == null) return
 
-        val newLens = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-            CameraSelector.LENS_FACING_BACK
-        } else {
-            CameraSelector.LENS_FACING_FRONT
-        }
-        if (!provider.hasCamera(selectorFor(newLens))) return
+        val newLens = oppositeLens(lensFacing)
+        if (!provider.hasCamera(cameraSelectorFor(newLens))) return
 
         val previousLens = lensFacing
         lensFacing = newLens
@@ -160,15 +156,8 @@ class VideoMessageRecorder(
     }
 
     private fun bindUseCases(provider: ProcessCameraProvider): Boolean {
-        var selector = selectorFor(lensFacing)
-        if (!provider.hasCamera(selector)) {
-            lensFacing = if (lensFacing == CameraSelector.LENS_FACING_FRONT) {
-                CameraSelector.LENS_FACING_BACK
-            } else {
-                CameraSelector.LENS_FACING_FRONT
-            }
-            selector = selectorFor(lensFacing)
-        }
+        lensFacing = resolveLens(provider, lensFacing)
+        val selector = cameraSelectorFor(lensFacing)
         val previewUseCase = preview
         val videoUseCase = videoCapture
         return try {
@@ -231,8 +220,6 @@ class VideoMessageRecorder(
     private fun releaseCamera() {
         cameraProvider?.unbind(preview, videoCapture)
     }
-
-    private fun selectorFor(lens: Int): CameraSelector = CameraSelector.Builder().requireLensFacing(lens).build()
 
     companion object {
         private val TAG = VideoMessageRecorder::class.java.simpleName
