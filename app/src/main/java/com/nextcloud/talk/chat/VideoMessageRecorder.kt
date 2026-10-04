@@ -69,16 +69,14 @@ class VideoMessageRecorder(
         outputFile = file
         lensFacing = CameraSelector.LENS_FACING_FRONT
 
-        val providerFuture = ProcessCameraProvider.getInstance(context)
-        providerFuture.addListener({
-            if (startedSession != session) return@addListener
-            try {
-                onCameraProviderReady(providerFuture.get())
-            } catch (e: java.util.concurrent.ExecutionException) {
-                Log.e(TAG, "camera provider is not available", e)
+        whenCameraProviderReady(context) { provider ->
+            if (startedSession != session) return@whenCameraProviderReady
+            if (provider != null) {
+                onCameraProviderReady(provider)
+            } else {
                 finish(Outcome.FAILED, null)
             }
-        }, ContextCompat.getMainExecutor(context))
+        }
     }
 
     fun stopAndSend() {
@@ -157,20 +155,9 @@ class VideoMessageRecorder(
 
     private fun bindUseCases(provider: ProcessCameraProvider): Boolean {
         lensFacing = resolveLens(provider, lensFacing)
-        val selector = cameraSelectorFor(lensFacing)
-        val previewUseCase = preview
-        val videoUseCase = videoCapture
-        return try {
-            requireNotNull(previewUseCase).surfaceProvider = previewView.surfaceProvider
-            provider.bindToLifecycle(lifecycleOwner, selector, previewUseCase, requireNotNull(videoUseCase))
-            true
-        } catch (e: IllegalArgumentException) {
-            Log.e(TAG, "cannot bind camera use cases", e)
-            false
-        } catch (e: IllegalStateException) {
-            Log.e(TAG, "cannot bind camera use cases", e)
-            false
-        }
+        val previewUseCase = requireNotNull(preview)
+        previewUseCase.surfaceProvider = previewView.surfaceProvider
+        return provider.bindSafely(lifecycleOwner, lensFacing, previewUseCase, requireNotNull(videoCapture)) != null
     }
 
     @SuppressLint("MissingPermission")

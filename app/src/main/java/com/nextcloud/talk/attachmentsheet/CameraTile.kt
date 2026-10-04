@@ -8,7 +8,6 @@ package com.nextcloud.talk.attachmentsheet
 
 import android.Manifest
 import android.content.pm.PackageManager
-import android.util.Log
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -35,14 +34,12 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.nextcloud.talk.R
-import com.nextcloud.talk.chat.cameraSelectorFor
+import com.nextcloud.talk.chat.bindSafely
 import com.nextcloud.talk.chat.resolveLens
-import java.util.concurrent.ExecutionException
-
-private const val TAG = "CameraTile"
+import com.nextcloud.talk.chat.whenCameraProviderReady
 
 /**
- * Holds the bound preview so it can be released before the system camera starts.
+ * Holds the bound preview so it can be released before the in-app camera starts.
  */
 private class PreviewBinding {
     private var provider: ProcessCameraProvider? = null
@@ -62,7 +59,7 @@ private class PreviewBinding {
 /**
  * First grid tile. With [livePreview] and the camera permission it shows the back camera; otherwise only the camera
  * icon (no camera is opened, e.g. during a call). The tap goes through the regular photo flow, which asks for the
- * camera permission; the preview is released first so the system camera can open it.
+ * camera permission; the preview is released first so the in-app camera can open it.
  */
 @Composable
 internal fun CameraTile(livePreview: Boolean, onClick: () -> Unit) {
@@ -102,17 +99,12 @@ private fun LiveCameraPreview(binding: PreviewBinding, modifier: Modifier) {
         }
     }
     DisposableEffect(lifecycleOwner) {
-        val providerFuture = ProcessCameraProvider.getInstance(context)
         var disposed = false
-        providerFuture.addListener({
-            if (disposed) return@addListener
-            try {
-                val provider = providerFuture.get()
+        whenCameraProviderReady(context) { provider ->
+            if (!disposed && provider != null) {
                 binding.bind(provider, bindBackPreview(provider, lifecycleOwner, previewView))
-            } catch (e: ExecutionException) {
-                Log.w(TAG, "camera provider is not available", e)
             }
-        }, ContextCompat.getMainExecutor(context))
+        }
         onDispose {
             disposed = true
             binding.release()
@@ -124,14 +116,5 @@ private fun LiveCameraPreview(binding: PreviewBinding, modifier: Modifier) {
 private fun bindBackPreview(provider: ProcessCameraProvider, owner: LifecycleOwner, view: PreviewView): Preview? {
     val lens = resolveLens(provider, CameraSelector.LENS_FACING_BACK)
     val preview = Preview.Builder().build().also { it.surfaceProvider = view.surfaceProvider }
-    return try {
-        provider.bindToLifecycle(owner, cameraSelectorFor(lens), preview)
-        preview
-    } catch (e: IllegalArgumentException) {
-        Log.w(TAG, "cannot bind camera preview", e)
-        null
-    } catch (e: IllegalStateException) {
-        Log.w(TAG, "cannot bind camera preview", e)
-        null
-    }
+    return preview.takeIf { provider.bindSafely(owner, lens, it) != null }
 }
