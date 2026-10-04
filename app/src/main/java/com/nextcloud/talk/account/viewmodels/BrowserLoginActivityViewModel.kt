@@ -10,6 +10,7 @@ package com.nextcloud.talk.account.viewmodels
 import android.os.Bundle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nextcloud.talk.account.LoginDiag
 import com.nextcloud.talk.account.data.LoginRepository
 import com.nextcloud.talk.account.data.model.LoginResponse
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -65,9 +66,14 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
     }
 
     fun startWebBrowserLogin(baseUrl: String, reAuth: Boolean = false, accountToReauthorize: Long? = null) {
-        if (!startLoginOnce()) return
+        if (!startLoginOnce()) {
+            LoginDiag.loginRequestSkipped()
+            return
+        }
+        LoginDiag.loginRequestStarted(baseUrl)
         viewModelScope.launch {
             val response = repository.startLoginFlow(baseUrl, reAuth, accountToReauthorize)
+            LoginDiag.loginRequestFinished(response?.loginUrl, response?.pollUrl)
             savedResponse = response
 
             if (response == null) {
@@ -83,7 +89,9 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
     fun handleWebBrowserLogin() {
         savedResponse?.let { response ->
             viewModelScope.launch {
+                val poll = LoginDiag.pollStarted()
                 val loginCompletionResponse = repository.pollLogin(response)
+                LoginDiag.pollFinished(poll, loginCompletionResponse != null)
 
                 if (loginCompletionResponse == null) {
                     _postLoginState.value = PostLoginViewState.PostLoginError
