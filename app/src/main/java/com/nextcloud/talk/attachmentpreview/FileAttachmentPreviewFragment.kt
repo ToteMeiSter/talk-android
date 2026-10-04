@@ -33,9 +33,6 @@ class FileAttachmentPreviewFragment : DialogFragment() {
     private lateinit var filesList: ArrayList<String>
     private var conversationName: String = ""
     private var showFilePermissionsOption: Boolean = false
-    private var uploadFiles:
-        (files: MutableList<String>, caption: String, compressImages: Boolean, allowUpdate: Boolean) -> Unit =
-        { _, _, _, _ -> }
     private var composeView: ComposeView? = null
 
     @Inject
@@ -49,17 +46,6 @@ class FileAttachmentPreviewFragment : DialogFragment() {
 
     private val viewModel: FileAttachmentPreviewViewModel by lazy {
         ViewModelProvider(this, viewModelFactory)[FileAttachmentPreviewViewModel::class.java]
-    }
-
-    fun setListener(
-        uploadFiles: (
-            files: MutableList<String>,
-            caption: String,
-            compressImages: Boolean,
-            allowUpdate: Boolean
-        ) -> Unit
-    ) {
-        this.uploadFiles = uploadFiles
     }
 
     override fun onCreateDialog(savedInstanceState: Bundle?): Dialog {
@@ -115,7 +101,10 @@ class FileAttachmentPreviewFragment : DialogFragment() {
                         showFilePermissionsOption = showFilePermissionsOption,
                         onDismiss = { dismiss() },
                         onSend = { files, caption, compressImages, allowUpdate ->
-                            uploadFiles(files.toMutableList(), caption, compressImages, allowUpdate)
+                            parentFragmentManager.setFragmentResult(
+                                RESULT_KEY,
+                                packResult(files, caption, compressImages, allowUpdate)
+                            )
                             dismiss()
                         }
                     )
@@ -134,6 +123,23 @@ class FileAttachmentPreviewFragment : DialogFragment() {
         private const val FILES_TO_UPLOAD_ARG = "FILES_TO_UPLOAD_ARG"
         private const val CONVERSATION_NAME_ARG = "CONVERSATION_NAME_ARG"
         private const val FILE_PERMISSIONS_OPTION_ARG = "FILE_PERMISSIONS_OPTION_ARG"
+
+        const val RESULT_KEY = "FILE_ATTACHMENT_PREVIEW_RESULT"
+        const val RESULT_FILES = "RESULT_FILES"
+        const val RESULT_CAPTION = "RESULT_CAPTION"
+        const val RESULT_COMPRESS_IMAGES = "RESULT_COMPRESS_IMAGES"
+        const val RESULT_ALLOW_UPDATE = "RESULT_ALLOW_UPDATE"
+
+        /**
+         * The result goes through the fragment manager, so it still arrives after the activity was recreated.
+         */
+        fun packResult(files: List<String>, caption: String, compressImages: Boolean, allowUpdate: Boolean): Bundle =
+            Bundle().apply {
+                putStringArrayList(RESULT_FILES, ArrayList(files))
+                putString(RESULT_CAPTION, caption)
+                putBoolean(RESULT_COMPRESS_IMAGES, compressImages)
+                putBoolean(RESULT_ALLOW_UPDATE, allowUpdate)
+            }
 
         @JvmStatic
         fun newInstance(
