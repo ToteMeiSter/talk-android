@@ -1119,8 +1119,8 @@ class ChatActivity :
                 }
 
                 // Everything remembered for the list belongs to one room, so it starts over when the room switches.
-                val listState = key(roomSession) { rememberLazyListState() }
-                val composeScope = key(roomSession) { rememberCoroutineScope() }
+                val listState = key(roomToken) { rememberLazyListState() }
+                val composeScope = key(roomToken) { rememberCoroutineScope() }
                 SideEffect {
                     chatListState = listState
                     chatListComposeScope = composeScope
@@ -1135,7 +1135,7 @@ class ChatActivity :
                 val uploadedLocalPreviewMap by chatViewModel.uploadedLocalPreviewMap.collectAsStateWithLifecycle()
 
                 // everything remembered in here belongs to one room
-                key(roomSession) {
+                key(roomToken) {
                     CompositionLocalProvider(
                         LocalViewThemeUtils provides viewThemeUtils,
                         LocalMessageUtils provides messageUtils,
