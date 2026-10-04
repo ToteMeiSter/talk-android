@@ -26,6 +26,7 @@ import com.nextcloud.talk.chat.RecordInputMode
 import com.nextcloud.talk.chat.data.ChatMessageRepository
 import com.nextcloud.talk.chat.data.io.AudioFocusRequestManager
 import com.nextcloud.talk.chat.data.io.MediaPlayerManager
+import com.nextcloud.talk.chat.VideoMessageRecorder
 import com.nextcloud.talk.chat.data.io.MediaRecorderManager
 import com.nextcloud.talk.chat.data.model.ChatMessage
 import com.nextcloud.talk.chat.data.model.FileParameters
@@ -479,7 +480,10 @@ class ChatViewModel @AssistedInject constructor(
     override fun onStop(owner: LifecycleOwner) {
         super.onStop(owner)
         currentLifeCycleFlag = LifeCycleFlag.STOPPED
-        mediaRecorderManager.handleOnStop()
+        // a rotation stops the activity but not the recording: the new activity picks it up
+        if (!keepRecordingOnStop) {
+            mediaRecorderManager.handleOnStop()
+        }
         chatRepository.handleOnStop()
         mediaPlayerManager.handleOnStop()
     }
@@ -2332,6 +2336,29 @@ class ChatViewModel @AssistedInject constructor(
             _getVoiceRecordingInProgress.value = true
         }
         return granted
+    }
+
+    /**
+     * Set by the activity before it stops for a configuration change: a running voice recording then goes on.
+     */
+    var keepRecordingOnStop = false
+
+    private var videoRecorder: VideoMessageRecorder? = null
+
+    /**
+     * The recorder of the video messages of this room. It lives here, not in the activity, so that it survives the
+     * recreation of the activity like the voice recorder does.
+     */
+    fun videoMessageRecorder(context: Context): VideoMessageRecorder =
+        videoRecorder ?: VideoMessageRecorder(context).also { videoRecorder = it }
+
+    val activeVideoMessageRecorder: VideoMessageRecorder?
+        get() = videoRecorder
+
+    override fun onCleared() {
+        super.onCleared()
+        videoRecorder?.release()
+        videoRecorder = null
     }
 
     fun onVideoRecordingEnded() {

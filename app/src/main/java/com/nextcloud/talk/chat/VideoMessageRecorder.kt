@@ -10,6 +10,7 @@ package com.nextcloud.talk.chat
 import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
+import android.view.OrientationEventListener
 import android.view.Surface
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
@@ -25,27 +26,49 @@ import androidx.camera.video.VideoCapture
 import androidx.camera.video.VideoRecordEvent
 import androidx.camera.view.PreviewView
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import com.nextcloud.talk.camera.rotationForDeviceOrientation
 import java.io.File
 
 /**
  * Records a plain mp4 video with CameraX and shows a live preview while doing so.
  *
- * All methods must be called on the main thread. [onFinished] is called exactly once per [start] on the main thread:
- * with [Outcome.SEND] and the file to send, or with another outcome and null (the file is deleted then).
+ * The recorder does not belong to an activity: it lives in the view model of the chat and survives the recreation of
+ * the activity (rotation). The activity hands its lifecycle, its preview and its callback in with [attach] and the
+ * recorder lets go of all three in [detach], which also happens when that lifecycle is destroyed, so no activity or
+ * view is leaked. While nothing is attached the recording goes on; a result that arrives then is kept and delivered
+ * by the next [attach].
+ *
+ * All methods must be called on the main thread. The callback is called exactly once per [start] on the main thread:
+ * with [Outcome.SEND] and the file to send, with [Outcome.INTERRUPTED] and the file that was recorded up to the
+ * interruption, or with another outcome and null (the file is deleted then).
  * The recording survives [switchCamera]; the preview and the camera are released as soon as it ends.
  */
-class VideoMessageRecorder(
-    private val context: Context,
-    private val lifecycleOwner: LifecycleOwner,
-    private val previewView: PreviewView,
-    private val onFinished: (Outcome, File?) -> Unit
-) {
+class VideoMessageRecorder(context: Context) {
 
-    enum class Outcome { SEND, CANCELLED, TOO_SHORT, FAILED }
+    /**
+     * [INTERRUPTED]: the recording ended without being asked to, but what was recorded is usable. It is not sent
+     * on its own but shown as a preview.
+     */
+    enum class Outcome { SEND, CANCELLED, TOO_SHORT, FAILED, INTERRUPTED }
 
     private enum class State { IDLE, STARTING, RECORDING }
-    private enum class StopAction { SEND, DISCARD }
+    private enum class StopAction { SEND, DISCARD, KEEP }
+
+    private class Finished(val outcome: Outcome, val file: File?)
+
+    private val context: Context = context.applicationContext
+    private var lifecycleOwner: LifecycleOwner? = null
+    private var previewView: PreviewView? = null
+    private var onFinished: ((Outcome, File?) -> Unit)? = null
+    private var pendingResult: Finished? = null
+    private var released = false
+
+    private val ownerObserver = LifecycleEventObserver { _, event ->
+        if (event == Lifecycle.Event.ON_DESTROY) detach()
+    }
 
     private var state = State.IDLE
     private var stopAction: StopAction? = null
@@ -56,17 +79,80 @@ class VideoMessageRecorder(
     private var outputFile: File? = null
     private var lensFacing = CameraSelector.LENS_FACING_FRONT
     private var session = 0
+    private var videoRotation = Surface.ROTATION_0
 
     val isActive: Boolean
         get() = state != State.IDLE
 
-    fun start(file: File) {
+    /**
+     * A recording ended while no activity was attached, its result waits for the next [attach].
+     */
+    val hasPendingResult: Boolean
+        get() = pendingResult != null
+
+    /**
+     * Shows the preview in [view] and reports the end of the recording to [callback]. A running recording is bound
+     * to the new [owner], a result which is waiting is delivered at once. The previously attached owner is dropped.
+     */
+    fun attach(owner: LifecycleOwner, view: PreviewView, callback: (Outcome, File?) -> Unit) {
+        if (released) return
+        detach()
+        lifecycleOwner = owner
+        previewView = view
+        onFinished = callback
+        owner.lifecycle.addObserver(ownerObserver)
+
+        val provider = cameraProvider
+        if (state == State.RECORDING && provider != null) {
+            preview = buildPreview()
+            if (!bindUseCases(provider)) {
+                // no picture can be shown or recorded any more: keep what exists
+                stop(StopAction.KEEP)
+            }
+        }
+        pendingResult?.let {
+            pendingResult = null
+            callback(it.outcome, it.file)
+        }
+    }
+
+    /**
+     * Lets go of the activity. A running recording continues without camera until the next [attach]
+     * (persistent recording); the camera is unbound so that it can be bound to the next lifecycle.
+     */
+    fun detach() {
+        lifecycleOwner?.lifecycle?.removeObserver(ownerObserver)
+        if (state != State.IDLE) {
+            cameraProvider?.unbind(preview, videoCapture)
+        }
+        preview?.surfaceProvider = null
+        lifecycleOwner = null
+        previewView = null
+        onFinished = null
+    }
+
+    /**
+     * Ends the recorder for good, when the chat is left: a running recording is discarded, nothing is delivered.
+     */
+    fun release() {
+        released = true
+        detach()
+        pendingResult?.file?.delete()
+        pendingResult = null
+        cancel()
+    }
+
+    /**
+     * @param targetRotation the [Surface] rotation the video is recorded in, see [videoTargetRotation]
+     */
+    fun start(file: File, targetRotation: Int) {
         check(state == State.IDLE) { "Video recording already active" }
         state = State.STARTING
         session++
         val startedSession = session
         stopAction = null
         outputFile = file
+        videoRotation = targetRotation
         lensFacing = CameraSelector.LENS_FACING_FRONT
 
         whenCameraProviderReady(context) { provider ->
@@ -124,7 +210,7 @@ class VideoMessageRecorder(
                 stopAction = action
                 recording?.stop()
                 if (action == StopAction.DISCARD) {
-                    releaseCamera()
+                    cameraProvider?.unbind(preview, videoCapture)
                 }
             }
         }
@@ -142,9 +228,8 @@ class VideoMessageRecorder(
             )
             .setTargetVideoEncodingBitRate(TARGET_VIDEO_BIT_RATE)
             .build()
-        val rotation = previewView.display?.rotation ?: Surface.ROTATION_0
-        videoCapture = VideoCapture.Builder(recorder).setTargetRotation(rotation).build()
-        preview = Preview.Builder().setTargetRotation(rotation).build()
+        videoCapture = VideoCapture.Builder(recorder).setTargetRotation(videoRotation).build()
+        preview = buildPreview()
 
         if (!bindUseCases(provider)) {
             finish(Outcome.FAILED, null)
@@ -153,13 +238,20 @@ class VideoMessageRecorder(
         startRecording()
     }
 
+    private fun buildPreview(): Preview =
+        Preview.Builder()
+            .setTargetRotation(previewView?.display?.rotation ?: videoRotation)
+            .build()
+
     private fun bindUseCases(provider: ProcessCameraProvider): Boolean {
         lensFacing = resolveLens(provider, lensFacing)
+        val owner = lifecycleOwner
+        val view = previewView
         val previewUseCase = preview
         val videoUseCase = videoCapture
-        if (previewUseCase == null || videoUseCase == null) return false
-        previewUseCase.surfaceProvider = previewView.surfaceProvider
-        return provider.bindSafely(lifecycleOwner, lensFacing, previewUseCase, videoUseCase) != null
+        if (owner == null || view == null || previewUseCase == null || videoUseCase == null) return false
+        previewUseCase.surfaceProvider = view.surfaceProvider
+        return provider.bindSafely(owner, lensFacing, previewUseCase, videoUseCase) != null
     }
 
     @SuppressLint("MissingPermission")
@@ -180,34 +272,44 @@ class VideoMessageRecorder(
 
     private fun onRecordEvent(event: VideoRecordEvent) {
         if (event is VideoRecordEvent.Finalize) {
-            val outcome = resolveOutcome(
+            val duration = event.recordingStats.recordedDurationNanos
+            var outcome = resolveOutcome(
                 discardRequested = stopAction == StopAction.DISCARD,
                 hasError = event.hasError(),
                 error = event.error,
-                recordedDurationNanos = event.recordingStats.recordedDurationNanos
+                recordedDurationNanos = duration
             )
+            val cutOff = outcome == Outcome.FAILED &&
+                isSalvageable(event.error, duration, outputFile?.length() ?: 0L)
+            val keepRequested = outcome == Outcome.SEND && stopAction == StopAction.KEEP
+            if (cutOff || keepRequested) {
+                outcome = Outcome.INTERRUPTED
+            }
             if (event.hasError()) {
                 Log.w(TAG, "recording finalized with error ${event.error}, outcome: $outcome")
             }
-            finish(outcome, if (outcome == Outcome.SEND) outputFile else null)
+            finish(outcome, if (outcome == Outcome.SEND || outcome == Outcome.INTERRUPTED) outputFile else null)
         }
     }
 
     private fun finish(outcome: Outcome, fileToSend: File?) {
         val file = outputFile
-        releaseCamera()
+        cameraProvider?.unbind(preview, videoCapture)
         recording = null
         outputFile = null
         stopAction = null
         state = State.IDLE
-        if (fileToSend == null) {
+        if (fileToSend == null || released) {
             file?.delete()
         }
-        onFinished(outcome, fileToSend)
-    }
+        if (released) return
 
-    private fun releaseCamera() {
-        cameraProvider?.unbind(preview, videoCapture)
+        val callback = onFinished
+        if (callback != null) {
+            callback(outcome, fileToSend)
+        } else {
+            pendingResult = Finished(outcome, fileToSend)
+        }
     }
 
     companion object {
@@ -243,5 +345,82 @@ class VideoMessageRecorder(
                 recordedDurationNanos < MIN_DURATION_NANOS -> Outcome.TOO_SHORT
                 else -> Outcome.SEND
             }
+
+        /**
+         * A recording which the camera cut off (source inactive) leaves a valid file with everything recorded
+         * before that. It is worth keeping when it is long enough and not empty.
+         */
+        fun isSalvageable(error: Int, recordedDurationNanos: Long, fileLength: Long): Boolean =
+            error == VideoRecordEvent.Finalize.ERROR_SOURCE_INACTIVE &&
+                recordedDurationNanos >= MIN_DURATION_NANOS &&
+                fileLength > 0
+
+        /**
+         * The rotation to record the video in: the one of the sensor when it is known (the video then matches how
+         * the phone is held, whatever the activity shows), otherwise the one of the display.
+         *
+         * @param sensorDegrees what [OrientationEventListener] reported, or ORIENTATION_UNKNOWN
+         */
+        fun videoTargetRotation(sensorDegrees: Int, displayRotation: Int): Int =
+            rotationForDeviceOrientation(sensorDegrees) ?: displayRotation
     }
 }
+
+/**
+ * What a new activity does about a recording it finds in the view model of the chat.
+ */
+enum class RecordingResume {
+    /** Nothing was recording. */
+    NONE,
+
+    /** Attach to the running recording, the lock is already set. */
+    ATTACH,
+
+    /** Attach and lock: the finger which held the record button is gone with the old activity. */
+    ATTACH_AND_LOCK,
+
+    /** The recording ended while there was no activity: deliver its result. */
+    DELIVER_RESULT
+}
+
+fun resolveRecordingResume(
+    recorderActive: Boolean,
+    hasPendingResult: Boolean,
+    recordingInProgress: Boolean,
+    recordingLocked: Boolean
+): RecordingResume =
+    when {
+        hasPendingResult -> RecordingResume.DELIVER_RESULT
+        recorderActive && recordingLocked -> RecordingResume.ATTACH
+        recorderActive -> RecordingResume.ATTACH_AND_LOCK
+        recordingInProgress && !recordingLocked -> RecordingResume.ATTACH_AND_LOCK
+        else -> RecordingResume.NONE
+    }
+
+/**
+ * Follows the orientation of the device with the sensor, which keeps working while the activity is not rotated.
+ */
+class DeviceOrientationTracker(context: Context) {
+    var degrees: Int = OrientationEventListener.ORIENTATION_UNKNOWN
+        private set
+
+    private val listener = object : OrientationEventListener(context) {
+        override fun onOrientationChanged(orientation: Int) {
+            degrees = orientation
+        }
+    }
+
+    fun enable() {
+        if (listener.canDetectOrientation()) listener.enable()
+    }
+
+    fun disable() {
+        listener.disable()
+        degrees = OrientationEventListener.ORIENTATION_UNKNOWN
+    }
+}
+
+/**
+ * Feedback is for the user starting or ending a recording, not for an activity which only shows the state again.
+ */
+fun shouldVibrateOnRecordingChange(previous: Boolean?, current: Boolean): Boolean = current != (previous ?: false)
