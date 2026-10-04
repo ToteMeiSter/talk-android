@@ -10,7 +10,6 @@ package com.nextcloud.talk.account.viewmodels
 import android.os.Bundle
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.nextcloud.talk.account.LoginDiag
 import com.nextcloud.talk.account.data.LoginRepository
 import com.nextcloud.talk.account.data.PendingBrowserLoginStore
 import com.nextcloud.talk.account.data.model.LoginResponse
@@ -68,14 +67,9 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
     }
 
     fun startWebBrowserLogin(baseUrl: String, reAuth: Boolean = false, accountToReauthorize: Long? = null) {
-        if (!startLoginOnce()) {
-            LoginDiag.loginRequestSkipped()
-            return
-        }
-        LoginDiag.loginRequestStarted(baseUrl)
+        if (!startLoginOnce()) return
         viewModelScope.launch {
             val response = repository.startLoginFlow(baseUrl, reAuth, accountToReauthorize)
-            LoginDiag.loginRequestFinished(response?.loginUrl, response?.pollUrl)
             savedResponse = response
 
             if (response == null) {
@@ -110,9 +104,7 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
     fun handleWebBrowserLogin() {
         savedResponse?.let { response ->
             viewModelScope.launch {
-                val poll = LoginDiag.pollStarted()
                 val loginCompletionResponse = repository.pollLogin(response)
-                LoginDiag.pollFinished(poll, loginCompletionResponse != null)
                 // Only reached when the poll ended. If this view model is cleared first, the login stays pending.
                 PendingBrowserLoginStore.clear()
 

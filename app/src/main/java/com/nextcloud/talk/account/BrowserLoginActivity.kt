@@ -60,7 +60,6 @@ class BrowserLoginActivity : BaseActivity() {
     @SuppressLint("SourceLockedOrientationActivity")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        LoginDiag.activityCreated(this, savedInstanceState)
         sharedApplication!!.componentApplication.inject(this)
         binding = ActivityWebViewLoginBinding.inflate(layoutInflater)
         requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
@@ -87,8 +86,6 @@ class BrowserLoginActivity : BaseActivity() {
                             Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_SHORT).show()
                         }
                         is BrowserLoginActivityViewModel.InitialLoginViewState.InitialLoginRequestSuccess -> {
-                            val waiting = viewModel.waitingForBrowserState.value
-                            LoginDiag.event("login URL collected waitingForBrowser=$waiting")
                             if (viewModel.waitingForBrowserState.value) {
                                 viewModel.setWaitingForBrowser(false)
                                 viewModel.handleWebBrowserLogin()
@@ -110,13 +107,11 @@ class BrowserLoginActivity : BaseActivity() {
                         BrowserLoginActivityViewModel.PostLoginViewState.None -> {}
 
                         is BrowserLoginActivityViewModel.PostLoginViewState.PostLoginContinue -> {
-                            LoginDiag.event("post login: continue to account verification")
                             if (!state.data.isEmpty) {
                                 startAccountVerification(state.data)
                             }
                         }
                         BrowserLoginActivityViewModel.PostLoginViewState.PostLoginError -> {
-                            LoginDiag.event("post login: error")
                             logger.e(TAG, "Post login step failed")
                             Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_SHORT).show()
                         }
@@ -171,7 +166,6 @@ class BrowserLoginActivity : BaseActivity() {
         viewThemeUtils.material.colorProgressBar(binding.progressBar)
 
         binding.cancelLoginBtn.setOnClickListener {
-            LoginDiag.event("cancel button")
             viewModel.cancelLogin()
             onBackPressedDispatcher.onBackPressed()
         }
@@ -180,7 +174,6 @@ class BrowserLoginActivity : BaseActivity() {
     private fun launchDefaultWebBrowser(url: String) {
         val intent = Intent(Intent.ACTION_VIEW, url.toUri())
         intent.flags = Intent.FLAG_ACTIVITY_NEW_TASK
-        LoginDiag.browserLaunched(url)
         startActivity(intent)
     }
 
@@ -196,18 +189,7 @@ class BrowserLoginActivity : BaseActivity() {
         startActivity(intent)
     }
 
-    override fun onStart() {
-        super.onStart()
-        LoginDiag.activityEvent(this, "onStart")
-    }
-
-    override fun onStop() {
-        super.onStop()
-        LoginDiag.activityEvent(this, "onStop")
-    }
-
     public override fun onDestroy() {
-        LoginDiag.activityEvent(this, "onDestroy")
         super.onDestroy()
     }
 
