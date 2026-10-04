@@ -125,6 +125,10 @@ data class MessageActionsState(
     val showReplyPrivately: Boolean,
     val showOpenThread: Boolean,
     val showForward: Boolean,
+    /** Sending a file message on to another conversation; offered by the media viewer, not by the sheet. */
+    val showForwardFile: Boolean,
+    /** Whether new content (e.g. a drawn copy of a photo) may be posted to this conversation. */
+    val canSendToConversation: Boolean,
     val showEdit: Boolean,
     val showCopy: Boolean,
     val showCopyMessageLink: Boolean,
@@ -244,6 +248,11 @@ internal fun buildMessageActionsState(
             !(message.isDeletedCommentMessage || message.isDeleted) &&
             isOnline &&
             !isClassifiedRoom,
+        showForwardFile = messageHasFileAttachment &&
+            !message.isDeleted &&
+            isOnline &&
+            !isClassifiedRoom,
+        canSendToConversation = hasChatPermission && !isConversationReadOnly,
         showEdit = isMessageEditable,
         showCopy = !message.isDeleted,
         showCopyMessageLink = !message.isDeleted &&
@@ -834,6 +843,8 @@ private fun PreviewMessageActionsSheetContent() {
         showReplyPrivately = true,
         showOpenThread = false,
         showForward = true,
+        showForwardFile = false,
+        canSendToConversation = true,
         showEdit = true,
         showCopy = true,
         showCopyMessageLink = true,
@@ -894,6 +905,8 @@ private fun PreviewMessageActionsSheetPinned() {
                     showReplyPrivately = false,
                     showOpenThread = false,
                     showForward = false,
+                    showForwardFile = false,
+                    canSendToConversation = true,
                     showEdit = false,
                     showCopy = true,
                     showCopyMessageLink = true,

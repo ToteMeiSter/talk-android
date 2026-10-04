@@ -72,7 +72,9 @@ import com.nextcloud.talk.jobs.AccountRemovalWorker
 import com.nextcloud.talk.jobs.ContactAddressBookWorker.Companion.run
 import com.nextcloud.talk.jobs.DeleteConversationWorker
 import com.nextcloud.talk.jobs.LeaveConversationWorker
+import com.nextcloud.talk.jobs.ShareOperationWorker
 import com.nextcloud.talk.jobs.UploadAndShareFilesWorker
+import com.nextcloud.talk.mediaviewer.model.remoteSharePath
 import com.nextcloud.talk.models.domain.ConversationModel
 import com.nextcloud.talk.models.domain.SearchMessageEntry
 import com.nextcloud.talk.models.json.conversations.ConversationEnums
@@ -104,6 +106,7 @@ import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.bundle.BundleKeys.ADD_ADDITIONAL_ACCOUNT
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_VOICE_ONLY
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CONVERSATION_NAME
+import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_FORWARD_FILE_PATH
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_FORWARD_HIDE_SOURCE_ROOM
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_FORWARD_MSG_FLAG
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_FORWARD_MSG_TEXT
@@ -854,7 +857,10 @@ class ConversationsListActivity : BaseActivity() {
                     showSnackbar(getString(R.string.send_to_forbidden))
                 }
             } else if (forwardMessage) {
-                if (hasChatPermission && !isReadOnlyConversation(selectedConversation!!)) {
+                val forwardedFile = intent.getStringExtra(KEY_FORWARD_FILE_PATH)
+                if (hasChatPermission && !isReadOnlyConversation(selectedConversation!!) && forwardedFile != null) {
+                    confirmForwardFile(forwardedFile)
+                } else if (hasChatPermission && !isReadOnlyConversation(selectedConversation!!)) {
                     openConversation(intent.getStringExtra(KEY_FORWARD_MSG_TEXT))
                     forwardMessageState.value = false
                 } else {
@@ -866,6 +872,31 @@ class ConversationsListActivity : BaseActivity() {
                 openConversation()
             }
         }
+    }
+
+    /**
+     * Forwarding a file: after the confirmation the file at [remotePath] of the user's own storage is shared to the
+     * chosen conversation, with the share step the upload of attachments ends with. Nothing is uploaded again.
+     */
+    private fun confirmForwardFile(remotePath: String) {
+        val conversation = selectedConversation ?: return
+        val title = String.format(resources.getString(R.string.nc_upload_confirm_send_single), conversation.displayName)
+        val dialogBuilder = MaterialAlertDialogBuilder(this)
+            .setTitle(title)
+            .setMessage(remotePath.substringAfterLast('/'))
+            .setPositiveButton(R.string.nc_yes) { _, _ ->
+                ShareOperationWorker.shareFile(conversation.token, currentUser, remoteSharePath(remotePath), null)
+                intent.removeExtra(KEY_FORWARD_FILE_PATH)
+                forwardMessageState.value = false
+                openConversation()
+            }
+            .setNegativeButton(R.string.nc_no, null)
+        viewThemeUtils.dialog.colorMaterialAlertDialogBackground(this, dialogBuilder)
+        val dialog = dialogBuilder.show()
+        viewThemeUtils.platform.colorTextButtons(
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE),
+            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
+        )
     }
 
     private fun shouldShowLobby(conversation: ConversationModel): Boolean {
