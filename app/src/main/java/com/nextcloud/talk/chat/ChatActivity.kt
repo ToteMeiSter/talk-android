@@ -836,6 +836,10 @@ class ChatActivity :
     private fun switchRoomInPlace(token: String) {
         logConversationInfos("switchRoomInPlace to $token")
 
+        // files picked for the old room must not be sent to the new one
+        (supportFragmentManager.findFragmentByTag(FileAttachmentPreviewFragment.TAG) as? DialogFragment)
+            ?.dismissAllowingStateLoss()
+
         // The input saves its draft when it is removed, which needs the view models of the old room.
         supportFragmentManager.findFragmentById(R.id.fragment_container_activity_chat)?.let {
             supportFragmentManager.commitNow(allowStateLoss = true) { remove(it) }
@@ -3250,7 +3254,7 @@ class ChatActivity :
                 caption = if (i == files.size - 1) caption else "",
                 roomToken = roomToken,
                 replyToMessageId = getReplyToMessageId(),
-                displayName = currentConversation?.displayName!!,
+                displayName = currentConversation?.displayName.orEmpty(),
                 compressImages = compressImages,
                 uploadId = uploadId,
                 order = i + 1,
