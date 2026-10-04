@@ -122,10 +122,12 @@ class BrowserLoginActivity : BaseActivity() {
                         }
                         BrowserLoginActivityViewModel.PostLoginViewState.PostLoginRemovalPending -> {
                             logger.e(TAG, "Account removal did not finish in time")
+                            LoginDiag.event("post login: account removal still pending")
                             Snackbar.make(binding.root, R.string.nc_account_removal_pending, Snackbar.LENGTH_LONG)
                                 .show()
                         }
                         BrowserLoginActivityViewModel.PostLoginViewState.PostLoginRestartApp -> {
+                            LoginDiag.event("post login: restart app (account exists or reauthorized)")
                             restartApp()
                         }
                         BrowserLoginActivityViewModel.PostLoginViewState.PostLoginDifferentAccount -> {
