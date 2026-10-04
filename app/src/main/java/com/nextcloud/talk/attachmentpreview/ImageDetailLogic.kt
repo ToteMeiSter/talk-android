@@ -7,7 +7,9 @@
 package com.nextcloud.talk.attachmentpreview
 
 import androidx.exifinterface.media.ExifInterface
+import com.nextcloud.talk.utils.ImageCompressor
 import com.nextcloud.talk.utils.ImageCompressor.ImageInfo
+import java.io.File
 
 /** True when the EXIF orientation turns the image by 90/270 degrees (also mirrored), swapping width and height. */
 internal fun exifSwapsDimensions(orientation: Int): Boolean =
@@ -34,3 +36,10 @@ internal fun imageDetailVariants(
     val compressedText = compressed?.let(describe) ?: originalText
     return if (compress) DetailVariants(compressedText, originalText) else DetailVariants(originalText, compressedText)
 }
+
+/** What the upload worker makes of [file]; null for types it sends untouched (GIF) or when it can't be decoded. */
+internal fun compressedImageInfo(
+    mimeType: String?,
+    file: File,
+    estimate: (File) -> ImageInfo? = ImageCompressor::estimateCompression
+): ImageInfo? = if (ImageCompressor.isCompressible(mimeType)) estimate(file) else null

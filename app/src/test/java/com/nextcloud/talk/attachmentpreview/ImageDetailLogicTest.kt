@@ -12,11 +12,12 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import java.io.File
 
 class ImageDetailLogicTest {
 
     private val describe: (ImageInfo) -> String = { "${it.width}x${it.height} ${it.sizeBytes}" }
-    private val cameraShot = ImageInfo(4000, 3000, 3_000_000)
+    private val cameraShot = ImageInfo(3000, 4000, 3_000_000)
     private val compressed = ImageInfo(960, 1280, 153_000)
 
     @Test
@@ -42,7 +43,7 @@ class ImageDetailLogicTest {
 
     @Test
     fun rotatedPhotoReportsPortraitSize() {
-        val shown = cameraShot.inDisplayOrientation(ExifInterface.ORIENTATION_ROTATE_90)
+        val shown = ImageInfo(4000, 3000, 3_000_000).inDisplayOrientation(ExifInterface.ORIENTATION_ROTATE_90)
 
         assertEquals(ImageInfo(3000, 4000, 3_000_000), shown)
     }
@@ -57,14 +58,14 @@ class ImageDetailLogicTest {
         val variants = imageDetailVariants(cameraShot, compressed, compress = true, describe)
 
         assertEquals("960x1280 153000", variants.current)
-        assertEquals("4000x3000 3000000", variants.alternate)
+        assertEquals("3000x4000 3000000", variants.alternate)
     }
 
     @Test
     fun highQualityShowsOriginal() {
         val variants = imageDetailVariants(cameraShot, compressed, compress = false, describe)
 
-        assertEquals("4000x3000 3000000", variants.current)
+        assertEquals("3000x4000 3000000", variants.current)
         assertEquals("960x1280 153000", variants.alternate)
     }
 
@@ -72,7 +73,37 @@ class ImageDetailLogicTest {
     fun missingEstimateFallsBackToOriginal() {
         val variants = imageDetailVariants(cameraShot, null, compress = true, describe)
 
-        assertEquals("4000x3000 3000000", variants.current)
+        assertEquals("3000x4000 3000000", variants.current)
         assertEquals(variants.current, variants.alternate)
+    }
+
+    @Test
+    fun rotatedPhotoAndItsCompressedResultAgreeOnOrientation() {
+        val original = ImageInfo(4000, 3000, 3_000_000).inDisplayOrientation(ExifInterface.ORIENTATION_ROTATE_90)
+
+        val variants = imageDetailVariants(original, compressed, compress = false, describe)
+
+        assertEquals("3000x4000 3000000", variants.current)
+        assertEquals("960x1280 153000", variants.alternate)
+    }
+
+    @Test
+    fun gifIsNeverEstimatedSoBothCaptionsShowTheOriginal() {
+        var estimated = false
+        val info = compressedImageInfo("image/gif", File("a.gif")) {
+            estimated = true
+            compressed
+        }
+
+        val variants = imageDetailVariants(cameraShot, info, compress = true, describe)
+
+        assertFalse(estimated)
+        assertEquals("3000x4000 3000000", variants.current)
+        assertEquals(variants.current, variants.alternate)
+    }
+
+    @Test
+    fun jpegIsEstimated() {
+        assertEquals(compressed, compressedImageInfo("image/jpeg", File("a.jpg")) { compressed })
     }
 }

@@ -40,7 +40,7 @@ internal fun describeFile(context: Context, uriString: String, compress: Boolean
     val sizeOnly = formatSize(context, file.length())
 
     val variants = when (kind) {
-        MediaKind.IMAGE -> describeImageDetail(context, file, compress, sizeOnly)
+        MediaKind.IMAGE -> describeImageDetail(context, file, mimeType, compress, sizeOnly)
         MediaKind.VIDEO -> describeVideoDetail(context, file, compress, sizeOnly)
         MediaKind.OTHER -> "$name, $sizeOnly".let { DetailVariants(it, it) }
     }
@@ -141,10 +141,16 @@ private fun downscaleIfNeeded(bitmap: Bitmap): Bitmap {
 }
 
 @Suppress("ReturnCount")
-private fun describeImageDetail(context: Context, file: File, compress: Boolean, fallback: String): DetailVariants {
+private fun describeImageDetail(
+    context: Context,
+    file: File,
+    mimeType: String?,
+    compress: Boolean,
+    fallback: String
+): DetailVariants {
     val original = ImageCompressor.readImageInfo(file)?.inDisplayOrientation(readExifOrientation(file))
         ?: return DetailVariants(fallback, fallback)
-    return imageDetailVariants(original, ImageCompressor.estimateCompression(file), compress) {
+    return imageDetailVariants(original, compressedImageInfo(mimeType, file), compress) {
         describeMedia(context, it.width, it.height, it.sizeBytes)
     }
 }
