@@ -19,6 +19,7 @@ import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.application.NextcloudTalkApplication.Companion.sharedApplication
 import com.nextcloud.talk.jobs.NotificationWorker
 import com.nextcloud.talk.jobs.PushRegistrationWorker
+import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.preferences.AppPreferences
 import com.nextcloud.talk.utils.setExpeditedIfSupported
@@ -38,6 +39,10 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         Log.d(TAG, "onMessageReceived")
+        PushDiag.i(
+            "onMessageReceived: dataKeys=${remoteMessage.data.size} priority=${remoteMessage.priority} " +
+                "originalPriority=${remoteMessage.originalPriority}"
+        )
         sharedApplication!!.componentApplication.inject(this)
 
         Log.d(TAG, "remoteMessage.priority: " + remoteMessage.priority)
@@ -57,12 +62,19 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
                     .setExpeditedIfSupported()
                     .build()
             WorkManager.getInstance().enqueue(notificationWork)
+            PushDiag.i("onMessageReceived: NotificationWorker enqueued")
+        } else {
+            PushDiag.w(
+                "onMessageReceived: dropped, subject present=${!subject.isNullOrEmpty()}, " +
+                    "signature present=${!signature.isNullOrEmpty()}"
+            )
         }
     }
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
         Log.d(TAG, "onNewToken. token = $token")
+        PushDiag.i("onNewToken: present=${token.isNotEmpty()} length=${token.length}")
 
         appPreferences.pushToken = token
         appPreferences.pushTokenLatestGeneration = System.currentTimeMillis()

@@ -53,6 +53,10 @@ class ClosedInterfaceImpl :
             NextcloudTalkApplication.sharedApplication?.let {
                 api.isGooglePlayServicesAvailable(it.applicationContext)
             }
+        PushDiag.i(
+            "Play Services availability code=$code (${code?.let { api.getErrorString(it) }}) " +
+                "success=${code == ConnectionResult.SUCCESS}"
+        )
         return if (code == ConnectionResult.SUCCESS) {
             true
         } else {
