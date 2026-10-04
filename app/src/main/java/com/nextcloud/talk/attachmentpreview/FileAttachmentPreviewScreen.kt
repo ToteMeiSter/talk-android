@@ -8,13 +8,14 @@ package com.nextcloud.talk.attachmentpreview
 
 import android.app.Activity
 import android.content.res.Configuration
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.activity.result.contract.ActivityResultContracts.PickVisualMedia
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -61,6 +62,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -120,6 +123,13 @@ internal fun FileAttachmentPreviewContent(
     }
     val cameraCapture = rememberCameraCaptureActions(currentFiles)
     val startCrop = rememberCropLauncher(viewModel)
+
+    LaunchedEffect(viewModel.editFailed) {
+        if (viewModel.editFailed) {
+            Toast.makeText(context, R.string.nc_attachment_edit_failed, Toast.LENGTH_LONG).show()
+            viewModel.editFailureShown()
+        }
+    }
 
     LaunchedEffect(currentFiles.size) {
         if (currentFiles.isEmpty()) {
@@ -190,7 +200,10 @@ internal fun FileAttachmentPreviewContent(
                 ),
                 current = currentDescription?.takeUnless { viewModel.isEditing },
                 onCrop = startCrop,
-                onDraw = { drawingUri = it.uri },
+                onDraw = {
+                    viewModel.drawing.clear()
+                    drawingUri = it.uri
+                },
                 onHighQualityChange = { highQuality -> compressImages = !highQuality },
                 onAllowUpdateChange = { allowUpdate = it },
                 sendEnabled = viewModel.selectedFiles().isNotEmpty() && !viewModel.isEditing,
@@ -200,9 +213,13 @@ internal fun FileAttachmentPreviewContent(
 
         DrawingOverlay(
             target = fileDescriptions.firstOrNull { it.uri == drawingUri },
-            onCancel = { drawingUri = null },
-            onDone = { target, strokes ->
-                viewModel.saveDrawing(target, strokes)
+            session = viewModel.drawing,
+            onCancel = {
+                viewModel.drawing.clear()
+                drawingUri = null
+            },
+            onDone = { target ->
+                viewModel.saveDrawing(target)
                 drawingUri = null
             }
         )
@@ -247,15 +264,17 @@ private fun BottomToolRow(
 @Composable
 private fun DrawingOverlay(
     target: FileDescription?,
+    session: DrawingSession,
     onCancel: () -> Unit,
-    onDone: (FileDescription, List<DrawStroke>) -> Unit
+    onDone: (FileDescription) -> Unit
 ) {
     val ratio = target?.aspectRatio ?: return
     DrawingEditor(
         imageUri = target.uri,
         aspectRatio = ratio,
+        session = session,
         onCancel = onCancel,
-        onDone = { strokes -> onDone(target, strokes) }
+        onDone = { onDone(target) }
     )
 }
 
@@ -271,7 +290,7 @@ private fun rememberCropLauncher(viewModel: FileAttachmentPreviewViewModel): (Fi
         val destination = destinationPath?.let(::File)
         val cropped = result.resultCode == Activity.RESULT_OK && result.data?.let { UCrop.getOutput(it) } != null
         if (cropped && source != null && destination != null && destination.length() > 0) {
-            viewModel.replaceFile(source, editedFileUri(context, destination).toString())
+            viewModel.applyCrop(source, destination)
         }
         sourceUri = null
         destinationPath = null
@@ -279,9 +298,13 @@ private fun rememberCropLauncher(viewModel: FileAttachmentPreviewViewModel): (Fi
 
     return { description ->
         val destination = createEditOutputFile(context, description.name, description.mimeType)
-        sourceUri = description.uri
-        destinationPath = destination.absolutePath
-        launcher.launch(createCropIntent(context, description.uri.toUri(), destination, description.mimeType))
+        if (destination == null) {
+            Toast.makeText(context, R.string.nc_attachment_edit_failed, Toast.LENGTH_LONG).show()
+        } else {
+            sourceUri = description.uri
+            destinationPath = destination.absolutePath
+            launcher.launch(createCropIntent(context, description.uri.toUri(), destination, description.mimeType))
+        }
     }
 }
 
@@ -367,12 +390,13 @@ private fun SelectionMark(selected: Boolean, onClick: () -> Unit, modifier: Modi
             .clip(CircleShape)
             .background(if (selected) MaterialTheme.colorScheme.primary else Color.Transparent)
             .border(SELECTION_MARK_BORDER_DP.dp, if (selected) Color.Transparent else Color.White, CircleShape)
-            .clickable(onClickLabel = description, role = Role.Checkbox, onClick = onClick)
+            .toggleable(value = selected, role = Role.Checkbox, onValueChange = { onClick() })
+            .semantics { contentDescription = description }
     ) {
         if (selected) {
             Icon(
                 imageVector = Icons.Filled.Check,
-                contentDescription = description,
+                contentDescription = null,
                 tint = MaterialTheme.colorScheme.onPrimary
             )
         }

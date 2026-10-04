@@ -17,7 +17,6 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.net.Uri
 import androidx.core.content.FileProvider
-import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.utils.FileUtils
@@ -35,17 +34,43 @@ private const val EDIT_FILE_STAMP_PATTERN = "yyyyMMdd-HHmmss-SSS"
 private const val EDIT_JPEG_QUALITY = 95
 private const val EDIT_PNG_QUALITY = 100
 
-/** Creates the (not yet existing) output file of an edit, in the cache dir shared through the app's FileProvider. */
-internal fun createEditOutputFile(context: Context, sourceName: String, sourceMimeType: String?): File {
-    val directory = FileUtils.getSharedAttachmentsDirectory(context.cacheDir) ?: context.cacheDir
+// uCrop crops the bitmap it decoded for display, not the original file, and decodes it no larger
+// than this on either side (by default roughly the screen diagonal, ~2600 px) - so without an
+// explicit limit an HD photo would silently come out downscaled. 4096 keeps a typical 12 MP photo
+// at full size, stays inside every GPU's texture limit and bounds the decoded bitmap to ~64 MB.
+private const val CROP_MAX_BITMAP_PX = 4096
+
+/**
+ * Creates the (not yet existing) output file of an edit in the cache dir shared through the app's
+ * FileProvider; null when that directory is unavailable (anything else would be unshareable).
+ */
+internal fun createEditOutputFile(context: Context, sourceName: String, sourceMimeType: String?): File? {
+    val directory = FileUtils.getSharedAttachmentsDirectory(context.cacheDir) ?: return null
     val stamp = SimpleDateFormat(EDIT_FILE_STAMP_PATTERN, Locale.ROOT).format(Date())
     val extension = if (editOutputIsPng(sourceMimeType)) "png" else "jpg"
     return File(directory, editedFileName(sourceName, stamp, extension))
 }
 
-/** The same URI form the camera capture uses for files in the shared attachments cache. */
-internal fun editedFileUri(context: Context, file: File): Uri =
-    FileProvider.getUriForFile(context, context.packageName, file)
+/** The same URI form the camera capture uses for files in the shared attachments cache; null if not shareable. */
+internal fun editedFileUri(context: Context, file: File): Uri? =
+    try {
+        FileProvider.getUriForFile(context, context.packageName, file)
+    } catch (e: IllegalArgumentException) {
+        NextcloudTalkApplication.sharedApplication?.logger?.w(TAG, "Edited file is outside the shared paths", e)
+        null
+    }
+
+/**
+ * The file behind [uriString] if it is an intermediate produced by an earlier edit (our FileProvider,
+ * shared attachments cache, edit-suffixed name) - safe to delete once superseded. Null for anything
+ * else, e.g. the user's original photo or a camera shot.
+ */
+internal fun ownEditedFile(context: Context, uriString: String): File? {
+    val uri = Uri.parse(uriString)
+    val name = uri.lastPathSegment
+    val isOurs = uri.authority == context.packageName && name != null && isEditedFileName(name)
+    return if (isOurs) FileUtils.resolveSharedAttachmentFile(context.cacheDir, name) else null
+}
 
 /** Intent of uCrop's crop-and-rotate screen, writing the result to [destination]. */
 internal fun createCropIntent(context: Context, source: Uri, destination: File, sourceMimeType: String?): Intent {
@@ -54,13 +79,16 @@ internal fun createCropIntent(context: Context, source: Uri, destination: File, 
         setCompressionFormat(if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG)
         setCompressionQuality(if (png) EDIT_PNG_QUALITY else EDIT_JPEG_QUALITY)
         setFreeStyleCropEnabled(true)
+        setMaxBitmapSize(CROP_MAX_BITMAP_PX)
     }
     return UCrop.of(source, Uri.fromFile(destination)).withOptions(options).getIntent(context)
 }
 
 /**
- * Burns [strokes] into a full-resolution copy of [source] (EXIF orientation applied, so the result
- * is upright without an orientation tag) and writes it to [destination]. Returns false on any failure.
+ * Burns [strokes] into a copy of [source] at (at most ~20 MP of) its own resolution and writes it
+ * to [destination]. Only one bitmap is ever held: the strokes are drawn straight onto the decoded,
+ * un-rotated pixels through the inverse of the EXIF transform, and the orientation tag is carried
+ * over to the output instead of rotating the pixels. Returns false on any failure.
  */
 internal fun renderDrawing(
     context: Context,
@@ -70,79 +98,112 @@ internal fun renderDrawing(
     png: Boolean
 ): Boolean =
     try {
-        val bitmap = decodeUpright(context, source)
-        bitmap != null && writeDrawing(bitmap, strokes, destination, png)
+        drawOnDecodedCopy(context, source, strokes, destination, png)
     } catch (e: IOException) {
-        NextcloudTalkApplication.sharedApplication?.logger?.w(TAG, "Failed to save drawing", e)
-        false
+        logRenderFailure(e)
+    } catch (e: SecurityException) {
+        // e.g. a Photo Picker uri whose read grant was revoked
+        logRenderFailure(e)
     } catch (e: OutOfMemoryError) {
-        NextcloudTalkApplication.sharedApplication?.logger?.w(TAG, "Out of memory while saving drawing", e)
-        false
+        logRenderFailure(e)
     }
 
-private fun writeDrawing(bitmap: Bitmap, strokes: List<DrawStroke>, destination: File, png: Boolean): Boolean {
-    drawStrokes(bitmap, strokes)
-    val format = if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
-    val quality = if (png) EDIT_PNG_QUALITY else EDIT_JPEG_QUALITY
-    val written = FileOutputStream(destination).use { bitmap.compress(format, quality, it) }
-    bitmap.recycle()
+private fun logRenderFailure(error: Throwable): Boolean {
+    NextcloudTalkApplication.sharedApplication?.logger?.w(TAG, "Failed to save drawing", error)
+    return false
+}
+
+private fun drawOnDecodedCopy(
+    context: Context,
+    source: Uri,
+    strokes: List<DrawStroke>,
+    destination: File,
+    png: Boolean
+): Boolean {
+    val resolver = context.contentResolver
+    val exif = resolver.openInputStream(source)?.use { ExifInterface(it) }
+    val bitmap = decodeRaw(context, source)
+    val written = bitmap != null && paintAndWrite(bitmap, exif, strokes, destination, png)
+    bitmap?.recycle()
     return written
 }
 
-private fun decodeUpright(context: Context, source: Uri): Bitmap? {
+private fun decodeRaw(context: Context, source: Uri): Bitmap? {
     val resolver = context.contentResolver
     val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
     resolver.openInputStream(source)?.use { BitmapFactory.decodeStream(it, null, bounds) }
+    if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
 
-    val decodeOptions = BitmapFactory.Options().apply {
+    val options = BitmapFactory.Options().apply {
         inSampleSize = decodeSampleSize(bounds.outWidth, bounds.outHeight)
         inMutable = true
     }
-    val decoded = if (bounds.outWidth > 0 && bounds.outHeight > 0) {
-        resolver.openInputStream(source)?.use { BitmapFactory.decodeStream(it, null, decodeOptions) }
-    } else {
-        null
-    }
-    val exif = resolver.openInputStream(source)?.use { ExifInterface(it) }
-    return decoded?.let { uprightCopy(it, exif) }
+    return resolver.openInputStream(source)?.use { BitmapFactory.decodeStream(it, null, options) }
 }
 
-private fun uprightCopy(decoded: Bitmap, exif: ExifInterface?): Bitmap {
+private fun paintAndWrite(
+    bitmap: Bitmap,
+    exif: ExifInterface?,
+    strokes: List<DrawStroke>,
+    destination: File,
+    png: Boolean
+): Boolean {
+    val toUpright = uprightMatrix(exif, bitmap.width, bitmap.height)
+    val uprightBounds = RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat()).also { toUpright.mapRect(it) }
+    drawStrokes(bitmap, strokes, toUpright, uprightBounds.width().roundToInt(), uprightBounds.height().roundToInt())
+
+    val format = if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
+    val quality = if (png) EDIT_PNG_QUALITY else EDIT_JPEG_QUALITY
+    val written = FileOutputStream(destination).use { bitmap.compress(format, quality, it) }
+    if (written && !toUpright.isIdentity) {
+        ExifInterface(destination.absolutePath).apply {
+            setAttribute(ExifInterface.TAG_ORIENTATION, exif?.getAttribute(ExifInterface.TAG_ORIENTATION))
+            saveAttributes()
+        }
+    }
+    return written
+}
+
+/** Raw-pixel to upright-display transform for the file's EXIF orientation, translated to start at 0,0. */
+private fun uprightMatrix(exif: ExifInterface?, width: Int, height: Int): Matrix {
     val matrix = Matrix().apply {
         if (exif?.isFlipped == true) postScale(-1f, 1f)
         postRotate((exif?.rotationDegrees ?: 0).toFloat())
     }
-    if (matrix.isIdentity) return decoded
-
-    val mapped = RectF(0f, 0f, decoded.width.toFloat(), decoded.height.toFloat()).also { matrix.mapRect(it) }
+    val mapped = RectF(0f, 0f, width.toFloat(), height.toFloat()).also { matrix.mapRect(it) }
     matrix.postTranslate(-mapped.left, -mapped.top)
-    val upright = createBitmap(mapped.width().roundToInt(), mapped.height().roundToInt())
-    Canvas(upright).drawBitmap(decoded, matrix, Paint(Paint.FILTER_BITMAP_FLAG))
-    decoded.recycle()
-    return upright
+    return matrix
 }
 
-private fun drawStrokes(bitmap: Bitmap, strokes: List<DrawStroke>) {
+/** Draws [strokes] (positioned on the upright [uprightWidth]x[uprightHeight] picture) onto the raw [bitmap]. */
+private fun drawStrokes(
+    bitmap: Bitmap,
+    strokes: List<DrawStroke>,
+    toUpright: Matrix,
+    uprightWidth: Int,
+    uprightHeight: Int
+) {
     val canvas = Canvas(bitmap)
+    canvas.concat(Matrix().also { toUpright.invert(it) })
     val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
     }
-    strokes.forEach { stroke ->
-        if (stroke.points.isEmpty()) return@forEach
+    strokes.filter { it.points.isNotEmpty() }.forEach { stroke ->
         paint.color = stroke.colorArgb
-        paint.strokeWidth = strokeWidthPixels(stroke, bitmap.width)
-        val path = Path()
-        stroke.points.forEachIndexed { index, point ->
-            val (x, y) = toPixels(point, bitmap.width, bitmap.height)
-            if (index == 0) path.moveTo(x, y) else path.lineTo(x, y)
-        }
-        if (stroke.points.size == 1) {
-            val (x, y) = toPixels(stroke.points.first(), bitmap.width, bitmap.height)
-            canvas.drawPoint(x, y, paint)
+        paint.strokeWidth = strokeWidthPixels(stroke, uprightWidth)
+        val pixels = stroke.points.map { toPixels(it, uprightWidth, uprightHeight) }
+        if (pixels.size == 1) {
+            canvas.drawPoint(pixels.first().first, pixels.first().second, paint)
         } else {
-            canvas.drawPath(path, paint)
+            canvas.drawPath(strokePath(pixels), paint)
         }
     }
 }
+
+private fun strokePath(pixels: List<Pair<Float, Float>>): Path =
+    Path().apply {
+        moveTo(pixels.first().first, pixels.first().second)
+        pixels.drop(1).forEach { lineTo(it.first, it.second) }
+    }

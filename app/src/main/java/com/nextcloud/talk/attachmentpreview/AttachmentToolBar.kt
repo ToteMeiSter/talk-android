@@ -15,6 +15,7 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -125,15 +126,13 @@ private fun TextBadge(text: String, color: Color) {
 /** SD = compressed, HD = original; one tap flips it, the chip on the photo shows the resulting size. */
 @Composable
 private fun QualityToggle(highQuality: Boolean, onHighQualityChange: (Boolean) -> Unit) {
-    val description = stringResource(
-        if (highQuality) R.string.nc_media_quality_original else R.string.nc_media_quality_reduced
-    )
+    val description = stringResource(R.string.nc_media_quality_original)
     Box(
         contentAlignment = Alignment.Center,
         modifier = Modifier
             .size(QUALITY_TOGGLE_SIZE_DP.dp)
             .clip(CircleShape)
-            .clickable(role = Role.Switch) { onHighQualityChange(!highQuality) }
+            .toggleable(value = highQuality, role = Role.Switch, onValueChange = onHighQualityChange)
             .semantics { contentDescription = description }
     ) {
         TextBadge(if (highQuality) "HD" else "SD", Color.White)

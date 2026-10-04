@@ -15,7 +15,7 @@ import kotlin.math.ceil
 
 private const val EDITED_SUFFIX = "_edited_"
 private val editedSuffixRegex = Regex("${EDITED_SUFFIX}[0-9-]+$")
-private const val MAX_DECODE_PIXELS = 50_000_000L
+private const val MAX_DECODE_PIXELS = 20_000_000L
 
 /** A point on the displayed image, in 0..1 of the image's width/height (resolution independent). */
 internal data class NormalizedPoint(val x: Float, val y: Float)
@@ -61,6 +61,10 @@ internal fun editedFileName(originalName: String, stamp: String, extension: Stri
     return "${base.ifBlank { "image" }}$EDITED_SUFFIX$stamp.$extension"
 }
 
+/** True for names produced by [editedFileName], i.e. intermediates of an earlier edit. */
+internal fun isEditedFileName(fileName: String): Boolean =
+    editedSuffixRegex.containsMatchIn(fileName.substringBeforeLast('.', fileName))
+
 /** Output extension and whether it is PNG (lossless, keeps transparency) for a source MIME type. */
 internal fun editOutputIsPng(sourceMimeType: String?): Boolean = sourceMimeType == "image/png"
 
@@ -95,7 +99,7 @@ internal fun undoLast(strokes: List<DrawStroke>): List<DrawStroke> = strokes.dro
 
 /**
  * Power-of-two `inSampleSize` that keeps a decoded bitmap under [maxPixels]; 1 means full resolution.
- * Only very large sources (beyond ~50 MP) are downsampled, to avoid running out of memory.
+ * Only very large sources (beyond ~20 MP) are downsampled, to avoid running out of memory.
  */
 internal fun decodeSampleSize(width: Int, height: Int, maxPixels: Long = MAX_DECODE_PIXELS): Int {
     var sample = 1

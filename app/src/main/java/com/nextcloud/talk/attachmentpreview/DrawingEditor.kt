@@ -7,10 +7,10 @@
 package com.nextcloud.talk.attachmentpreview
 
 import androidx.activity.compose.BackHandler
+import androidx.annotation.StringRes
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Undo
@@ -30,11 +31,8 @@ import androidx.compose.material.icons.filled.Close
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
-import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -50,6 +48,9 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
 import com.nextcloud.talk.R
@@ -61,29 +62,30 @@ private const val COLOR_RED = 0xFFE53935
 private const val COLOR_YELLOW = 0xFFFDD835
 private const val COLOR_GREEN = 0xFF43A047
 private const val COLOR_BLUE = 0xFF1E88E5
-private val brushColors = listOf(
-    Color.White,
-    Color.Black,
-    Color(COLOR_RED),
-    Color(COLOR_YELLOW),
-    Color(COLOR_GREEN),
-    Color(COLOR_BLUE)
+private val brushSwatches = listOf(
+    Swatch(Color.White, R.string.nc_attachment_color_white),
+    Swatch(Color.Black, R.string.nc_attachment_color_black),
+    Swatch(Color(COLOR_RED), R.string.nc_attachment_color_red),
+    Swatch(Color(COLOR_YELLOW), R.string.nc_attachment_color_yellow),
+    Swatch(Color(COLOR_GREEN), R.string.nc_attachment_color_green),
+    Swatch(Color(COLOR_BLUE), R.string.nc_attachment_color_blue)
 )
+
+private data class Swatch(val color: Color, @StringRes val name: Int)
 
 /**
  * Full-screen brush editor over an image. Strokes are kept in image-relative coordinates, so the
- * result doesn't depend on the screen size; [onDone] gets them for rendering
- * at the file's own resolution. [aspectRatio] is the image's displayed width / height.
+ * result doesn't depend on the screen size; they live in [session], owned by the view model.
+ * [aspectRatio] is the image's displayed width / height.
  */
 @Composable
 internal fun DrawingEditor(
     imageUri: String,
     aspectRatio: Float,
+    session: DrawingSession,
     onCancel: () -> Unit,
-    onDone: (List<DrawStroke>) -> Unit
+    onDone: () -> Unit
 ) {
-    var strokes by remember { mutableStateOf<List<DrawStroke>>(emptyList()) }
-    var color by remember { mutableStateOf(brushColors.first()) }
     BackHandler(onBack = onCancel)
 
     Box(modifier = Modifier.fillMaxSize().background(Color.Black)) {
@@ -98,36 +100,31 @@ internal fun DrawingEditor(
                 contentScale = ContentScale.Fit,
                 modifier = Modifier.fillMaxSize()
             )
-            DrawingSurface(
-                rect = rect,
-                strokes = strokes,
-                color = color,
-                onStroke = { strokes = strokes + it }
-            )
+            DrawingSurface(rect = rect, session = session)
         }
 
         EditorTopBar(
-            canUndo = strokes.isNotEmpty(),
+            canUndo = session.strokes.isNotEmpty(),
             onCancel = onCancel,
-            onUndo = { strokes = undoLast(strokes) },
-            onDone = { onDone(strokes) },
+            onUndo = session::undo,
+            onDone = onDone,
             modifier = Modifier.align(Alignment.TopCenter)
         )
         ColorRow(
-            selected = color,
-            onSelect = { color = it },
+            selectedArgb = session.brushColorArgb,
+            onSelect = { session.brushColorArgb = it.toArgb() },
             modifier = Modifier.align(Alignment.BottomCenter)
         )
     }
 }
 
 @Composable
-private fun DrawingSurface(rect: FitRect, strokes: List<DrawStroke>, color: Color, onStroke: (DrawStroke) -> Unit) {
+private fun DrawingSurface(rect: FitRect, session: DrawingSession) {
     val live = remember { mutableStateListOf<NormalizedPoint>() }
 
     fun commit() {
         if (live.isNotEmpty()) {
-            onStroke(DrawStroke(color.toArgb(), BRUSH_WIDTH_FRACTION, live.toList()))
+            session.add(DrawStroke(session.brushColorArgb, BRUSH_WIDTH_FRACTION, live.toList()))
             live.clear()
         }
     }
@@ -135,7 +132,7 @@ private fun DrawingSurface(rect: FitRect, strokes: List<DrawStroke>, color: Colo
     Canvas(
         modifier = Modifier
             .fillMaxSize()
-            .pointerInput(rect, color) {
+            .pointerInput(rect) {
                 detectDragGestures(
                     onDragStart = { start ->
                         live.clear()
@@ -150,8 +147,8 @@ private fun DrawingSurface(rect: FitRect, strokes: List<DrawStroke>, color: Colo
                 )
             }
     ) {
-        strokes.forEach { drawStroke(it.colorArgb, it.widthFraction, it.points, rect) }
-        drawStroke(color.toArgb(), BRUSH_WIDTH_FRACTION, live.toList(), rect)
+        session.strokes.forEach { drawStroke(it.colorArgb, it.widthFraction, it.points, rect) }
+        drawStroke(session.brushColorArgb, BRUSH_WIDTH_FRACTION, live.toList(), rect)
     }
 }
 
@@ -208,7 +205,7 @@ private fun EditorTopBar(
 }
 
 @Composable
-private fun ColorRow(selected: Color, onSelect: (Color) -> Unit, modifier: Modifier = Modifier) {
+private fun ColorRow(selectedArgb: Int, onSelect: (Color) -> Unit, modifier: Modifier = Modifier) {
     Row(
         horizontalArrangement = Arrangement.spacedBy(16.dp, Alignment.CenterHorizontally),
         verticalAlignment = Alignment.CenterVertically,
@@ -218,16 +215,19 @@ private fun ColorRow(selected: Color, onSelect: (Color) -> Unit, modifier: Modif
             .navigationBarsPadding()
             .padding(vertical = 12.dp)
     ) {
-        brushColors.forEach { swatch ->
-            val borderColor = if (swatch == selected) Color.White else Color.Gray
-            val borderWidth = if (swatch == selected) SWATCH_SELECTED_BORDER_DP else 1
+        brushSwatches.forEach { swatch ->
+            val isSelected = swatch.color.toArgb() == selectedArgb
+            val borderColor = if (isSelected) Color.White else Color.Gray
+            val borderWidth = if (isSelected) SWATCH_SELECTED_BORDER_DP else 1
+            val name = stringResource(swatch.name)
             Box(
                 modifier = Modifier
                     .size(SWATCH_SIZE_DP.dp)
                     .clip(CircleShape)
-                    .background(swatch)
+                    .background(swatch.color)
                     .border(borderWidth.dp, borderColor, CircleShape)
-                    .clickable { onSelect(swatch) }
+                    .selectable(selected = isSelected, role = Role.RadioButton) { onSelect(swatch.color) }
+                    .semantics { contentDescription = name }
             )
         }
     }

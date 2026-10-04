@@ -95,7 +95,7 @@ private fun AddMoreButton(actions: AddMoreActions) {
         IconButton(onClick = { expanded = true }) {
             Icon(
                 imageVector = Icons.Outlined.AddPhotoAlternate,
-                contentDescription = stringResource(R.string.nc_add_more_files),
+                contentDescription = stringResource(R.string.nc_attachment_add_menu),
                 tint = Color.White
             )
         }
