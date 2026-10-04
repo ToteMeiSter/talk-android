@@ -291,6 +291,9 @@ private fun rememberCropLauncher(viewModel: FileAttachmentPreviewViewModel): (Fi
         val cropped = result.resultCode == Activity.RESULT_OK && result.data?.let { UCrop.getOutput(it) } != null
         if (cropped && source != null && destination != null && destination.length() > 0) {
             viewModel.applyCrop(source, destination)
+        } else {
+            // cancelled or failed: don't leave uCrop's empty/partial output behind
+            destination?.delete()
         }
         sourceUri = null
         destinationPath = null

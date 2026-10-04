@@ -17,6 +17,7 @@ import android.graphics.Path
 import android.graphics.RectF
 import android.net.Uri
 import androidx.core.content.FileProvider
+import androidx.core.graphics.createBitmap
 import androidx.exifinterface.media.ExifInterface
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.utils.FileUtils
@@ -67,9 +68,8 @@ internal fun editedFileUri(context: Context, file: File): Uri? =
  */
 internal fun ownEditedFile(context: Context, uriString: String): File? {
     val uri = Uri.parse(uriString)
-    val name = uri.lastPathSegment
-    val isOurs = uri.authority == context.packageName && name != null && isEditedFileName(name)
-    return if (isOurs) FileUtils.resolveSharedAttachmentFile(context.cacheDir, name) else null
+    val name = ownEditedName(uri.authority, context.packageName, uri.pathSegments)
+    return name?.let { FileUtils.resolveSharedAttachmentFile(context.cacheDir, it) }
 }
 
 /** Intent of uCrop's crop-and-rotate screen, writing the result to [destination]. */
@@ -106,7 +106,7 @@ internal fun renderDrawing(
         logRenderFailure(e)
     } catch (e: OutOfMemoryError) {
         logRenderFailure(e)
-    }
+    }.also { if (!it) destination.delete() }
 
 private fun logRenderFailure(error: Throwable): Boolean {
     NextcloudTalkApplication.sharedApplication?.logger?.w(TAG, "Failed to save drawing", error)
@@ -148,14 +148,19 @@ private fun paintAndWrite(
     destination: File,
     png: Boolean
 ): Boolean {
-    val toUpright = uprightMatrix(exif, bitmap.width, bitmap.height)
-    val uprightBounds = RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat()).also { toUpright.mapRect(it) }
-    drawStrokes(bitmap, strokes, toUpright, uprightBounds.width().roundToInt(), uprightBounds.height().roundToInt())
+    val degrees = exif?.rotationDegrees ?: 0
+    val flipped = exif?.isFlipped == true
+    val toUpright = uprightMatrix(degrees, flipped, bitmap.width, bitmap.height)
+    val bounds = RectF(0f, 0f, bitmap.width.toFloat(), bitmap.height.toFloat()).also { toUpright.mapRect(it) }
+    drawStrokes(bitmap, strokes, toUpright, bounds.width().roundToInt(), bounds.height().roundToInt())
 
+    val turnPixels = rotatesPixels(png, degrees, flipped)
+    val output = if (turnPixels) uprightCopy(bitmap, toUpright, bounds) else bitmap
     val format = if (png) Bitmap.CompressFormat.PNG else Bitmap.CompressFormat.JPEG
     val quality = if (png) EDIT_PNG_QUALITY else EDIT_JPEG_QUALITY
-    val written = FileOutputStream(destination).use { bitmap.compress(format, quality, it) }
-    if (written && !toUpright.isIdentity) {
+    val written = FileOutputStream(destination).use { output.compress(format, quality, it) }
+    if (output !== bitmap) output.recycle()
+    if (written && !turnPixels && degrees != 0) {
         ExifInterface(destination.absolutePath).apply {
             setAttribute(ExifInterface.TAG_ORIENTATION, exif?.getAttribute(ExifInterface.TAG_ORIENTATION))
             saveAttributes()
@@ -164,11 +169,19 @@ private fun paintAndWrite(
     return written
 }
 
-/** Raw-pixel to upright-display transform for the file's EXIF orientation, translated to start at 0,0. */
-private fun uprightMatrix(exif: ExifInterface?, width: Int, height: Int): Matrix {
+/** The pixels turned/mirrored upright; the raw [bitmap] is released first to keep the memory peak low. */
+private fun uprightCopy(bitmap: Bitmap, toUpright: Matrix, bounds: RectF): Bitmap {
+    val upright = createBitmap(bounds.width().roundToInt(), bounds.height().roundToInt())
+    Canvas(upright).drawBitmap(bitmap, toUpright, Paint(Paint.FILTER_BITMAP_FLAG))
+    bitmap.recycle()
+    return upright
+}
+
+/** Raw-pixel to upright-display transform for an EXIF orientation, translated to start at 0,0. */
+internal fun uprightMatrix(rotationDegrees: Int, flipped: Boolean, width: Int, height: Int): Matrix {
     val matrix = Matrix().apply {
-        if (exif?.isFlipped == true) postScale(-1f, 1f)
-        postRotate((exif?.rotationDegrees ?: 0).toFloat())
+        if (flipped) postScale(-1f, 1f)
+        postRotate(rotationDegrees.toFloat())
     }
     val mapped = RectF(0f, 0f, width.toFloat(), height.toFloat()).also { matrix.mapRect(it) }
     matrix.postTranslate(-mapped.left, -mapped.top)
