@@ -6,7 +6,9 @@
  */
 package com.nextcloud.talk.camera
 
+import android.hardware.display.DisplayManager
 import android.view.OrientationEventListener
+import android.view.Surface
 import androidx.camera.view.PreviewView
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -14,21 +16,30 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.BiasAlignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
@@ -45,10 +56,12 @@ private val ControlSize = 48.dp
 private val ShutterSize = 72.dp
 private val ShutterRingWidth = 4.dp
 private val ScreenPadding = 16.dp
+private val LensSwitchGap = 84.dp
 private const val DISABLED_ALPHA = 0.4f
 
 /**
- * Full screen photo capture: preview, close and flash on top, shutter and lens switch at the bottom.
+ * Full screen photo capture: preview, close and flash at the top edge of the device body, shutter and lens switch at
+ * its bottom edge.
  * [newPhotoFile] makes the target of a photo, [onCaptured] gets the finished file, [onFailed] the target of a
  * photo that could not be written.
  */
@@ -69,11 +82,17 @@ internal fun PhotoCaptureScreen(
     }
     val camera = remember { PhotoCamera(context, lifecycleOwner, previewView) }
 
+    var deviceOrientation by remember { mutableIntStateOf(0) }
+
     DisposableEffect(camera) {
         camera.start()
         val orientationListener = object : OrientationEventListener(context) {
             override fun onOrientationChanged(orientation: Int) {
-                rotationForDeviceOrientation(orientation)?.let(camera::setTargetRotation)
+                val rotation = rotationForDeviceOrientation(orientation) ?: return
+                camera.setTargetRotation(rotation)
+                if (rotationForDeviceOrientation(deviceOrientation) != rotation) {
+                    deviceOrientation = orientation
+                }
             }
         }
         orientationListener.enable()
@@ -83,11 +102,13 @@ internal fun PhotoCaptureScreen(
         }
     }
 
+    val displayRotation = rememberDisplayRotation()
+    val iconAngle = rememberIconAngle(iconRotationDegrees(deviceOrientation, displayRotation) ?: 0)
+
     Box(Modifier.fillMaxSize().background(Color.Black)) {
         AndroidView(factory = { previewView }, modifier = Modifier.fillMaxSize())
-        CaptureTopBar(camera, onClose)
-        CaptureBottomBar(camera) {
-            if (camera.isCapturing || !camera.isBound) return@CaptureBottomBar
+        CaptureControls(camera, displayRotation, iconAngle, onClose) {
+            if (camera.isCapturing || !camera.isBound) return@CaptureControls
             val file = newPhotoFile()
             if (file == null) {
                 onFailed()
@@ -105,13 +126,66 @@ internal fun PhotoCaptureScreen(
     }
 }
 
+/**
+ * The window rotation of the display ([android.view.Surface] constant). The activity handles configuration changes
+ * itself and a half turn is no configuration change, so the display is observed.
+ */
 @Composable
-private fun BoxScope.CaptureTopBar(camera: PhotoCamera, onClose: () -> Unit) {
-    Box(Modifier.align(Alignment.TopCenter).fillMaxWidth().systemBarsPadding().padding(ScreenPadding)) {
+private fun rememberDisplayRotation(): Int {
+    val view = LocalView.current
+    val context = LocalContext.current
+    var rotation by remember { mutableIntStateOf(view.display?.rotation ?: Surface.ROTATION_0) }
+    DisposableEffect(view) {
+        val manager = context.getSystemService(DisplayManager::class.java)
+        val listener = object : DisplayManager.DisplayListener {
+            override fun onDisplayAdded(displayId: Int) = Unit
+
+            override fun onDisplayRemoved(displayId: Int) = Unit
+
+            override fun onDisplayChanged(displayId: Int) {
+                view.display?.let { rotation = it.rotation }
+            }
+        }
+        manager.registerDisplayListener(listener, null)
+        rotation = view.display?.rotation ?: rotation
+        onDispose { manager.unregisterDisplayListener(listener) }
+    }
+    return rotation
+}
+
+/**
+ * The animated icon angle for [targetDegrees]: every change takes the shortest way round.
+ */
+@Composable
+private fun rememberIconAngle(targetDegrees: Int): Float {
+    var unbounded by remember { mutableFloatStateOf(targetDegrees.toFloat()) }
+    LaunchedEffect(targetDegrees) {
+        unbounded = shortestRotationTarget(unbounded, targetDegrees)
+    }
+    return animateFloatAsState(unbounded, label = "captureIconAngle").value
+}
+
+/**
+ * Controls tied to the device body, not to the window: the shutter stays at the natural bottom edge, close and
+ * flash at the natural top edge, the lens switch next to the shutter, whatever rotation the window has.
+ */
+@Composable
+private fun CaptureControls(
+    camera: PhotoCamera,
+    displayRotation: Int,
+    iconAngle: Float,
+    onClose: () -> Unit,
+    onShutter: () -> Unit
+) {
+    Box(Modifier.fillMaxSize().systemBarsPadding().padding(ScreenPadding)) {
+        fun BoxScope.at(x: Int, y: Int): Modifier =
+            Modifier.align(BodyPoint(x, y).inWindow(displayRotation).toAlignment())
+
         CaptureIconButton(
             icon = R.drawable.ic_baseline_close_24,
             description = stringResource(R.string.close),
-            modifier = Modifier.align(Alignment.CenterStart),
+            angle = iconAngle,
+            modifier = at(-1, -1),
             onClick = onClose
         )
         if (camera.hasFlashUnit) {
@@ -119,21 +193,15 @@ private fun BoxScope.CaptureTopBar(camera: PhotoCamera, onClose: () -> Unit) {
             CaptureIconButton(
                 icon = icon,
                 description = stringResource(description),
-                modifier = Modifier.align(Alignment.CenterEnd),
+                angle = iconAngle,
+                modifier = at(1, -1),
                 onClick = camera::cycleFlash
             )
         }
-    }
-}
-
-@Composable
-private fun BoxScope.CaptureBottomBar(camera: PhotoCamera, onShutter: () -> Unit) {
-    Box(Modifier.align(Alignment.BottomCenter).fillMaxWidth().systemBarsPadding().padding(ScreenPadding)) {
         val enabled = camera.isBound && !camera.isCapturing
         val shutterDescription = stringResource(R.string.take_photo)
         Box(
-            modifier = Modifier
-                .align(Alignment.Center)
+            modifier = at(0, 1)
                 .size(ShutterSize)
                 .alpha(if (enabled) 1f else DISABLED_ALPHA)
                 .border(ShutterRingWidth, Color.White, CircleShape)
@@ -147,18 +215,22 @@ private fun BoxScope.CaptureBottomBar(camera: PhotoCamera, onShutter: () -> Unit
                 .clickable(enabled = enabled, onClick = onShutter)
         )
         if (camera.canSwitchLens) {
+            val beside = BodyPoint(1, 0).inWindow(displayRotation)
             CaptureIconButton(
                 icon = R.drawable.ic_baseline_flip_camera_android_24,
                 description = stringResource(R.string.nc_video_recording_switch_camera),
-                modifier = Modifier.align(Alignment.CenterEnd),
+                angle = iconAngle,
+                modifier = at(0, 1).offset(LensSwitchGap * beside.x, LensSwitchGap * beside.y),
                 onClick = camera::switchLens
             )
         }
     }
 }
 
+private fun BodyPoint.toAlignment(): Alignment = BiasAlignment(x.toFloat(), y.toFloat())
+
 @Composable
-private fun CaptureIconButton(icon: Int, description: String, modifier: Modifier, onClick: () -> Unit) {
+private fun CaptureIconButton(icon: Int, description: String, angle: Float, modifier: Modifier, onClick: () -> Unit) {
     Box(
         modifier = modifier
             .size(ControlSize)
@@ -167,7 +239,12 @@ private fun CaptureIconButton(icon: Int, description: String, modifier: Modifier
             .clickable(role = Role.Button, onClick = onClick),
         contentAlignment = Alignment.Center
     ) {
-        Icon(painter = painterResource(icon), contentDescription = description, tint = Color.White)
+        Icon(
+            painter = painterResource(icon),
+            contentDescription = description,
+            tint = Color.White,
+            modifier = Modifier.rotate(angle)
+        )
     }
 }
 
