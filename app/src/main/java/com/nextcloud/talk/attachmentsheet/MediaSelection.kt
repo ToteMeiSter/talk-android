@@ -1,7 +1,7 @@
 /*
  * Nextcloud Talk - Android Client
  *
- * SPDX-FileCopyrightText: 2026 Krainov Gleb <krajnov.g@kontentplus.ru>
+ * SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.nextcloud.talk.attachmentsheet
@@ -9,7 +9,7 @@ package com.nextcloud.talk.attachmentsheet
 /**
  * Ordered multi-selection of media ids with an upper limit. Immutable; every change returns a new instance.
  */
-data class MediaSelection(val ids: List<Long> = emptyList(), val limit: Int = DEFAULT_LIMIT) {
+data class MediaSelection(val limit: Int, val ids: List<Long> = emptyList()) {
 
     val count: Int
         get() = ids.size
@@ -40,10 +40,8 @@ data class MediaSelection(val ids: List<Long> = emptyList(), val limit: Int = DE
     /**
      * Drops ids that are no longer part of [available], e.g. after the media list was reloaded.
      */
-    fun retainAvailable(available: Collection<Long>): MediaSelection =
-        copy(ids = ids.filter { it in available.toSet() })
-
-    companion object {
-        const val DEFAULT_LIMIT = 10
+    fun retainAvailable(available: Collection<Long>): MediaSelection {
+        val availableSet = available.toSet()
+        return copy(ids = ids.filter { it in availableSet })
     }
 }

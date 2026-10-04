@@ -1,7 +1,7 @@
 /*
  * Nextcloud Talk - Android Client
  *
- * SPDX-FileCopyrightText: 2026 Krainov Gleb <krajnov.g@kontentplus.ru>
+ * SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.nextcloud.talk.attachmentsheet
@@ -12,6 +12,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import androidx.activity.compose.LocalActivity
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -45,6 +46,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
@@ -64,10 +66,16 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalWindowInfo
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.role
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
@@ -83,7 +91,14 @@ private const val BADGE_SIZE_DP = 24
 private const val BAR_ITEM_WIDTH_DP = 84
 private const val SCRIM_ALPHA = 0.45f
 
-data class AttachmentSheetModel(val actions: List<AttachmentAction>, val cloudLabel: String, val maxSelection: Int)
+data class AttachmentSheetModel(
+    val actions: List<AttachmentAction>,
+    val cloudLabel: String,
+    val maxSelection: Int,
+    val livePreviewEnabled: Boolean
+)
+
+internal data class CameraTileConfig(val livePreview: Boolean, val onClick: () -> Unit)
 
 data class AttachmentSheetCallbacks(
     val onAction: (AttachmentAction) -> Unit,
@@ -111,9 +126,7 @@ fun AttachmentSheet(model: AttachmentSheetModel, callbacks: AttachmentSheetCallb
 @Composable
 private fun AttachmentSheetBody(model: AttachmentSheetModel, callbacks: AttachmentSheetCallbacks) {
     val context = LocalContext.current
-    var refreshKey by remember { mutableIntStateOf(0) }
-    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { refreshKey++ }
-
+    val refreshKey = rememberResumeRefreshKey()
     val access = remember(refreshKey) { currentMediaAccess(context) }
     val media by produceState<List<RecentMedia>?>(null, refreshKey, access) {
         value = if (access == MediaAccess.NONE) {
@@ -123,7 +136,10 @@ private fun AttachmentSheetBody(model: AttachmentSheetModel, callbacks: Attachme
         }
     }
     var selection by remember { mutableStateOf(MediaSelection(limit = model.maxSelection)) }
-    val permissionRequest = rememberMediaPermissionRequest { refreshKey++ }
+    LaunchedEffect(media) {
+        media?.let { loaded -> selection = selection.retainAvailable(loaded.map { it.key }) }
+    }
+    val permissionRequest = rememberMediaPermissionRequest()
 
     val hiddenBottomPx = rememberHiddenBottomPx()
     val hiddenBottomDp = with(LocalDensity.current) { hiddenBottomPx.value.toDp() }
@@ -141,7 +157,8 @@ private fun AttachmentSheetBody(model: AttachmentSheetModel, callbacks: Attachme
                     media = media.orEmpty(),
                     selection = selection,
                     onToggle = { selection = selection.toggle(it.key) },
-                    onTakePhoto = callbacks.onTakePhoto.takeIf { AttachmentAction.PICTURE_FROM_CAM in model.actions },
+                    camera = CameraTileConfig(model.livePreviewEnabled, callbacks.onTakePhoto)
+                        .takeIf { AttachmentAction.PICTURE_FROM_CAM in model.actions },
                     onSelectMore = permissionRequest.takeIf { access == MediaAccess.PARTIAL }
                 )
             }
@@ -158,11 +175,30 @@ private fun AttachmentSheetBody(model: AttachmentSheetModel, callbacks: Attachme
                 onClear = { selection = MediaSelection(limit = model.maxSelection) },
                 onSend = {
                     val chosen = media.orEmpty().associateBy { it.key }
-                    callbacks.onSend(selection.ids.mapNotNull { chosen[it] }.map { RecentMediaLoader.uriOf(it) })
+                    val uris = selection.ids.mapNotNull { chosen[it] }.map { RecentMediaLoader.uriOf(it) }
+                    if (uris.isNotEmpty()) callbacks.onSend(uris)
                 }
             )
         }
     }
+}
+
+/**
+ * Changes after the sheet's screen came back from the background (e.g. from the app settings), so the media list
+ * and the permissions are read again. The first resume while the sheet opens does not count.
+ */
+@Composable
+private fun rememberResumeRefreshKey(): Int {
+    var refreshKey by remember { mutableIntStateOf(0) }
+    var wasPaused by remember { mutableStateOf(false) }
+    LifecycleEventEffect(Lifecycle.Event.ON_PAUSE) { wasPaused = true }
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) {
+        if (wasPaused) {
+            wasPaused = false
+            refreshKey++
+        }
+    }
+    return refreshKey
 }
 
 /**
@@ -193,19 +229,23 @@ private fun currentMediaAccess(context: Context): MediaAccess =
     resolveMediaAccess(Build.VERSION.SDK_INT, grantedMediaPermissions(context))
 
 /**
- * Asks for media access. After a denial the system dialog does not appear again, so the next call opens the app
- * settings instead.
+ * Asks for media access. When the system dialog will not appear again (denied with "don't ask again"), the call
+ * opens the app settings instead.
  */
 @Composable
-private fun rememberMediaPermissionRequest(onChanged: () -> Unit): () -> Unit {
+private fun rememberMediaPermissionRequest(): () -> Unit {
     val context = LocalContext.current
-    var deniedBefore by remember { mutableStateOf(false) }
+    val activity = LocalActivity.current
+    var blocked by remember { mutableStateOf(false) }
     val launcher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) {
-        deniedBefore = currentMediaAccess(context) == MediaAccess.NONE
-        onChanged()
+        blocked = currentMediaAccess(context) == MediaAccess.NONE &&
+            activity != null &&
+            mediaPermissionsToRequest(Build.VERSION.SDK_INT).none {
+                ActivityCompat.shouldShowRequestPermissionRationale(activity, it)
+            }
     }
     return {
-        if (deniedBefore) {
+        if (blocked) {
             val appDetails = Uri.fromParts("package", context.packageName, null)
             context.startActivity(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, appDetails))
         } else {
@@ -244,7 +284,7 @@ private fun MediaGrid(
     media: List<RecentMedia>,
     selection: MediaSelection,
     onToggle: (RecentMedia) -> Unit,
-    onTakePhoto: (() -> Unit)?,
+    camera: CameraTileConfig?,
     onSelectMore: (() -> Unit)?
 ) {
     LazyVerticalGrid(
@@ -260,8 +300,8 @@ private fun MediaGrid(
                 }
             }
         }
-        if (onTakePhoto != null) {
-            item { CameraTile(onClick = onTakePhoto) }
+        if (camera != null) {
+            item { CameraTile(livePreview = camera.livePreview, onClick = camera.onClick) }
         }
         items(media, key = { it.key }) { item ->
             MediaTile(item, selection.positionOf(item.key), onClick = { onToggle(item) })
@@ -271,7 +311,21 @@ private fun MediaGrid(
 
 @Composable
 private fun MediaTile(media: RecentMedia, position: Int?, onClick: () -> Unit) {
-    Box(modifier = Modifier.aspectRatio(1f).clickable(onClick = onClick)) {
+    val description = if (media.isVideo) {
+        stringResource(R.string.attachment_sheet_video, formatVideoDuration(media.durationMs))
+    } else {
+        stringResource(R.string.attachment_sheet_photo)
+    }
+    Box(
+        modifier = Modifier
+            .aspectRatio(1f)
+            .semantics {
+                contentDescription = description
+                selected = position != null
+                role = Role.Checkbox
+            }
+            .clickable(onClick = onClick)
+    ) {
         MediaThumbnail(media)
         if (media.isVideo) {
             Text(
@@ -352,11 +406,7 @@ private fun ActionBar(
         horizontalArrangement = Arrangement.spacedBy(4.dp)
     ) {
         model.actions.forEach { action ->
-            val label = if (action == AttachmentAction.FILE_FROM_CLOUD) {
-                model.cloudLabel
-            } else {
-                stringResource(action.labelRes())
-            }
+            val label = action.labelRes()?.let { stringResource(it) } ?: model.cloudLabel
             Column(
                 modifier = Modifier
                     .width(BAR_ITEM_WIDTH_DP.dp)

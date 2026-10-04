@@ -1,7 +1,7 @@
 /*
  * Nextcloud Talk - Android Client
  *
- * SPDX-FileCopyrightText: 2026 Krainov Gleb <krajnov.g@kontentplus.ru>
+ * SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.nextcloud.talk.attachmentsheet
@@ -24,14 +24,17 @@ internal fun AttachmentAction.iconRes(): Int =
         AttachmentAction.SHARE_CONTACT -> R.drawable.ic_baseline_person_24
     }
 
+/**
+ * Label for the entry, or null when it needs a runtime argument (the cloud entry carries the server name).
+ */
 @StringRes
-internal fun AttachmentAction.labelRes(): Int =
+internal fun AttachmentAction.labelRes(): Int? =
     when (this) {
         AttachmentAction.PICTURE_FROM_CAM -> R.string.nc_upload_picture_from_cam
         AttachmentAction.VIDEO_FROM_CAM -> R.string.nc_upload_video_from_cam
         AttachmentAction.GALLERY -> R.string.nc_gallery
         AttachmentAction.FILE_FROM_LOCAL -> R.string.nc_upload_from_device
-        AttachmentAction.FILE_FROM_CLOUD -> R.string.nc_upload_from_cloud
+        AttachmentAction.FILE_FROM_CLOUD -> null
         AttachmentAction.CREATE_THREAD -> R.string.start_thread
         AttachmentAction.CREATE_POLL -> R.string.nc_create_poll
         AttachmentAction.SHARE_LOCATION -> R.string.nc_share_location

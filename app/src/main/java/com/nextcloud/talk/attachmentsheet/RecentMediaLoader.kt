@@ -1,13 +1,14 @@
 /*
  * Nextcloud Talk - Android Client
  *
- * SPDX-FileCopyrightText: 2026 Krainov Gleb <krajnov.g@kontentplus.ru>
+ * SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.nextcloud.talk.attachmentsheet
 
 import android.content.ContentResolver
 import android.content.ContentUris
+import android.database.Cursor
 import android.graphics.Bitmap
 import android.net.Uri
 import android.os.Build
@@ -15,6 +16,8 @@ import android.os.Bundle
 import android.provider.MediaStore
 import android.util.Log
 import android.util.Size
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import java.io.IOException
 
 /**
@@ -26,7 +29,7 @@ object RecentMediaLoader {
     private const val LIMIT = 300
     private const val THUMBNAIL_PX = 320
 
-    fun load(resolver: ContentResolver, limit: Int = LIMIT): List<RecentMedia> {
+    suspend fun load(resolver: ContentResolver, limit: Int = LIMIT): List<RecentMedia> {
         val images = query(resolver, MediaStore.Images.Media.EXTERNAL_CONTENT_URI, isVideo = false, limit)
         val videos = query(resolver, MediaStore.Video.Media.EXTERNAL_CONTENT_URI, isVideo = true, limit)
         return mergeRecentMedia(images, videos, limit)
@@ -40,6 +43,22 @@ object RecentMediaLoader {
         }
         return ContentUris.withAppendedId(base, media.id)
     }
+
+    /**
+     * Newest first with a row limit. Before Android 11 the provider ignores a limit passed in the query bundle, so
+     * it is appended to the sort order there.
+     */
+    private fun openCursor(resolver: ContentResolver, uri: Uri, projection: Array<String>, limit: Int): Cursor? =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val args = Bundle().apply {
+                putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.MediaColumns.DATE_ADDED))
+                putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
+                putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
+            }
+            resolver.query(uri, projection, args, null)
+        } else {
+            resolver.query(uri, projection, null, null, "${MediaStore.MediaColumns.DATE_ADDED} DESC LIMIT $limit")
+        }
 
     /**
      * A small preview frame of a video, or null when the system has none.
@@ -65,7 +84,7 @@ object RecentMediaLoader {
             null
         }
 
-    private fun query(resolver: ContentResolver, uri: Uri, isVideo: Boolean, limit: Int): List<RecentMedia> {
+    private suspend fun query(resolver: ContentResolver, uri: Uri, isVideo: Boolean, limit: Int): List<RecentMedia> {
         val projection = if (isVideo) {
             arrayOf(
                 MediaStore.MediaColumns._ID,
@@ -75,13 +94,8 @@ object RecentMediaLoader {
         } else {
             arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_ADDED)
         }
-        val args = Bundle().apply {
-            putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS, arrayOf(MediaStore.MediaColumns.DATE_ADDED))
-            putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING)
-            putInt(ContentResolver.QUERY_ARG_LIMIT, limit)
-        }
         val result = mutableListOf<RecentMedia>()
-        resolver.query(uri, projection, args, null)?.use { cursor ->
+        openCursor(resolver, uri, projection, limit)?.use { cursor ->
             val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
             val durationColumn = if (isVideo) {
@@ -90,6 +104,7 @@ object RecentMediaLoader {
                 -1
             }
             while (cursor.moveToNext()) {
+                currentCoroutineContext().ensureActive()
                 result += RecentMedia(
                     id = cursor.getLong(idColumn),
                     isVideo = isVideo,

@@ -1,7 +1,7 @@
 /*
  * Nextcloud Talk - Android Client
  *
- * SPDX-FileCopyrightText: 2026 Krainov Gleb <krajnov.g@kontentplus.ru>
+ * SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.nextcloud.talk.attachmentsheet
@@ -27,6 +27,12 @@ class RecentMediaTest {
     fun mergeCutsToLimit() {
         val merged = mergeRecentMedia(listOf(image(1, 5), image(2, 4)), listOf(video(1, 6), video(2, 3)), limit = 3)
         assertEquals(listOf(6L, 5L, 4L), merged.map { it.dateAddedSeconds })
+    }
+
+    @Test
+    fun equalDatesKeepImagesBeforeVideos() {
+        val merged = mergeRecentMedia(listOf(image(1, 5)), listOf(video(2, 5)), limit = 10)
+        assertEquals(listOf(false, true), merged.map { it.isVideo })
     }
 
     @Test

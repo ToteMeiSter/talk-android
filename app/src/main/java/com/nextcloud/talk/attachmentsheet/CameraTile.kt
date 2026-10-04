@@ -1,7 +1,7 @@
 /*
  * Nextcloud Talk - Android Client
  *
- * SPDX-FileCopyrightText: 2026 Krainov Gleb <krajnov.g@kontentplus.ru>
+ * SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.nextcloud.talk.attachmentsheet
@@ -42,22 +42,45 @@ import java.util.concurrent.ExecutionException
 private const val TAG = "CameraTile"
 
 /**
- * First grid tile: live back-camera preview with a camera icon. Without the camera permission only the icon is
- * shown; the tap then goes through the regular photo flow, which asks for the permission.
+ * Holds the bound preview so it can be released before the system camera starts.
+ */
+private class PreviewBinding {
+    private var provider: ProcessCameraProvider? = null
+    private var preview: Preview? = null
+
+    fun bind(provider: ProcessCameraProvider, preview: Preview?) {
+        this.provider = provider
+        this.preview = preview
+    }
+
+    fun release() {
+        preview?.let { provider?.unbind(it) }
+        preview = null
+    }
+}
+
+/**
+ * First grid tile. With [livePreview] and the camera permission it shows the back camera; otherwise only the camera
+ * icon (no camera is opened, e.g. during a call). The tap goes through the regular photo flow, which asks for the
+ * camera permission; the preview is released first so the system camera can open it.
  */
 @Composable
-internal fun CameraTile(onClick: () -> Unit) {
+internal fun CameraTile(livePreview: Boolean, onClick: () -> Unit) {
     val context = LocalContext.current
     val hasCameraPermission = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) ==
         PackageManager.PERMISSION_GRANTED
+    val binding = remember { PreviewBinding() }
     Box(
         modifier = Modifier
             .aspectRatio(1f)
             .background(Color.Black)
-            .clickable(onClick = onClick)
+            .clickable {
+                binding.release()
+                onClick()
+            }
     ) {
-        if (hasCameraPermission) {
-            LiveCameraPreview(Modifier.fillMaxSize())
+        if (livePreview && hasCameraPermission) {
+            LiveCameraPreview(binding, Modifier.fillMaxSize())
         }
         Icon(
             painter = painterResource(R.drawable.ic_baseline_photo_camera_24),
@@ -69,29 +92,30 @@ internal fun CameraTile(onClick: () -> Unit) {
 }
 
 @Composable
-private fun LiveCameraPreview(modifier: Modifier) {
+private fun LiveCameraPreview(binding: PreviewBinding, modifier: Modifier) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
     val previewView = remember {
-        PreviewView(context).apply { scaleType = PreviewView.ScaleType.FILL_CENTER }
+        PreviewView(context).apply {
+            scaleType = PreviewView.ScaleType.FILL_CENTER
+            implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+        }
     }
     DisposableEffect(lifecycleOwner) {
         val providerFuture = ProcessCameraProvider.getInstance(context)
-        var provider: ProcessCameraProvider? = null
-        var preview: Preview? = null
         var disposed = false
         providerFuture.addListener({
             if (disposed) return@addListener
             try {
-                provider = providerFuture.get()
-                preview = bindBackPreview(requireNotNull(provider), lifecycleOwner, previewView)
+                val provider = providerFuture.get()
+                binding.bind(provider, bindBackPreview(provider, lifecycleOwner, previewView))
             } catch (e: ExecutionException) {
                 Log.w(TAG, "camera provider is not available", e)
             }
         }, ContextCompat.getMainExecutor(context))
         onDispose {
             disposed = true
-            preview?.let { provider?.unbind(it) }
+            binding.release()
         }
     }
     AndroidView(factory = { previewView }, modifier = modifier)

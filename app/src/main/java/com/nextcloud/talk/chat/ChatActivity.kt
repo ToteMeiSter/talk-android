@@ -465,7 +465,7 @@ class ChatActivity :
     val participantPermissionsFlow: StateFlow<ParticipantPermissions?> = _participantPermissionsFlow.asStateFlow()
 
     private var pendingCameraUri: Uri? = null
-    private var attachmentSheetVisible by mutableStateOf(false)
+    private var attachmentSheetModel by mutableStateOf<AttachmentSheetModel?>(null)
     private var pendingTargetMessageId: Long? = null
     private var pendingTargetThreadId: Long? = null
     private var pendingTargetSearchQuery: String? = null
@@ -4508,32 +4508,33 @@ class ChatActivity :
 
     @Composable
     private fun AttachmentSheetHost() {
-        if (!attachmentSheetVisible) return
-        AttachmentSheet(
-            model = attachmentSheetModel(),
-            callbacks = AttachmentSheetCallbacks(
+        val model = attachmentSheetModel ?: return
+        val callbacks = remember {
+            AttachmentSheetCallbacks(
                 onAction = { runAttachmentAction(it) },
                 onTakePhoto = {
-                    attachmentSheetVisible = false
+                    attachmentSheetModel = null
                     sendPictureFromCamIntent()
                 },
                 onSend = {
-                    attachmentSheetVisible = false
+                    attachmentSheetModel = null
                     onChooseFileResult(it)
                 },
-                onDismiss = { attachmentSheetVisible = false }
+                onDismiss = { attachmentSheetModel = null }
             )
-        )
+        }
+        AttachmentSheet(model = model, callbacks = callbacks)
     }
 
     fun showAttachmentSheet() {
-        attachmentSheetVisible = true
+        attachmentSheetModel = buildAttachmentSheetModel()
     }
 
-    private fun attachmentSheetModel(): AttachmentSheetModel {
+    private fun buildAttachmentSheetModel(): AttachmentSheetModel? {
+        val conversation = currentConversation ?: return null
         val actions = resolveAttachmentActions(
             AttachmentVisibilityInput(
-                isRemoteConversation = !currentConversation!!.remoteServer.isNullOrEmpty(),
+                isRemoteConversation = !conversation.remoteServer.isNullOrEmpty(),
                 hasGeoLocationCapability = hasSpreedFeatureCapability(
                     spreedCapabilities,
                     SpreedFeatures.GEO_LOCATION_SHARING
@@ -4550,12 +4551,13 @@ class ChatActivity :
         return AttachmentSheetModel(
             actions = actions,
             cloudLabel = getString(R.string.nc_upload_from_cloud, serverName),
-            maxSelection = MAX_AMOUNT_MEDIA_FILE_PICKER
+            maxSelection = MAX_AMOUNT_MEDIA_FILE_PICKER,
+            livePreviewEnabled = !(CallActivity.active || !isNotInCall())
         )
     }
 
     private fun runAttachmentAction(action: AttachmentAction) {
-        attachmentSheetVisible = false
+        attachmentSheetModel = null
         when (action) {
             AttachmentAction.PICTURE_FROM_CAM -> sendPictureFromCamIntent()
             AttachmentAction.VIDEO_FROM_CAM -> sendVideoFromCamIntent()

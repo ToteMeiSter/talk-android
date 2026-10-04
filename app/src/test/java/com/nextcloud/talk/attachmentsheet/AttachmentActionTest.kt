@@ -1,7 +1,7 @@
 /*
  * Nextcloud Talk - Android Client
  *
- * SPDX-FileCopyrightText: 2026 Krainov Gleb <krajnov.g@kontentplus.ru>
+ * SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
  * SPDX-License-Identifier: GPL-3.0-or-later
  */
 package com.nextcloud.talk.attachmentsheet
@@ -64,5 +64,18 @@ class AttachmentActionTest {
         val insideThread = resolveAttachmentActions(everything.copy(isInsideThread = true))
         assertFalse(AttachmentAction.CREATE_THREAD in withoutCapability)
         assertFalse(AttachmentAction.CREATE_THREAD in insideThread)
+    }
+
+    @Test
+    fun remoteConversationWithoutCapabilitiesKeepsOnlyGallery() {
+        val actions = resolveAttachmentActions(
+            everything.copy(
+                isRemoteConversation = true,
+                hasPollsCapability = false,
+                hasThreadsCapability = false,
+                hasCamera = false
+            )
+        )
+        assertEquals(listOf(AttachmentAction.GALLERY), actions)
     }
 }
