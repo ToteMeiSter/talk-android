@@ -10,11 +10,13 @@ import androidx.annotation.StringRes
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -77,7 +79,10 @@ internal data class ToolBarActions(
     val onAllowUpdateChange: (Boolean) -> Unit
 )
 
-/** Telegram-style pill with edit tools (images only), the SD/HD switch and the View-only/Editable choice. */
+/**
+ * Telegram-style pill with edit tools (images only), the SD/HD switch and the View-only/Editable choice.
+ * Buttons keep their size; when the pill is wider than its slot the content scrolls.
+ */
 @Composable
 internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, modifier: Modifier = Modifier) {
     Row(
@@ -86,6 +91,7 @@ internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, mod
         modifier = modifier
             .clip(RoundedCornerShape(percent = 50))
             .background(ScrimColor)
+            .horizontalScroll(rememberScrollState())
             .padding(horizontal = 4.dp)
     ) {
         actions.onCrop?.let { onCrop ->
