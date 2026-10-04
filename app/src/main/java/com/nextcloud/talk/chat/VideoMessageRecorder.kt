@@ -29,6 +29,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
 import com.nextcloud.talk.camera.rotationForDeviceOrientation
 import java.io.File
 
@@ -36,10 +37,13 @@ import java.io.File
  * Records a plain mp4 video with CameraX and shows a live preview while doing so.
  *
  * The recorder does not belong to an activity: it lives in the view model of the chat and survives the recreation of
- * the activity (rotation). The activity hands its lifecycle, its preview and its callback in with [attach] and the
- * recorder lets go of all three in [detach], which also happens when that lifecycle is destroyed, so no activity or
- * view is leaked. While nothing is attached the recording goes on; a result that arrives then is kept and delivered
- * by the next [attach].
+ * the activity (rotation). The camera is bound once per recording to a lifecycle of the recorder itself
+ * ([RecordingLifecycleOwner]), not to the one of the activity: the activity stops on every rotation and would stop
+ * the camera, and binding the use cases again to the next activity makes the CameraX recorder configure itself in a
+ * state where that is not allowed. The activity hands only its preview view and its callback in with [attach] and
+ * the recorder lets go of both in [detach], which also happens when the activity lifecycle is destroyed, so no
+ * activity or view is leaked. While nothing is attached the recording goes on; a result that arrives then is kept
+ * and delivered by the next [attach].
  *
  * All methods must be called on the main thread. The callback is called exactly once per [start] on the main thread:
  * with [Outcome.SEND] and the file to send, with [Outcome.INTERRUPTED] and the file that was recorded up to the
@@ -55,12 +59,12 @@ class VideoMessageRecorder(context: Context) {
     enum class Outcome { SEND, CANCELLED, TOO_SHORT, FAILED, INTERRUPTED }
 
     private enum class State { IDLE, STARTING, RECORDING }
-    private enum class StopAction { SEND, DISCARD, KEEP }
 
     private class Finished(val outcome: Outcome, val file: File?)
 
     private val context: Context = context.applicationContext
-    private var lifecycleOwner: LifecycleOwner? = null
+    private var activityLifecycle: Lifecycle? = null
+    private var cameraOwner: RecordingLifecycleOwner? = null
     private var previewView: PreviewView? = null
     private var onFinished: ((Outcome, File?) -> Unit)? = null
     private var pendingResult: Finished? = null
@@ -71,7 +75,6 @@ class VideoMessageRecorder(context: Context) {
     }
 
     private var state = State.IDLE
-    private var stopAction: StopAction? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var preview: Preview? = null
     private var videoCapture: VideoCapture<Recorder>? = null
@@ -80,6 +83,7 @@ class VideoMessageRecorder(context: Context) {
     private var lensFacing = CameraSelector.LENS_FACING_FRONT
     private var session = 0
     private var videoRotation = Surface.ROTATION_0
+    private val stopCoordinator = RecordingStopCoordinator(MainThreadScheduler()) { recording?.stop() }
 
     val isActive: Boolean
         get() = state != State.IDLE
@@ -91,24 +95,22 @@ class VideoMessageRecorder(context: Context) {
         get() = pendingResult != null
 
     /**
-     * Shows the preview in [view] and reports the end of the recording to [callback]. A running recording is bound
-     * to the new [owner], a result which is waiting is delivered at once. The previously attached owner is dropped.
+     * Shows the preview in [view] and reports the end of the recording to [callback]. A running recording keeps its
+     * camera, only the preview picture moves to the new view; a result which is waiting is delivered at once. The
+     * previously attached view is dropped. [owner] is only watched: its destruction detaches the recorder.
      */
     fun attach(owner: LifecycleOwner, view: PreviewView, callback: (Outcome, File?) -> Unit) {
         if (released) return
         detach()
-        lifecycleOwner = owner
+        activityLifecycle = owner.lifecycle
         previewView = view
         onFinished = callback
         owner.lifecycle.addObserver(ownerObserver)
 
-        val provider = cameraProvider
-        if (state == State.RECORDING && provider != null) {
-            preview = buildPreview()
-            if (!bindUseCases(provider)) {
-                // no picture can be shown or recorded any more: keep what exists
-                stop(StopAction.KEEP)
-            }
+        preview?.let { previewUseCase ->
+            // only the preview is reconfigured by this, the video use case and the recording are not touched
+            previewUseCase.targetRotation = displayRotation(view, videoRotation)
+            previewUseCase.surfaceProvider = view.surfaceProvider
         }
         pendingResult?.let {
             pendingResult = null
@@ -117,16 +119,13 @@ class VideoMessageRecorder(context: Context) {
     }
 
     /**
-     * Lets go of the activity. A running recording continues without camera until the next [attach]
-     * (persistent recording); the camera is unbound so that it can be bound to the next lifecycle.
+     * Lets go of the activity. A running recording continues with its camera and without a picture on the screen
+     * until the next [attach].
      */
     fun detach() {
-        lifecycleOwner?.lifecycle?.removeObserver(ownerObserver)
-        if (state != State.IDLE) {
-            cameraProvider?.unbind(preview, videoCapture)
-        }
+        activityLifecycle?.removeObserver(ownerObserver)
         preview?.surfaceProvider = null
-        lifecycleOwner = null
+        activityLifecycle = null
         previewView = null
         onFinished = null
     }
@@ -140,6 +139,9 @@ class VideoMessageRecorder(context: Context) {
         pendingResult?.file?.delete()
         pendingResult = null
         cancel()
+        // Inside the window after a camera switch the stop is held back and the camera is not unbound: that would
+        // let CameraX set up the new surface while stopping. The finalization (or the end of the window) closes it.
+        if (!stopCoordinator.settling) releaseCamera()
     }
 
     /**
@@ -150,7 +152,7 @@ class VideoMessageRecorder(context: Context) {
         state = State.STARTING
         session++
         val startedSession = session
-        stopAction = null
+        stopCoordinator.reset()
         outputFile = file
         videoRotation = targetRotation
         lensFacing = CameraSelector.LENS_FACING_FRONT
@@ -178,14 +180,14 @@ class VideoMessageRecorder(context: Context) {
 
     /**
      * Switches between the front and the back camera. A running recording continues, the picture is frozen
-     * until the new camera delivers frames.
+     * until the new camera delivers frames. The use cases are bound again, which makes the CameraX recorder set up a
+     * new video surface, and that must not meet a stop: see [RecordingStopCoordinator].
      */
     fun switchCamera() {
         val provider = cameraProvider
-        if (state == State.IDLE || provider == null) return
-
         val newLens = oppositeLens(lensFacing)
-        if (!provider.hasCamera(cameraSelectorFor(newLens))) return
+        if (provider == null || state != State.RECORDING || !provider.hasCamera(cameraSelectorFor(newLens))) return
+        if (!stopCoordinator.beginSwitch()) return
 
         val previousLens = lensFacing
         lensFacing = newLens
@@ -197,7 +199,6 @@ class VideoMessageRecorder(context: Context) {
     }
 
     private fun stop(action: StopAction) {
-        if (stopAction == StopAction.SEND) return
         when (state) {
             State.IDLE -> Unit
 
@@ -206,13 +207,7 @@ class VideoMessageRecorder(context: Context) {
                 finish(if (action == StopAction.SEND) Outcome.TOO_SHORT else Outcome.CANCELLED, null)
             }
 
-            State.RECORDING -> {
-                stopAction = action
-                recording?.stop()
-                if (action == StopAction.DISCARD) {
-                    cameraProvider?.unbind(preview, videoCapture)
-                }
-            }
+            State.RECORDING -> stopCoordinator.requestStop(action)
         }
     }
 
@@ -221,6 +216,8 @@ class VideoMessageRecorder(context: Context) {
             return
         }
         cameraProvider = provider
+        val owner = RecordingLifecycleOwner().also { cameraOwner = it }
+        owner.start()
 
         val recorder = Recorder.Builder()
             .setQualitySelector(
@@ -229,7 +226,10 @@ class VideoMessageRecorder(context: Context) {
             .setTargetVideoEncodingBitRate(TARGET_VIDEO_BIT_RATE)
             .build()
         videoCapture = VideoCapture.Builder(recorder).setTargetRotation(videoRotation).build()
-        preview = buildPreview()
+        preview = Preview.Builder()
+            .setTargetRotation(previewView?.let { displayRotation(it, videoRotation) } ?: videoRotation)
+            .build()
+            .also { it.surfaceProvider = previewView?.surfaceProvider }
 
         if (!bindUseCases(provider)) {
             finish(Outcome.FAILED, null)
@@ -238,19 +238,12 @@ class VideoMessageRecorder(context: Context) {
         startRecording()
     }
 
-    private fun buildPreview(): Preview =
-        Preview.Builder()
-            .setTargetRotation(previewView?.display?.rotation ?: videoRotation)
-            .build()
-
     private fun bindUseCases(provider: ProcessCameraProvider): Boolean {
         lensFacing = resolveLens(provider, lensFacing)
-        val owner = lifecycleOwner
-        val view = previewView
+        val owner = cameraOwner
         val previewUseCase = preview
         val videoUseCase = videoCapture
-        if (owner == null || view == null || previewUseCase == null || videoUseCase == null) return false
-        previewUseCase.surfaceProvider = view.surfaceProvider
+        if (owner == null || previewUseCase == null || videoUseCase == null) return false
         return provider.bindSafely(owner, lensFacing, previewUseCase, videoUseCase) != null
     }
 
@@ -274,15 +267,14 @@ class VideoMessageRecorder(context: Context) {
         if (event is VideoRecordEvent.Finalize) {
             val duration = event.recordingStats.recordedDurationNanos
             var outcome = resolveOutcome(
-                discardRequested = stopAction == StopAction.DISCARD,
+                discardRequested = stopCoordinator.action == StopAction.DISCARD,
                 hasError = event.hasError(),
                 error = event.error,
                 recordedDurationNanos = duration
             )
             val cutOff = outcome == Outcome.FAILED &&
                 isSalvageable(event.error, duration, outputFile?.length() ?: 0L)
-            val keepRequested = outcome == Outcome.SEND && stopAction == StopAction.KEEP
-            if (cutOff || keepRequested) {
+            if (cutOff) {
                 outcome = Outcome.INTERRUPTED
             }
             if (event.hasError()) {
@@ -294,10 +286,9 @@ class VideoMessageRecorder(context: Context) {
 
     private fun finish(outcome: Outcome, fileToSend: File?) {
         val file = outputFile
-        cameraProvider?.unbind(preview, videoCapture)
+        releaseCamera()
         recording = null
         outputFile = null
-        stopAction = null
         state = State.IDLE
         if (fileToSend == null || released) {
             file?.delete()
@@ -310,6 +301,19 @@ class VideoMessageRecorder(context: Context) {
         } else {
             pendingResult = Finished(outcome, fileToSend)
         }
+    }
+
+    /**
+     * Ends the lifecycle the camera is bound to, which closes the camera, and lets go of the use cases.
+     */
+    private fun releaseCamera() {
+        stopCoordinator.reset()
+        preview?.surfaceProvider = null
+        cameraProvider?.unbind(preview, videoCapture)
+        cameraOwner?.destroy()
+        cameraOwner = null
+        preview = null
+        videoCapture = null
     }
 
     companion object {
@@ -363,6 +367,35 @@ class VideoMessageRecorder(context: Context) {
          */
         fun videoTargetRotation(sensorDegrees: Int, displayRotation: Int): Int =
             rotationForDeviceOrientation(sensorDegrees) ?: displayRotation
+    }
+}
+
+/**
+ * The rotation of the display the view is shown on. It is not read from the view itself: the activity attaches its
+ * preview in onCreate, before the view is in a window, and View.getDisplay() is null then.
+ */
+private fun displayRotation(view: PreviewView, fallback: Int): Int =
+    ContextCompat.getDisplayOrDefault(view.context)?.rotation ?: fallback
+
+/**
+ * The lifecycle the camera of a recording is bound to. It is not the one of an activity, so that rotating the screen
+ * (stop and destroy of the activity) neither stops the camera nor unbinds its use cases. It is started when the
+ * recording starts and destroyed when it ends, which closes the camera.
+ */
+internal class RecordingLifecycleOwner : LifecycleOwner {
+    private val registry = LifecycleRegistry.createUnsafe(this)
+
+    override val lifecycle: Lifecycle
+        get() = registry
+
+    fun start() {
+        if (registry.currentState != Lifecycle.State.DESTROYED) registry.currentState = Lifecycle.State.STARTED
+    }
+
+    fun destroy() {
+        // a lifecycle cannot go from INITIALIZED to DESTROYED directly
+        if (registry.currentState == Lifecycle.State.INITIALIZED) registry.currentState = Lifecycle.State.CREATED
+        registry.currentState = Lifecycle.State.DESTROYED
     }
 }
 
