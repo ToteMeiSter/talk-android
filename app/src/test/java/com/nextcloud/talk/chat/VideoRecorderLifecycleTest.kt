@@ -8,8 +8,6 @@ package com.nextcloud.talk.chat
 
 import androidx.lifecycle.Lifecycle
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class VideoRecorderLifecycleTest {
@@ -43,18 +41,5 @@ class VideoRecorderLifecycleTest {
         owner.destroy()
         owner.destroy()
         assertEquals(Lifecycle.State.DESTROYED, owner.lifecycle.currentState)
-    }
-
-    @Test
-    fun stopIsHeldBackWhileTheSwitchedCameraSettles() {
-        assertTrue(VideoMessageRecorder.shouldDeferStop(switchSettling = true))
-        assertFalse(VideoMessageRecorder.shouldDeferStop(switchSettling = false))
-    }
-
-    @Test
-    fun cameraIsSwitchedOnlyOnceAndNotWhileStopping() {
-        assertTrue(VideoMessageRecorder.canSwitchCamera(stopRequested = false, switchSettling = false))
-        assertFalse(VideoMessageRecorder.canSwitchCamera(stopRequested = true, switchSettling = false))
-        assertFalse(VideoMessageRecorder.canSwitchCamera(stopRequested = false, switchSettling = true))
     }
 }

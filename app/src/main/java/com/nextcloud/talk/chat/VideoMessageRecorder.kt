@@ -9,8 +9,6 @@ package com.nextcloud.talk.chat
 
 import android.annotation.SuppressLint
 import android.content.Context
-import android.os.Handler
-import android.os.Looper
 import android.util.Log
 import android.view.OrientationEventListener
 import android.view.Surface
@@ -61,7 +59,6 @@ class VideoMessageRecorder(context: Context) {
     enum class Outcome { SEND, CANCELLED, TOO_SHORT, FAILED, INTERRUPTED }
 
     private enum class State { IDLE, STARTING, RECORDING }
-    private enum class StopAction { SEND, DISCARD }
 
     private class Finished(val outcome: Outcome, val file: File?)
 
@@ -78,7 +75,6 @@ class VideoMessageRecorder(context: Context) {
     }
 
     private var state = State.IDLE
-    private var stopAction: StopAction? = null
     private var cameraProvider: ProcessCameraProvider? = null
     private var preview: Preview? = null
     private var videoCapture: VideoCapture<Recorder>? = null
@@ -87,16 +83,7 @@ class VideoMessageRecorder(context: Context) {
     private var lensFacing = CameraSelector.LENS_FACING_FRONT
     private var session = 0
     private var videoRotation = Surface.ROTATION_0
-    private var switchSettling = false
-    private var stopDeferredBySwitch = false
-    private val handler by lazy { Handler(Looper.getMainLooper()) }
-    private val switchSettledRunnable = Runnable {
-        switchSettling = false
-        if (stopDeferredBySwitch) {
-            stopDeferredBySwitch = false
-            if (state == State.RECORDING) recording?.stop()
-        }
-    }
+    private val stopCoordinator = RecordingStopCoordinator(MainThreadScheduler()) { recording?.stop() }
 
     val isActive: Boolean
         get() = state != State.IDLE
@@ -122,7 +109,7 @@ class VideoMessageRecorder(context: Context) {
 
         preview?.let { previewUseCase ->
             // only the preview is reconfigured by this, the video use case and the recording are not touched
-            view.display?.rotation?.let { previewUseCase.targetRotation = it }
+            previewUseCase.targetRotation = displayRotation(view, videoRotation)
             previewUseCase.surfaceProvider = view.surfaceProvider
         }
         pendingResult?.let {
@@ -152,9 +139,9 @@ class VideoMessageRecorder(context: Context) {
         pendingResult?.file?.delete()
         pendingResult = null
         cancel()
-        // nothing is sent any more, so do not wait for a switch to settle and close the camera in any case
-        if (state == State.RECORDING) recording?.stop()
-        releaseCamera()
+        // Inside the window after a camera switch the stop is held back and the camera is not unbound: that would
+        // let CameraX set up the new surface while stopping. The finalization (or the end of the window) closes it.
+        if (!stopCoordinator.settling) releaseCamera()
     }
 
     /**
@@ -165,7 +152,7 @@ class VideoMessageRecorder(context: Context) {
         state = State.STARTING
         session++
         val startedSession = session
-        stopAction = null
+        stopCoordinator.reset()
         outputFile = file
         videoRotation = targetRotation
         lensFacing = CameraSelector.LENS_FACING_FRONT
@@ -194,20 +181,16 @@ class VideoMessageRecorder(context: Context) {
     /**
      * Switches between the front and the back camera. A running recording continues, the picture is frozen
      * until the new camera delivers frames. The use cases are bound again, which makes the CameraX recorder set up a
-     * new video surface, and that must not meet a stop: while it settles a stop is held back, and no second switch
-     * is accepted.
+     * new video surface, and that must not meet a stop: see [RecordingStopCoordinator].
      */
     fun switchCamera() {
         val provider = cameraProvider
         val newLens = oppositeLens(lensFacing)
-        val possible = state == State.RECORDING &&
-            canSwitchCamera(stopRequested = stopAction != null, switchSettling = switchSettling)
-        if (provider == null || !possible || !provider.hasCamera(cameraSelectorFor(newLens))) return
+        if (provider == null || state != State.RECORDING || !provider.hasCamera(cameraSelectorFor(newLens))) return
+        if (!stopCoordinator.beginSwitch()) return
 
         val previousLens = lensFacing
         lensFacing = newLens
-        switchSettling = true
-        handler.postDelayed(switchSettledRunnable, SWITCH_SETTLE_MS)
         provider.unbind(preview, videoCapture)
         if (!bindUseCases(provider)) {
             lensFacing = previousLens
@@ -216,7 +199,6 @@ class VideoMessageRecorder(context: Context) {
     }
 
     private fun stop(action: StopAction) {
-        if (stopAction == StopAction.SEND) return
         when (state) {
             State.IDLE -> Unit
 
@@ -225,14 +207,7 @@ class VideoMessageRecorder(context: Context) {
                 finish(if (action == StopAction.SEND) Outcome.TOO_SHORT else Outcome.CANCELLED, null)
             }
 
-            State.RECORDING -> {
-                stopAction = action
-                if (shouldDeferStop(switchSettling)) {
-                    stopDeferredBySwitch = true
-                } else {
-                    recording?.stop()
-                }
-            }
+            State.RECORDING -> stopCoordinator.requestStop(action)
         }
     }
 
@@ -252,7 +227,7 @@ class VideoMessageRecorder(context: Context) {
             .build()
         videoCapture = VideoCapture.Builder(recorder).setTargetRotation(videoRotation).build()
         preview = Preview.Builder()
-            .setTargetRotation(previewView?.display?.rotation ?: videoRotation)
+            .setTargetRotation(previewView?.let { displayRotation(it, videoRotation) } ?: videoRotation)
             .build()
             .also { it.surfaceProvider = previewView?.surfaceProvider }
 
@@ -292,7 +267,7 @@ class VideoMessageRecorder(context: Context) {
         if (event is VideoRecordEvent.Finalize) {
             val duration = event.recordingStats.recordedDurationNanos
             var outcome = resolveOutcome(
-                discardRequested = stopAction == StopAction.DISCARD,
+                discardRequested = stopCoordinator.action == StopAction.DISCARD,
                 hasError = event.hasError(),
                 error = event.error,
                 recordedDurationNanos = duration
@@ -314,7 +289,6 @@ class VideoMessageRecorder(context: Context) {
         releaseCamera()
         recording = null
         outputFile = null
-        stopAction = null
         state = State.IDLE
         if (fileToSend == null || released) {
             file?.delete()
@@ -333,9 +307,7 @@ class VideoMessageRecorder(context: Context) {
      * Ends the lifecycle the camera is bound to, which closes the camera, and lets go of the use cases.
      */
     private fun releaseCamera() {
-        handler.removeCallbacks(switchSettledRunnable)
-        switchSettling = false
-        stopDeferredBySwitch = false
+        stopCoordinator.reset()
         preview?.surfaceProvider = null
         cameraProvider?.unbind(preview, videoCapture)
         cameraOwner?.destroy()
@@ -350,23 +322,6 @@ class VideoMessageRecorder(context: Context) {
         const val TARGET_VIDEO_BIT_RATE = 2_500_000
 
         const val MIN_DURATION_NANOS = 1_000_000_000L
-
-        /**
-         * How long after a camera switch the CameraX recorder may still be setting up its new video surface.
-         */
-        const val SWITCH_SETTLE_MS = 1_500L
-
-        /**
-         * A stop while the recorder sets up the surface of a switched camera ends in an AssertionError of CameraX
-         * ("in a STOPPING state when it's not waiting for a new surface"): it is held back until the setup is done.
-         */
-        fun shouldDeferStop(switchSettling: Boolean): Boolean = switchSettling
-
-        /**
-         * Only one switch at a time, and none once the recording is being stopped.
-         */
-        fun canSwitchCamera(stopRequested: Boolean, switchSettling: Boolean): Boolean =
-            !stopRequested && !switchSettling
 
         /**
          * A recording that ended because of the duration or size limit is complete and valid; any other error leaves
@@ -414,6 +369,13 @@ class VideoMessageRecorder(context: Context) {
             rotationForDeviceOrientation(sensorDegrees) ?: displayRotation
     }
 }
+
+/**
+ * The rotation of the display the view is shown on. It is not read from the view itself: the activity attaches its
+ * preview in onCreate, before the view is in a window, and View.getDisplay() is null then.
+ */
+private fun displayRotation(view: PreviewView, fallback: Int): Int =
+    ContextCompat.getDisplayOrDefault(view.context)?.rotation ?: fallback
 
 /**
  * The lifecycle the camera of a recording is bound to. It is not the one of an activity, so that rotating the screen
