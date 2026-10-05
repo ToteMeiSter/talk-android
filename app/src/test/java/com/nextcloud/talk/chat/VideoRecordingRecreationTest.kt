@@ -50,7 +50,7 @@ class VideoRecordingRecreationTest {
     }
 
     @Test
-    fun resultIsDeferredUntilTheChatIsLoaded() {
+    fun resultIsDeferredUntilTheChatIsLoadedButRecordingIsNot() {
         assertEquals(
             RecordingResume.DEFER_RESULT,
             resolveRecordingResume(false, true, true, true, chatReady = false)
@@ -59,10 +59,7 @@ class VideoRecordingRecreationTest {
             RecordingResume.DELIVER_RESULT,
             resolveRecordingResume(false, true, true, true, chatReady = true)
         )
-    }
-
-    @Test
-    fun activeRecordingIsAttachedEvenIfTheChatIsNotLoaded() {
+        // a running recording is attached at once, even if the chat is not loaded
         assertEquals(RecordingResume.ATTACH, resolveRecordingResume(true, false, true, true, chatReady = false))
     }
 
