@@ -26,7 +26,6 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
-import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkRequest
 import androidx.work.Worker
@@ -72,9 +71,7 @@ import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import java.io.File
 import java.io.IOException
-import java.util.Collections
 import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
@@ -129,20 +126,12 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     private val notificationId = id.hashCode()
 
     /**
-     * WorkManager's own `isStopped`/`onStopped()` only becomes true/fires after
-     * cancelUniqueWork() round-trips through WorkManager's internal executor and Room DB - for a
-     * small/compressed image the whole upload+share can finish faster than that round-trip, so
-     * isStopped alone arrives too late. [cancelledReferenceIds] is set synchronously by the UI
-     * before cancelUniqueWork() is even called, so it's visible to doWork() immediately. A work that has not
-     * run yet is never cancelled in WorkManager (that would break the queue of the conversation); it only gets
-     * the `cancelled` flag in its workspace and aborts itself when it starts.
+     * The user cancelled this upload. The cancel is a flag file in the workspace, not a cancellation in
+     * WorkManager: a cancelled work left in the queue of the conversation makes the APPEND_OR_REPLACE of the next
+     * upload delete the other, still living works of that queue. The worker looks at the flag at the start, between
+     * its stages and in the progress callback, and then aborts itself, see [cancelledResult].
      */
-    private fun isCancelled(): Boolean =
-        referenceId?.let { cancelledReferenceIds.contains(it) } == true ||
-            (::workspace.isInitialized && workspace.isCancelled())
-
-    private fun mustAbort(): Boolean =
-        UploadRetryPolicy.stopAction(stopReason, isCancelled()) == UploadRetryPolicy.StopAction.ABORT
+    private fun isCancelled(): Boolean = ::workspace.isInitialized && workspace.isCancelled()
 
     override fun doWork(): Result {
         NextcloudTalkApplication.sharedApplication!!.componentApplication.inject(this)
@@ -157,7 +146,6 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         try {
             return doUpload()
         } finally {
-            referenceId?.let { cancelledReferenceIds.remove(it) }
             if (!keepWorkspace) {
                 workspace.delete()
             }
@@ -254,7 +242,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             workspace.markUploaded(remotePath)
         }
         // Not shared when the user cancelled right as the upload finished.
-        return uploaded && !mustAbort() && shareFile(remotePath, metaData)
+        return uploaded && !isCancelled() && shareFile(remotePath, metaData)
     }
 
     private fun successResult(): Result {
@@ -294,7 +282,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
      * The result of a work that WorkManager stopped is ignored; WorkManager schedules it again by itself.
      */
     private fun stoppedResult(): Result =
-        if (mustAbort()) {
+        if (isCancelled()) {
             cancelledResult()
         } else {
             keepWorkspace = true
@@ -519,7 +507,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 }
                 workspace.markUploaded(tempRemotePath)
             }
-            if (mustAbort()) {
+            if (isCancelled()) {
                 return@runBlocking false
             }
 
@@ -585,8 +573,13 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
     override fun onTransferProgress(percentage: Int) {
         setProgressAsync(Data.Builder().putInt(PROGRESS_KEY, percentage).build())
-        if (isForeground && !isStopped && progressThrottle.shouldUpdate(percentage)) {
-            notificationManager.notify(notificationId, progressNotification(percentage))
+        if (progressThrottle.shouldUpdate(percentage)) {
+            if (isCancelled()) {
+                // Interrupts the upload; doWork then sees the flag and aborts.
+                chunkedFileUploader?.stop()
+            } else if (isForeground && !isStopped) {
+                notificationManager.notify(notificationId, progressNotification(percentage))
+            }
         }
     }
 
@@ -599,8 +592,8 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
     /**
      * WorkManager runs this inside a coroutine cancellation handler: an exception thrown here crashes the process,
-     * and a network call blocks WorkManager's own thread. So it only interrupts the upload; removing the parts
-     * from the server, if the user cancelled, is done by [doWork] in [cancelledResult].
+     * and a network call blocks WorkManager's own thread. So it only interrupts the upload and keeps the parts on
+     * the server, so the next run resumes. The user's cancel does not come here, see [isCancelled].
      */
     @Suppress("Detekt.TooGenericExceptionCaught")
     override fun onStopped() {
@@ -660,11 +653,6 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
         private const val WORKSPACE_DIR = "uploads"
         const val REQUEST_PERMISSION = 3123
-
-        // referenceIds the user cancelled - set synchronously here, before cancelUniqueWork() is
-        // even called, so doWork() can see it immediately instead of waiting for isStopped, which
-        // only becomes true once WorkManager's own async cancellation dispatch completes.
-        private val cancelledReferenceIds: MutableSet<String> = Collections.newSetFromMap(ConcurrentHashMap())
 
         private val _uploadCompletedFlow: MutableSharedFlow<String> = MutableSharedFlow(
             replay = 1,
@@ -775,42 +763,23 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             File(File(context.cacheDir, WORKSPACE_DIR), workId.toString())
 
         /**
-         * Cancels an upload by the id of its WorkRequest (not by the name of enqueueUniqueWork, which is shared by
-         * every file queued in the same conversation). The id is only known in memory of the chat, so after a
-         * restart the work is found by its reference id tag. Blocks on WorkManager: call it off the main thread.
-         *
-         * A work that has not started is not cancelled in WorkManager: a cancelled work left in the queue makes
-         * the APPEND_OR_REPLACE of the next upload delete the other, still living works of the queue. It gets the
-         * `cancelled` flag and aborts itself when it starts. Only a running work is also cancelled in WorkManager.
+         * Asks an upload to cancel itself. Only a flag in the workspace of the work is set: whether the work waits
+         * for the network or runs right now, it sees the flag and aborts (see [isCancelled]). Nothing is cancelled
+         * in WorkManager. The id is only known in memory of the chat, so after a restart the work is found by its
+         * reference id tag. Blocks on WorkManager: call it off the main thread.
          */
-        @Suppress("Detekt.TooGenericExceptionCaught")
         fun cancelUpload(referenceId: String, workId: UUID?) {
-            if (referenceId.isNotEmpty()) {
-                cancelledReferenceIds.add(referenceId)
-            }
             val context = NextcloudTalkApplication.sharedApplication!!.applicationContext
             val workManager = WorkManager.getInstance(context)
-            var handled = false
-            try {
-                val infos = if (workId != null) {
-                    listOfNotNull(workManager.getWorkInfoById(workId).get())
-                } else if (referenceId.isNotEmpty()) {
-                    workManager.getWorkInfosByTag(referenceTag(referenceId)).get()
-                } else {
-                    emptyList()
-                }
-                infos.filter { !it.state.isFinished }.forEach { info ->
-                    handled = true
-                    UploadWorkspace(workspaceDir(context, info.id)).markCancelled()
-                    if (info.state == WorkInfo.State.RUNNING) {
-                        workManager.cancelWorkById(info.id)
-                    }
-                }
-            } finally {
-                if (!handled) {
-                    // Nothing alive to see the flag, which would stay in the set for the life of the process.
-                    cancelledReferenceIds.remove(referenceId)
-                }
+            val infos = if (workId != null) {
+                listOfNotNull(workManager.getWorkInfoById(workId).get())
+            } else if (referenceId.isNotEmpty()) {
+                workManager.getWorkInfosByTag(referenceTag(referenceId)).get()
+            } else {
+                emptyList()
+            }
+            infos.filter { !it.state.isFinished }.forEach { info ->
+                UploadWorkspace(workspaceDir(context, info.id)).markCancelled()
             }
         }
     }

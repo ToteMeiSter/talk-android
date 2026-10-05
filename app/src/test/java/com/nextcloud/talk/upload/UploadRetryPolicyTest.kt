@@ -6,11 +6,9 @@
  */
 package com.nextcloud.talk.upload
 
-import androidx.work.WorkInfo
 import at.bitfire.dav4jvm.exception.HttpException as DavHttpException
 import com.nextcloud.talk.upload.UploadRetryPolicy.Decision
 import com.nextcloud.talk.upload.UploadRetryPolicy.FailureKind
-import com.nextcloud.talk.upload.UploadRetryPolicy.StopAction
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -111,41 +109,6 @@ class UploadRetryPolicyTest {
     @Test
     fun `other errors fail at once`() {
         assertEquals(Decision.FAIL, UploadRetryPolicy.decide(FailureKind.OTHER, 0))
-    }
-
-    @Test
-    fun `user cancel aborts whatever the stop reason is`() {
-        assertEquals(StopAction.ABORT, UploadRetryPolicy.stopAction(WorkInfo.STOP_REASON_NOT_STOPPED, true))
-        assertEquals(
-            StopAction.ABORT,
-            UploadRetryPolicy.stopAction(WorkInfo.STOP_REASON_CONSTRAINT_CONNECTIVITY, true)
-        )
-    }
-
-    @Test
-    fun `cancel by the app aborts`() {
-        assertEquals(StopAction.ABORT, UploadRetryPolicy.stopAction(WorkInfo.STOP_REASON_CANCELLED_BY_APP, false))
-    }
-
-    @Test
-    fun `stops by the system keep the upload`() {
-        val systemReasons = listOf(
-            WorkInfo.STOP_REASON_CONSTRAINT_CONNECTIVITY,
-            WorkInfo.STOP_REASON_TIMEOUT,
-            WorkInfo.STOP_REASON_DEVICE_STATE,
-            WorkInfo.STOP_REASON_PREEMPT,
-            WorkInfo.STOP_REASON_QUOTA,
-            WorkInfo.STOP_REASON_BACKGROUND_RESTRICTION,
-            WorkInfo.STOP_REASON_APP_STANDBY,
-            WorkInfo.STOP_REASON_USER,
-            WorkInfo.STOP_REASON_SYSTEM_PROCESSING,
-            WorkInfo.STOP_REASON_FOREGROUND_SERVICE_TIMEOUT,
-            WorkInfo.STOP_REASON_UNKNOWN,
-            WorkInfo.STOP_REASON_NOT_STOPPED
-        )
-        systemReasons.forEach {
-            assertEquals("reason ", StopAction.KEEP, UploadRetryPolicy.stopAction(it, false))
-        }
     }
 
     private fun retrofit(code: Int) = RetrofitHttpException(Response.error<Any>(code, "".toResponseBody()))

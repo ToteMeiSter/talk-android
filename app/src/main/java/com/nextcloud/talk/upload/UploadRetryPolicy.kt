@@ -6,7 +6,6 @@
  */
 package com.nextcloud.talk.upload
 
-import androidx.work.WorkInfo
 import at.bitfire.dav4jvm.exception.HttpException as DavHttpException
 import retrofit2.HttpException as RetrofitHttpException
 import java.io.FileNotFoundException
@@ -39,14 +38,6 @@ object UploadRetryPolicy {
     enum class FailureKind { NETWORK, SERVER, OTHER }
 
     enum class Decision { RETRY, FAIL }
-
-    enum class StopAction {
-        /** The user cancelled the upload: remove the parts from the server and the prepared file. */
-        ABORT,
-
-        /** The system stopped the upload: keep the parts and the prepared file for the next run. */
-        KEEP
-    }
 
     /**
      * Looks through the whole chain of causes, because RxJava wraps a checked [IOException] in a RuntimeException.
@@ -97,16 +88,5 @@ object UploadRetryPolicy {
             kind == FailureKind.NETWORK -> Decision.RETRY
             kind == FailureKind.SERVER && serverErrorCount < MAX_SERVER_ERRORS -> Decision.RETRY
             else -> Decision.FAIL
-        }
-
-    /**
-     * @param stopReason [androidx.work.ListenableWorker.getStopReason]
-     * @param userCancelled the user cancelled this upload from the chat or from the notification
-     */
-    fun stopAction(stopReason: Int, userCancelled: Boolean): StopAction =
-        if (userCancelled || stopReason == WorkInfo.STOP_REASON_CANCELLED_BY_APP) {
-            StopAction.ABORT
-        } else {
-            StopAction.KEEP
         }
 }
