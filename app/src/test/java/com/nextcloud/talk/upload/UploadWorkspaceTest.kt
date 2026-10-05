@@ -22,9 +22,7 @@ class UploadWorkspaceTest {
     @get:Rule
     val tempFolder = TemporaryFolder()
 
-    private var now = 1_000_000L
-
-    private fun workspace(name: String = "work") = UploadWorkspace(File(tempFolder.root, name)) { now }
+    private fun workspace(name: String = "work") = UploadWorkspace(File(tempFolder.root, name))
 
     private fun create(dir: File, name: String, lastModified: Long): PreparedUpload {
         val file = File(dir, name).apply {
@@ -48,8 +46,7 @@ class UploadWorkspaceTest {
     fun `chunk folder key stays the same between runs`() {
         val first = workspace().prepareOnce { create(it, "video.mp4", 1_000) }!!
         val keyBefore = FileUtils.md5Sum(first.file)
-        now += HOUR
-        val second = workspace().prepareOnce { create(it, "video.mp4", now) }!!
+        val second = workspace().prepareOnce { create(it, "video.mp4", 9_000) }!!
 
         assertEquals(keyBefore, FileUtils.md5Sum(second.file))
     }
@@ -82,7 +79,7 @@ class UploadWorkspaceTest {
             null
         }
         ws.prepareOnce { dir ->
-            assertEquals(listOf("created"), dir.list()!!.sorted())
+            assertEquals(emptyList<String>(), dir.list()!!.toList())
             create(dir, "photo.jpg", 1_000)
         }
     }
@@ -104,14 +101,6 @@ class UploadWorkspaceTest {
     }
 
     @Test
-    fun `age counts from the first preparation`() {
-        workspace().prepareOnce { create(it, "photo.jpg", 1_000) }
-        now += HOUR
-
-        assertEquals(HOUR, workspace().ageMs())
-    }
-
-    @Test
     fun `delete removes the file and the counters`() {
         val ws = workspace()
         val prepared = ws.prepareOnce { create(it, "photo.jpg", 1_000) }!!
@@ -124,19 +113,17 @@ class UploadWorkspaceTest {
     }
 
     @Test
-    fun `stale workspaces are removed and fresh ones kept`() {
-        workspace("old").prepareOnce { create(it, "a.jpg", 1_000) }
-        now += 2 * HOUR
-        workspace("fresh").prepareOnce { create(it, "b.jpg", 1_000) }
+    fun `workspaces of finished uploads are removed and living ones kept`() {
+        workspace("finished").prepareOnce { create(it, "a.jpg", 1_000) }
+        workspace("waiting-for-network").prepareOnce { create(it, "b.jpg", 1_000) }
 
-        UploadWorkspace.deleteStale(tempFolder.root, HOUR, now)
+        UploadWorkspace.deleteFinished(tempFolder.root) { it == "waiting-for-network" }
 
-        assertFalse(File(tempFolder.root, "old").exists())
-        assertTrue(File(tempFolder.root, "fresh").exists())
+        assertFalse(File(tempFolder.root, "finished").exists())
+        assertTrue(File(tempFolder.root, "waiting-for-network").exists())
     }
 
     companion object {
         private const val SIZE = 16
-        private const val HOUR = 3_600_000L
     }
 }

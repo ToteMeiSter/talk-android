@@ -11,7 +11,6 @@ import at.bitfire.dav4jvm.exception.HttpException as DavHttpException
 import retrofit2.HttpException as RetrofitHttpException
 import java.io.FileNotFoundException
 import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 /**
  * Decides what an upload does after an error or after WorkManager stopped it.
@@ -24,10 +23,6 @@ object UploadRetryPolicy {
     /** Server errors one upload may hit before it is marked as failed. */
     const val MAX_SERVER_ERRORS = 4
 
-    /** The server removes unfinished chunk uploads after about a day, so an older upload cannot be resumed. */
-    val MAX_UPLOAD_AGE_MS: Long = TimeUnit.HOURS.toMillis(MAX_UPLOAD_AGE_HOURS)
-
-    private const val MAX_UPLOAD_AGE_HOURS = 24L
     private const val MAX_CAUSE_DEPTH = 8
 
     enum class FailureKind { NETWORK, SERVER, OTHER }
@@ -57,11 +52,9 @@ object UploadRetryPolicy {
 
     /**
      * @param serverErrorCount server errors of this upload so far, including the one being decided on
-     * @param ageMs time since the upload was first prepared
      */
-    fun decide(kind: FailureKind, serverErrorCount: Int, ageMs: Long): Decision =
+    fun decide(kind: FailureKind, serverErrorCount: Int): Decision =
         when {
-            ageMs > MAX_UPLOAD_AGE_MS -> Decision.FAIL
             kind == FailureKind.NETWORK -> Decision.RETRY
             kind == FailureKind.SERVER && serverErrorCount < MAX_SERVER_ERRORS -> Decision.RETRY
             else -> Decision.FAIL

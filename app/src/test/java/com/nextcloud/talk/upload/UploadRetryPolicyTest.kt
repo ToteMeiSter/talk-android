@@ -52,31 +52,23 @@ class UploadRetryPolicyTest {
 
     @Test
     fun `network errors never use up attempts`() {
-        assertEquals(Decision.RETRY, UploadRetryPolicy.decide(FailureKind.NETWORK, 0, 0))
-        assertEquals(Decision.RETRY, UploadRetryPolicy.decide(FailureKind.NETWORK, 0, HOUR))
+        assertEquals(Decision.RETRY, UploadRetryPolicy.decide(FailureKind.NETWORK, 0))
     }
 
     @Test
     fun `server errors are retried until the limit`() {
         for (count in 1 until UploadRetryPolicy.MAX_SERVER_ERRORS) {
-            assertEquals(Decision.RETRY, UploadRetryPolicy.decide(FailureKind.SERVER, count, 0))
+            assertEquals(Decision.RETRY, UploadRetryPolicy.decide(FailureKind.SERVER, count))
         }
         assertEquals(
             Decision.FAIL,
-            UploadRetryPolicy.decide(FailureKind.SERVER, UploadRetryPolicy.MAX_SERVER_ERRORS, 0)
+            UploadRetryPolicy.decide(FailureKind.SERVER, UploadRetryPolicy.MAX_SERVER_ERRORS)
         )
     }
 
     @Test
     fun `other errors fail at once`() {
-        assertEquals(Decision.FAIL, UploadRetryPolicy.decide(FailureKind.OTHER, 0, 0))
-    }
-
-    @Test
-    fun `an upload older than the server keeps its parts fails`() {
-        val tooOld = UploadRetryPolicy.MAX_UPLOAD_AGE_MS + 1
-        assertEquals(Decision.FAIL, UploadRetryPolicy.decide(FailureKind.NETWORK, 0, tooOld))
-        assertEquals(Decision.FAIL, UploadRetryPolicy.decide(FailureKind.SERVER, 1, tooOld))
+        assertEquals(Decision.FAIL, UploadRetryPolicy.decide(FailureKind.OTHER, 0))
     }
 
     @Test
@@ -112,9 +104,5 @@ class UploadRetryPolicyTest {
         systemReasons.forEach {
             assertEquals("reason ", StopAction.KEEP, UploadRetryPolicy.stopAction(it, false))
         }
-    }
-
-    companion object {
-        private const val HOUR = 3_600_000L
     }
 }

@@ -13,14 +13,13 @@ data class PreparedUpload(val file: File, val fileName: String)
 
 /**
  * Holds what one upload needs across runs of its worker: the prepared file (copy of the content uri, compressed
- * media), the number of server errors and the time of the first run.
+ * media) and the number of server errors.
  *
  * The prepared file is created once. Its name, size and modification time stay the same on every run, so the
  * chunk folder on the server, which is keyed by them, stays the same too.
  */
-class UploadWorkspace(private val dir: File, private val clock: () -> Long = System::currentTimeMillis) {
+class UploadWorkspace(private val dir: File) {
 
-    private val createdFile = File(dir, CREATED_FILE)
     private val preparedFile = File(dir, PREPARED_FILE)
     private val serverErrorsFile = File(dir, SERVER_ERRORS_FILE)
 
@@ -32,13 +31,8 @@ class UploadWorkspace(private val dir: File, private val clock: () -> Long = Sys
         stored()?.let { return it }
         resetFiles()
         dir.mkdirs()
-        if (!createdFile.exists()) {
-            write(createdFile, clock().toString())
-        }
         return prepare(dir)?.also { write(preparedFile, "${it.file.absolutePath}\n${it.fileName}") }
     }
-
-    fun ageMs(): Long = (clock() - (readLong(createdFile) ?: clock())).coerceAtLeast(0)
 
     fun serverErrors(): Int = readLong(serverErrorsFile)?.toInt() ?: 0
 
@@ -61,7 +55,7 @@ class UploadWorkspace(private val dir: File, private val clock: () -> Long = Sys
     }
 
     private fun resetFiles() {
-        dir.listFiles()?.filter { it.name != CREATED_FILE && it.name != SERVER_ERRORS_FILE }?.forEach {
+        dir.listFiles()?.filter { it.name != SERVER_ERRORS_FILE }?.forEach {
             it.deleteRecursively()
         }
     }
@@ -75,20 +69,16 @@ class UploadWorkspace(private val dir: File, private val clock: () -> Long = Sys
     }
 
     companion object {
-        private const val CREATED_FILE = "created"
         private const val PREPARED_FILE = "prepared"
         private const val SERVER_ERRORS_FILE = "server_errors"
         private const val TMP_SUFFIX = ".tmp"
 
-        /** Removes workspaces whose upload is older than [maxAgeMs], e.g. left behind by a killed process. */
-        fun deleteStale(root: File, maxAgeMs: Long, now: Long = System.currentTimeMillis()) {
-            root.listFiles()?.filter { it.isDirectory }?.forEach { dir ->
-                val created = runCatching { File(dir, CREATED_FILE).readText().trim().toLong() }
-                    .getOrDefault(dir.lastModified())
-                if (now - created > maxAgeMs) {
-                    dir.deleteRecursively()
-                }
-            }
+        /**
+         * Removes the workspaces of uploads that are no longer alive, e.g. left behind by a killed process.
+         * [isAlive] gets the name of a workspace directory, which is the id of its work.
+         */
+        fun deleteFinished(root: File, isAlive: (String) -> Boolean) {
+            root.listFiles()?.filter { it.isDirectory && !isAlive(it.name) }?.forEach { it.deleteRecursively() }
         }
     }
 }

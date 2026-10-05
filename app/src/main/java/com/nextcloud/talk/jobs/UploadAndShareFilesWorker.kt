@@ -181,7 +181,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
             val sourceFileUri = sourceFile.toUri()
             fileName = FileUtils.getFileName(sourceFileUri, context)
-            UploadWorkspace.deleteStale(File(context.cacheDir, WORKSPACE_DIR), UploadRetryPolicy.MAX_UPLOAD_AGE_MS)
+            deleteFinishedWorkspaces()
             startForeground()
 
             val prepared = workspace.prepareOnce { dir -> prepareFile(sourceFileUri, dir) }
@@ -245,7 +245,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         } else {
             workspace.serverErrors()
         }
-        return when (UploadRetryPolicy.decide(kind, serverErrors, workspace.ageMs())) {
+        return when (UploadRetryPolicy.decide(kind, serverErrors)) {
             UploadRetryPolicy.Decision.RETRY -> {
                 Log.w(TAG, "Upload interrupted ($kind, server errors: $serverErrors), will resume", e)
                 keepWorkspace = true
@@ -310,7 +310,22 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         return compressed ?: PreparedUpload(original, fileName)
     }
 
+    // A work that WorkManager does not know, or knows as finished, cannot resume, so its workspace is garbage.
+    @Suppress("Detekt.TooGenericExceptionCaught")
+    private fun deleteFinishedWorkspaces() {
+        UploadWorkspace.deleteFinished(File(context.cacheDir, WORKSPACE_DIR)) { name ->
+            try {
+                val info = WorkManager.getInstance(context).getWorkInfoById(UUID.fromString(name)).get()
+                info != null && !info.state.isFinished
+            } catch (e: Exception) {
+                Log.w(TAG, "Could not look up work $name, keeping its files", e)
+                true
+            }
+        }
+    }
+
     private fun failUpload(): Result {
+        chunkedFileUploader?.abortUpload {}
         showFailedToUploadNotification()
         updatePlaceholderStatus(SendStatus.FAILED)
         return Result.failure()
@@ -652,7 +667,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                         .build()
                 )
                 .setBackoffCriteria(
-                    BackoffPolicy.EXPONENTIAL,
+                    BackoffPolicy.LINEAR,
                     WorkRequest.MIN_BACKOFF_MILLIS,
                     TimeUnit.MILLISECONDS
                 )

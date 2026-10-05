@@ -49,6 +49,7 @@ class ChunkedFileUploaderResumeTest {
     /** Parts the fake server already holds: name -> size. */
     private var partsOnServer: Map<String, Int> = emptyMap()
     private var putResponseCode = CREATED
+    private var propfindResponseCode: Int? = null
 
     @Before
     fun setUp() {
@@ -56,7 +57,8 @@ class ChunkedFileUploaderResumeTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 requests.add(request)
                 return when (request.method) {
-                    "PROPFIND" -> propfindResponse(request.path!!)
+                    "PROPFIND" -> propfindResponseCode?.let { MockResponse().setResponseCode(it) }
+                        ?: propfindResponse(request.path!!)
                     "PUT" -> MockResponse().setResponseCode(putResponseCode)
                     "MKCOL" -> MockResponse().setResponseCode(METHOD_NOT_ALLOWED)
                     else -> MockResponse().setResponseCode(CREATED)
@@ -96,6 +98,15 @@ class ChunkedFileUploaderResumeTest {
 
     @Test
     fun `uploads everything when the server has no parts`() {
+        assertTrue(uploader.upload(file, null, "/Talk/video.mp4"))
+
+        assertEquals(listOf("/$PART_0", "/$PART_1", "/$PART_2"), putPaths())
+    }
+
+    @Test
+    fun `uploads from scratch when the server removed the upload folder`() {
+        propfindResponseCode = NOT_FOUND
+
         assertTrue(uploader.upload(file, null, "/Talk/video.mp4"))
 
         assertEquals(listOf("/$PART_0", "/$PART_1", "/$PART_2"), putPaths())
@@ -242,6 +253,7 @@ class ChunkedFileUploaderResumeTest {
         private const val CREATED = 201
         private const val MULTI_STATUS = 207
         private const val METHOD_NOT_ALLOWED = 405
+        private const val NOT_FOUND = 404
         private const val SERVER_ERROR = 500
     }
 }
