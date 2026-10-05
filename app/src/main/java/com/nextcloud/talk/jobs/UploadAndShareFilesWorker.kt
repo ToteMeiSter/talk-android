@@ -80,7 +80,9 @@ import java.io.File
 import java.io.IOException
 import java.net.HttpURLConnection
 import java.util.UUID
+import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import javax.inject.Inject
 
@@ -136,13 +138,22 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     private var keepWorkspace = false
     private val notificationId = id.hashCode()
 
+    @Volatile
+    private var cancelSeen = false
+
     /**
      * The user cancelled this upload. The cancel is a flag file in the workspace, not a cancellation in
      * WorkManager: a cancelled work left in the queue of the conversation makes the APPEND_OR_REPLACE of the next
      * upload delete the other, still living works of that queue. The worker looks at the flag at the start, between
      * its stages and in the progress callback, and then aborts itself, see [cancelledResult].
+     * Once seen, the cancel is latched: doWork() deletes the workspace, and onStopped() can still come after that.
      */
-    private fun isCancelled(): Boolean = ::workspace.isInitialized && workspace.isCancelled()
+    private fun isCancelled(): Boolean {
+        if (::workspace.isInitialized && workspace.isCancelled()) {
+            cancelSeen = true
+        }
+        return cancelSeen
+    }
 
     override fun doWork(): Result {
         // Invariant: dependencies that are already set (a test worker factory) are not overwritten.
@@ -164,6 +175,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 if (result != Result.retry() && sourceFile != null) UploadSourceGrants.release(context, sourceFile, id)
             }
         } finally {
+            isCancelled() // latches a cancel that came after the last check, before its workspace is deleted
             if (!keepWorkspace) {
                 workspace.delete()
             }
@@ -750,13 +762,19 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
     /**
      * WorkManager runs this inside a coroutine cancellation handler: an exception thrown here crashes the process,
-     * and a network call blocks WorkManager's own thread. So it only interrupts the upload and keeps the parts on
-     * the server, so the next run resumes. The user's cancel does not come here, see [isCancelled].
+     * and a network call blocks WorkManager's own thread. The user's cancel removes the parts from the server; any
+     * other stop (the network is gone, the system stops the work) only interrupts the upload and keeps them, so
+     * the next run uploads what is still missing. The cancel may have arrived after doWork() deleted its workspace,
+     * which the latch in [isCancelled] covers.
      */
     @Suppress("Detekt.TooGenericExceptionCaught")
     override fun onStopped() {
         try {
-            chunkedFileUploader?.stop()
+            if (isCancelled()) {
+                chunkedFileUploader?.abortUpload {}
+            } else {
+                chunkedFileUploader?.stop()
+            }
             uploadDisposable?.dispose()
             uploadLatch?.countDown()
         } catch (e: Exception) {
