@@ -396,6 +396,7 @@ class ChunkedFileUploader(
     /**
      * Interrupts a running [upload] and removes its parts from the server. Same contract as [stop]: never throws.
      */
+    @Suppress("Detekt.TooGenericExceptionCaught")
     fun abortUpload(onSuccess: () -> Unit) {
         stop()
         val client = okHttpClientNoRedirects
@@ -414,9 +415,7 @@ class ChunkedFileUploader(
         } catch (e: NotFoundException) {
             Log.i(TAG, "Chunk upload folder could not be found", e)
             onSuccess()
-        } catch (e: DavException) {
-            Log.w(TAG, "Failed to remove chunk upload folder", e)
-        } catch (e: IOException) {
+        } catch (e: Exception) {
             Log.w(TAG, "Failed to remove chunk upload folder", e)
         }
     }
