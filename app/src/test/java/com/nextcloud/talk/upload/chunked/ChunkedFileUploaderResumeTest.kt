@@ -238,6 +238,74 @@ class ChunkedFileUploaderResumeTest {
     }
 
     @Test
+    fun `an assembly rejected after an earlier restart is an error at once`() {
+        moveResponseCodes.add(BAD_REQUEST)
+        var marked = 0
+        val restarted = ChunkedFileUploader(
+            client,
+            user,
+            mock<OnDataTransferProgressListener>(),
+            mock<NcApiCoroutines>(),
+            isRestarted = { true },
+            markRestarted = { marked++ }
+        )
+
+        try {
+            restarted.upload(file, null, "/Talk/video.mp4")
+            fail("expected the upload to throw")
+        } catch (e: HttpException) {
+            assertEquals(BAD_REQUEST, e.code)
+        }
+        assertEquals(0, requests.count { it.method == "DELETE" })
+        assertEquals(0, marked)
+    }
+
+    @Test
+    fun `a restart after a rejected assembly is reported once`() {
+        moveResponseCodes.add(BAD_REQUEST)
+        var marked = 0
+        val first = ChunkedFileUploader(
+            client,
+            user,
+            mock<OnDataTransferProgressListener>(),
+            mock<NcApiCoroutines>(),
+            markRestarted = { marked++ }
+        )
+
+        assertTrue(first.upload(file, null, "/Talk/video.mp4"))
+
+        assertEquals(1, marked)
+    }
+
+    @Test
+    fun `a server error while listing the parts is an error`() {
+        propfindResponseCode = SERVER_ERROR
+
+        try {
+            uploader.upload(file, null, "/Talk/video.mp4")
+            fail("expected the upload to throw")
+        } catch (e: HttpException) {
+            assertEquals(SERVER_ERROR, e.code)
+        }
+        assertEquals(emptyList<String>(), putPaths())
+    }
+
+    @Test
+    fun `an uploaded file is removed from the server`() {
+        uploader.deleteUploadedFile("/Talk/video.mp4")
+
+        val delete = requests.single { it.method == "DELETE" }
+        assertTrue(delete.path!!.endsWith("/files/alice/Talk/video.mp4"))
+    }
+
+    @Test
+    fun `removing an uploaded file never throws`() {
+        server.shutdown()
+
+        uploader.deleteUploadedFile("/Talk/video.mp4")
+    }
+
+    @Test
     fun `an assembly rejected twice is an error`() {
         moveResponseCodes.addAll(listOf(BAD_REQUEST, BAD_REQUEST))
 

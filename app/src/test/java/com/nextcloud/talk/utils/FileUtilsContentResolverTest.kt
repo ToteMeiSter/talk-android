@@ -96,20 +96,18 @@ class FileUtilsContentResolverTest {
     }
 
     @Test
-    fun `copyFileToCache returns null when the size differs from the one the provider reports`() {
+    fun `copyFileToCache keeps a complete copy whose size differs from the one the provider reports`() {
         val context = contextWithStream(ByteArray(COPY_SIZE), reportedSize = COPY_SIZE * 2L)
 
-        assertNull(FileUtils.copyFileToCache(context, contentUri, "photo.jpg", tempFolder.root))
-        assertFalse(java.io.File(tempFolder.root, "photo.jpg").exists())
+        val copy = FileUtils.copyFileToCache(context, contentUri, "photo.jpg", tempFolder.root)
+
+        assertEquals(COPY_SIZE.toLong(), copy!!.length())
     }
 
     @Test
-    fun `a copy is complete when it is not empty and matches a known size`() {
-        assertTrue(FileUtils.isCompleteCopy(10, null))
-        assertTrue(FileUtils.isCompleteCopy(10, 10))
-        assertTrue(FileUtils.isCompleteCopy(10, -1))
-        assertFalse(FileUtils.isCompleteCopy(0, null))
-        assertFalse(FileUtils.isCompleteCopy(10, 20))
+    fun `a copy is complete when it is not empty`() {
+        assertTrue(FileUtils.isCompleteCopy(10))
+        assertFalse(FileUtils.isCompleteCopy(0))
     }
 
     private fun contextWithStream(bytes: ByteArray, reportedSize: Long? = null): Context {

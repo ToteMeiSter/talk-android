@@ -9,9 +9,15 @@ package com.nextcloud.talk.upload
 import at.bitfire.dav4jvm.exception.HttpException as DavHttpException
 import com.nextcloud.talk.upload.UploadRetryPolicy.Decision
 import com.nextcloud.talk.upload.UploadRetryPolicy.FailureKind
+import android.app.Application
+import android.system.ErrnoException
+import android.system.OsConstants
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import retrofit2.HttpException as RetrofitHttpException
 import retrofit2.Response
 import java.io.FileNotFoundException
@@ -19,10 +25,15 @@ import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.net.UnknownServiceException
+import java.security.cert.CertPathValidatorException
+import java.security.cert.CertificateExpiredException
+import javax.net.ssl.SSLException
 import javax.net.ssl.SSLHandshakeException
 import javax.net.ssl.SSLPeerUnverifiedException
 
 @Suppress("TooManyFunctions")
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class, sdk = [33])
 class UploadRetryPolicyTest {
 
     @Test
@@ -76,11 +87,45 @@ class UploadRetryPolicyTest {
     }
 
     @Test
-    fun `tls problems count against the limit`() {
-        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(SSLHandshakeException("bad certificate")))
+    fun `certificate problems count against the limit`() {
         assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(SSLPeerUnverifiedException("who")))
         assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(UnknownServiceException("cleartext")))
-        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(RuntimeException(SSLHandshakeException("x"))))
+        val untrusted = SSLHandshakeException("bad certificate").apply {
+            initCause(CertPathValidatorException("trust anchor not found"))
+        }
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(untrusted))
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(RuntimeException(untrusted)))
+        val expired = SSLHandshakeException("expired").apply { initCause(CertificateExpiredException()) }
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(expired))
+    }
+
+    @Test
+    fun `a connection that drops inside TLS is a network error`() {
+        val reset = SSLException("Read error: ssl=0x1: I/O error during system call, Connection reset by peer")
+        assertEquals(FailureKind.NETWORK, UploadRetryPolicy.classify(reset))
+        assertEquals(FailureKind.NETWORK, UploadRetryPolicy.classify(SSLException("Write error: Broken pipe")))
+        assertEquals(
+            FailureKind.NETWORK,
+            UploadRetryPolicy.classify(SSLHandshakeException("Connection closed by peer"))
+        )
+        assertEquals(FailureKind.NETWORK, UploadRetryPolicy.classify(RuntimeException(reset)))
+    }
+
+    @Test
+    fun `a full or read only disk fails the preparation at once`() {
+        val full = IOException("write failed: ENOSPC", ErrnoException("write", OsConstants.ENOSPC))
+        val readOnly = IOException("open failed: EROFS", ErrnoException("open", OsConstants.EROFS))
+        assertEquals(FailureKind.OTHER, UploadRetryPolicy.classifyPreparation(full))
+        assertEquals(FailureKind.OTHER, UploadRetryPolicy.classifyPreparation(readOnly))
+        assertEquals(FailureKind.OTHER, UploadRetryPolicy.classifyPreparation(FileNotFoundException()))
+    }
+
+    @Test
+    fun `other IO errors while preparing are waited for`() {
+        assertEquals(FailureKind.NETWORK, UploadRetryPolicy.classifyPreparation(IOException("stream closed")))
+        assertEquals(FailureKind.NETWORK, UploadRetryPolicy.classifyPreparation(SocketTimeoutException()))
+        val brokenPipe = IOException("write failed", ErrnoException("write", OsConstants.EPIPE))
+        assertEquals(FailureKind.NETWORK, UploadRetryPolicy.classifyPreparation(brokenPipe))
     }
 
     @Test

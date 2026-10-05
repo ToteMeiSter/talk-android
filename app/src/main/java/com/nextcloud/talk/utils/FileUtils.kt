@@ -215,12 +215,18 @@ object FileUtils {
                 Log.w(TAG, "no longer permitted to read $sourceFileUri", e)
             }
         }
-        return copied && isCompleteCopy(target.length(), querySize(context, sourceFileUri))
+        if (copied) {
+            // The size a provider reports is not reliable (transcoding, cloud providers), so it is only logged.
+            val reported = querySize(context, sourceFileUri)
+            if (reported != null && reported > 0 && reported != target.length()) {
+                Log.w(TAG, "copy of $sourceFileUri has ${target.length()} bytes, the provider reports $reported")
+            }
+        }
+        return copied && isCompleteCopy(target.length())
     }
 
-    /** An empty copy, or one of another size than the source reports, is a broken copy. */
-    internal fun isCompleteCopy(copiedLength: Long, sourceSize: Long?): Boolean =
-        copiedLength > 0 && (sourceSize == null || sourceSize <= 0 || sourceSize == copiedLength)
+    /** An empty copy is a broken copy; a stream that broke off throws and never gets here. */
+    internal fun isCompleteCopy(copiedLength: Long): Boolean = copiedLength > 0
 
     private fun querySize(context: Context, uri: Uri): Long? =
         try {

@@ -37,6 +37,7 @@ import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.FileUtils
 import com.nextcloud.talk.utils.Mimetype
 import okhttp3.Dispatcher
+import okhttp3.HttpUrl.Companion.toHttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType
 import okhttp3.OkHttpClient
@@ -54,7 +55,9 @@ class ChunkedFileUploader(
     okHttpClient: OkHttpClient,
     val currentUser: User,
     val listener: OnDataTransferProgressListener,
-    val ncApiCoroutines: NcApiCoroutines
+    val ncApiCoroutines: NcApiCoroutines,
+    private val isRestarted: () -> Boolean = { false },
+    private val markRestarted: () -> Unit = {}
 ) {
 
     private var okHttpClientNoRedirects: OkHttpClient? = null
@@ -63,7 +66,6 @@ class ChunkedFileUploader(
 
     @Volatile
     private var isUploadAborted = false
-    private var restartedAfterRejectedAssembly = false
 
     init {
         initHttpClient(okHttpClient, currentUser)
@@ -83,12 +85,12 @@ class ChunkedFileUploader(
             uploadParts(localFile, mimeType, targetPath)
         } catch (e: HttpException) {
             // The server refused the assembly (e.g. the length does not match its parts): the parts it holds are
-            // not usable, so remove them once and send the file again.
-            if (e.code != HTTP_BAD_REQUEST || restartedAfterRejectedAssembly) {
+            // not usable, so remove them once per upload (the worker remembers it) and send the file again.
+            if (e.code != HTTP_BAD_REQUEST || isRestarted()) {
                 throw e
             }
             Log.w(TAG, "Server rejected the assembly, uploading the file again", e)
-            restartedAfterRejectedAssembly = true
+            markRestarted()
             deleteUploadFolder()
             uploadParts(localFile, mimeType, targetPath)
         }
@@ -173,6 +175,9 @@ class ChunkedFileUploader(
                 Unit
             }
         } catch (e: DavException) {
+            if (e is HttpException && e.code >= HTTP_SERVER_ERROR) {
+                throw e
+            }
             // An IOException is not caught on purpose: a lost network must repeat the request,
             // not send the whole file again.
             // PROPFIND on Nextcloud chunked-upload folders can return unexpected responses
@@ -424,6 +429,22 @@ class ChunkedFileUploader(
         abortUpload(onSuccess)
     }
 
+    /**
+     * Removes a file this uploader or an earlier run assembled on the server, e.g. when the user cancelled after
+     * the upload and before the share. Never throws, like [abortUpload].
+     */
+    @Suppress("Detekt.TooGenericExceptionCaught")
+    fun deleteUploadedFile(targetPath: String) {
+        try {
+            val url = ApiUtils.getUrlForFileUpload(currentUser.baseUrl!!, currentUser.userId!!, targetPath)
+            DavResource(okHttpClientNoRedirects!!, url.toHttpUrl()).delete { _ -> }
+        } catch (e: NotFoundException) {
+            Log.i(TAG, "Uploaded file is already gone", e)
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to remove the uploaded file", e)
+        }
+    }
+
     private fun deleteUploadFolder() {
         try {
             DavResource(okHttpClientNoRedirects!!, uploadFolderUri.toHttpUrlOrNull()!!).delete { _ -> }
@@ -507,6 +528,7 @@ class ChunkedFileUploader(
         private const val CHUNK_SIZE: Long = 1024000
         private const val METHOD_NOT_ALLOWED_CODE: Int = 405
         private const val HTTP_BAD_REQUEST: Int = 400
+        private const val HTTP_SERVER_ERROR: Int = 500
         private const val CHUNK_NUMBER_LENGTH = 16
         private val CHUNK_NAME_REGEX = Regex("^\\d{16}-\\d{16}$")
         private const val TOTAL_LENGTH_HEADER = "OC-Total-Length"

@@ -156,12 +156,29 @@ class UploadWorkspaceTest {
         assertNull(ws.uploadedPath())
         assertFalse(ws.isShared())
 
-        ws.markUploaded("/Talk/video.mp4")
+        ws.markUploaded("/Talk/video.mp4", "video_compressed.mp4")
         assertEquals("/Talk/video.mp4", workspace().uploadedPath())
+        assertEquals("video_compressed.mp4", workspace().uploadedName())
         assertFalse(workspace().isShared())
 
         ws.markShared()
         assertTrue(workspace().isShared())
+    }
+
+    @Test
+    fun `the stages survive a new preparation after the prepared file is gone`() {
+        val ws = workspace()
+        val prepared = ws.prepareOnce { create(it, "a.jpg", 1_000) }!!
+        ws.markUploaded("/Talk/a.jpg", "a.jpg")
+        ws.markShared()
+        ws.markRestarted()
+        prepared.file.delete()
+
+        workspace().prepareOnce { create(it, "a.jpg", 2_000) }
+
+        assertEquals("/Talk/a.jpg", workspace().uploadedPath())
+        assertTrue(workspace().isShared())
+        assertTrue(workspace().isRestarted())
     }
 
     @Test

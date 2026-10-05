@@ -34,6 +34,7 @@ class UploadWorkspace(private val dir: File) {
     private val cancelledFile = File(dir, CANCELLED_FILE)
     private val uploadIdFile = File(dir, UPLOAD_ID_FILE)
     private val lockFile = File(dir, LOCK_FILE)
+    private val restartedFile = File(dir, RESTARTED_FILE)
 
     private var lockChannel: RandomAccessFile? = null
     private var lock: FileLock? = null
@@ -41,6 +42,9 @@ class UploadWorkspace(private val dir: File) {
     /**
      * Takes the lock of this workspace. WorkManager does not interrupt a worker thread it stopped, so the old run
      * can still be busy when a new run of the same work starts. Returns false when somebody else holds the lock.
+     *
+     * The lock protects only inside this process: within one process a [FileLock] is refused with
+     * [OverlappingFileLockException], and that is what this relies on. Do not rely on it between processes.
      */
     @Synchronized
     fun tryLock(): Boolean {
@@ -100,11 +104,24 @@ class UploadWorkspace(private val dir: File) {
     fun prepared(): PreparedUpload? = stored()
 
     /** The path on the server the file was uploaded to, or null while the upload is not complete. */
-    fun uploadedPath(): String? = runCatching { uploadedFile.readText() }.getOrNull()?.takeIf { it.isNotEmpty() }
+    fun uploadedPath(): String? = uploadedLines()?.getOrNull(0)?.takeIf { it.isNotEmpty() }
 
-    fun markUploaded(path: String) {
+    /** The name the uploaded file was shared under, kept because the prepared file may be gone by then. */
+    fun uploadedName(): String? = uploadedLines()?.getOrNull(1)?.takeIf { it.isNotEmpty() }
+
+    fun markUploaded(path: String, fileName: String) {
         dir.mkdirs()
-        write(uploadedFile, path)
+        write(uploadedFile, "$path\n$fileName")
+    }
+
+    private fun uploadedLines(): List<String>? = runCatching { uploadedFile.readLines() }.getOrNull()
+
+    /** Whether the parts were already removed once after the server rejected the assembly. */
+    fun isRestarted(): Boolean = restartedFile.exists()
+
+    fun markRestarted() {
+        dir.mkdirs()
+        write(restartedFile, "1")
     }
 
     fun isShared(): Boolean = sharedFile.exists()
@@ -165,10 +182,19 @@ class UploadWorkspace(private val dir: File) {
         private const val CANCELLED_FILE = "cancelled"
         private const val UPLOAD_ID_FILE = "upload_id"
         private const val LOCK_FILE = "lock"
+        private const val RESTARTED_FILE = "restarted"
         private const val TMP_SUFFIX = ".tmp"
 
         /** Not part of the prepared file: survive a new preparation. */
-        private val KEPT_FILES = setOf(SERVER_ERRORS_FILE, CANCELLED_FILE, LOCK_FILE, UPLOAD_ID_FILE)
+        private val KEPT_FILES = setOf(
+            SERVER_ERRORS_FILE,
+            CANCELLED_FILE,
+            LOCK_FILE,
+            UPLOAD_ID_FILE,
+            UPLOADED_FILE,
+            SHARED_FILE,
+            RESTARTED_FILE
+        )
 
         /**
          * Removes the workspaces of uploads that are no longer alive, e.g. left behind by a killed process.

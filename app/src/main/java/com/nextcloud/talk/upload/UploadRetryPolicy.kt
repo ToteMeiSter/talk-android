@@ -6,12 +6,18 @@
  */
 package com.nextcloud.talk.upload
 
+import android.system.ErrnoException
+import android.system.OsConstants
 import at.bitfire.dav4jvm.exception.HttpException as DavHttpException
 import retrofit2.HttpException as RetrofitHttpException
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.net.UnknownServiceException
+import java.security.cert.CertPathValidatorException
+import java.security.cert.CertificateException
 import javax.net.ssl.SSLException
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLPeerUnverifiedException
 
 /**
  * Decides what an upload does after an error or after WorkManager stopped it.
@@ -43,29 +49,41 @@ object UploadRetryPolicy {
      * Looks through the whole chain of causes, because RxJava wraps a checked [IOException] in a RuntimeException.
      * An HTTP error wins over everything else. Errors of an overloaded or restarting server (5xx except 507, 408,
      * 429) are treated like a lost network: the upload waits and goes on without a limit. Other HTTP errors and
-     * TLS problems count against [MAX_SERVER_ERRORS].
+     * certificate problems count against [MAX_SERVER_ERRORS]. Any other [SSLException] is a network error: on
+     * Android a connection that drops in the middle of an HTTPS transfer arrives as an SSLException.
      */
     fun classify(error: Throwable): FailureKind {
-        var httpCode: Int? = null
-        var tlsProblem = false
-        var ioProblem = false
-        var cause: Throwable? = error
-        var depth = 0
-        while (cause != null && depth < MAX_CAUSE_DEPTH) {
-            if (httpCode == null) {
-                httpCode = httpCodeOf(cause)
-            }
-            tlsProblem = tlsProblem || cause is SSLException || cause is UnknownServiceException
-            ioProblem = ioProblem || (cause is IOException && cause !is FileNotFoundException)
-            cause = cause.cause
-            depth++
-        }
+        val causes = causeChain(error)
+        val httpCode = causes.firstNotNullOfOrNull(::httpCodeOf)
         return when {
             httpCode != null -> if (isTransientHttpCode(httpCode)) FailureKind.NETWORK else FailureKind.SERVER
-            tlsProblem -> FailureKind.SERVER
-            ioProblem -> FailureKind.NETWORK
+            isCertificateProblem(causes) -> FailureKind.SERVER
+            causes.any { it is IOException && it !is FileNotFoundException } -> FailureKind.NETWORK
             else -> FailureKind.OTHER
         }
+    }
+
+    private fun causeChain(error: Throwable): List<Throwable> =
+        generateSequence(error) { it.cause }.take(MAX_CAUSE_DEPTH).toList()
+
+    private fun isCertificateProblem(causes: List<Throwable>): Boolean =
+        causes.any { it is SSLPeerUnverifiedException || it is UnknownServiceException } ||
+            (
+                causes.any { it is SSLHandshakeException } &&
+                    causes.any { it is CertificateException || it is CertPathValidatorException }
+                )
+
+    /**
+     * Like [classify], for an error while the file is prepared (copy, compression). A full or read-only disk and
+     * a file that cannot be read do not go away by waiting, so they are OTHER; any other IOException, e.g. a lost
+     * network while a cloud provider streams the file, is waited for.
+     */
+    fun classifyPreparation(error: Throwable): FailureKind =
+        if (causeChain(error).any(::isUnrecoverableLocal)) FailureKind.OTHER else classify(error)
+
+    private fun isUnrecoverableLocal(error: Throwable): Boolean {
+        val errno = (error as? ErrnoException)?.errno
+        return error is FileNotFoundException || errno == OsConstants.ENOSPC || errno == OsConstants.EROFS
     }
 
     private fun httpCodeOf(error: Throwable): Int? =
