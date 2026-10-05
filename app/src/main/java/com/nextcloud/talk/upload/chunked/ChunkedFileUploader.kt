@@ -16,6 +16,7 @@ import at.bitfire.dav4jvm.exception.DavException
 import at.bitfire.dav4jvm.exception.HttpException
 import at.bitfire.dav4jvm.exception.NotFoundException
 import at.bitfire.dav4jvm.property.DisplayName
+import at.bitfire.dav4jvm.property.GetContentLength
 import at.bitfire.dav4jvm.property.GetContentType
 import at.bitfire.dav4jvm.property.GetLastModified
 import at.bitfire.dav4jvm.property.ResourceType
@@ -64,40 +65,40 @@ class ChunkedFileUploader(
         remoteChunkUrl = ApiUtils.getUrlForChunkedUpload(currentUser.baseUrl!!, currentUser.userId!!)
     }
 
-    @Suppress("Detekt.TooGenericExceptionCaught")
+    /**
+     * Uploads the parts of [localFile] that the server does not have yet, then assembles them into [targetPath].
+     * The upload folder on the server is keyed by the file, so a repeated call resumes a previous one.
+     *
+     * @return true when the file was assembled, false when the upload was stopped or aborted
+     * @throws Exception when a request fails; the parts already on the server are kept
+     */
     fun upload(localFile: File, mimeType: MediaType?, targetPath: String): Boolean {
-        try {
-            var isUploadSuccessful = true
-            uploadFolderUri = remoteChunkUrl + "/" + FileUtils.md5Sum(localFile)
-            val davResource = DavResource(
-                okHttpClientNoRedirects!!,
-                uploadFolderUri.toHttpUrlOrNull()!!
-            )
+        uploadFolderUri = remoteChunkUrl + "/" + FileUtils.md5Sum(localFile)
+        val davResource = DavResource(
+            okHttpClientNoRedirects!!,
+            uploadFolderUri.toHttpUrlOrNull()!!
+        )
 
-            createFolder(davResource)
+        createFolder(davResource)
 
-            val chunksOnServer: MutableList<Chunk> = getUploadedChunks(davResource, uploadFolderUri)
-            Log.d(TAG, "chunksOnServer: " + chunksOnServer.size)
+        val chunksOnServer: MutableList<Chunk> = getUploadedChunks(davResource, uploadFolderUri, localFile.length())
+        Log.d(TAG, "chunksOnServer: " + chunksOnServer.size)
 
-            val missingChunks: List<Chunk> = checkMissingChunks(chunksOnServer, localFile.length())
-            Log.d(TAG, "missingChunks: " + missingChunks.size)
+        val missingChunks: List<Chunk> = checkMissingChunks(chunksOnServer, localFile.length())
+        Log.d(TAG, "missingChunks: " + missingChunks.size)
 
-            for (missingChunk in missingChunks) {
-                if (isUploadAborted) {
-                    isUploadSuccessful = false
-                    break
-                }
-                uploadChunk(localFile, uploadFolderUri, mimeType, missingChunk, missingChunk.length())
+        for (missingChunk in missingChunks) {
+            if (isUploadAborted) {
+                break
             }
-
-            if (isUploadSuccessful) {
-                assembleChunks(uploadFolderUri, targetPath)
-            }
-            return isUploadSuccessful
-        } catch (e: Exception) {
-            Log.e(TAG, "Something went wrong in ChunkedFileUploader", e)
-            return false
+            uploadChunk(localFile, uploadFolderUri, mimeType, missingChunk, missingChunk.length())
         }
+
+        val isComplete = !isUploadAborted
+        if (isComplete) {
+            assembleChunks(uploadFolderUri, targetPath, localFile.length())
+        }
+        return isComplete
     }
 
     @Suppress("Detekt.ThrowsCount")
@@ -123,14 +124,21 @@ class ChunkedFileUploader(
     }
 
     @Suppress("Detekt.ComplexMethod", "Detekt.ReturnCount")
-    private fun getUploadedChunks(davResource: DavResource, uploadFolderUri: String): MutableList<Chunk> {
+    private fun getUploadedChunks(
+        davResource: DavResource,
+        uploadFolderUri: String,
+        fileLength: Long
+    ): MutableList<Chunk> {
         val davResponse = DavResponse()
         val memberElements: MutableList<at.bitfire.dav4jvm.Response> = ArrayList()
         val rootElement = arrayOfNulls<at.bitfire.dav4jvm.Response>(1)
         val remoteFiles: MutableList<RemoteFileBrowserItem> = ArrayList()
         try {
             davResource.propfind(
-                1
+                1,
+                ResourceType.NAME,
+                GetContentLength.NAME,
+                DisplayName.NAME
             ) { response: at.bitfire.dav4jvm.Response, hrefRelation: at.bitfire.dav4jvm.Response.HrefRelation? ->
                 davResponse.setResponse(response)
                 when (hrefRelation) {
@@ -166,20 +174,29 @@ class ChunkedFileUploader(
         val chunksOnServer: MutableList<Chunk> = ArrayList()
 
         for (remoteFile in remoteFiles) {
-            if (!".file".equals(remoteFile.displayName, ignoreCase = true) && remoteFile.isFile) {
-                val part: List<String> = remoteFile.displayName!!.split("-")
-                chunksOnServer.add(
-                    Chunk(
-                        part[0].toLong(),
-                        part[1].toLong()
-                    )
-                )
+            if (remoteFile.isFile) {
+                parseUploadedChunk(remoteFile.displayName, remoteFile.size, fileLength)?.let { chunksOnServer.add(it) }
             }
         }
         return chunksOnServer
     }
 
-    private fun checkMissingChunks(chunks: List<Chunk>, length: Long): List<Chunk> {
+    /**
+     * Returns the part a file on the server stands for, or null when it is not a part (e.g. `.file`), or its size
+     * differs from what its name says, so it has to be uploaded again. The last part is named one byte longer than
+     * its content.
+     */
+    internal fun parseUploadedChunk(name: String?, size: Long?, fileLength: Long): Chunk? {
+        if (name == null || !CHUNK_NAME_REGEX.matches(name)) {
+            return null
+        }
+        val chunk =
+            Chunk(name.substring(0, CHUNK_NUMBER_LENGTH).toLong(), name.substring(CHUNK_NUMBER_LENGTH + 1).toLong())
+        val expectedSize = minOf(chunk.length(), fileLength - chunk.start)
+        return if (size == expectedSize) chunk else null
+    }
+
+    internal fun checkMissingChunks(chunks: List<Chunk>, length: Long): List<Chunk> {
         val missingChunks: MutableList<Chunk> = java.util.ArrayList()
         var start: Long = 0
         while (start <= length) {
@@ -295,7 +312,7 @@ class ChunkedFileUploader(
         this.okHttpClientNoRedirects = builder.build()
     }
 
-    private fun assembleChunks(uploadFolderUri: String, targetPath: String) {
+    private fun assembleChunks(uploadFolderUri: String, targetPath: String, totalLength: Long) {
         val destinationUri = ApiUtils.getUrlForFileUpload(
             currentUser.baseUrl!!,
             currentUser.userId!!,
@@ -305,8 +322,13 @@ class ChunkedFileUploader(
         createRemoteFolder(targetPath)
         val originUri = "$uploadFolderUri/.file"
 
+        val client = okHttpClientNoRedirects!!.newBuilder()
+            .addInterceptor { chain ->
+                chain.proceed(chain.request().newBuilder().header(TOTAL_LENGTH_HEADER, totalLength.toString()).build())
+            }
+            .build()
         DavResource(
-            okHttpClientNoRedirects!!,
+            client,
             originUri.toHttpUrlOrNull()!!
         ).move(
             destinationUri.toHttpUrlOrNull()!!,
@@ -336,11 +358,20 @@ class ChunkedFileUploader(
     }
 
     /**
+     * Interrupts a running [upload] without touching the parts on the server, so a later [upload] can resume.
      * Called from the worker's onStopped, which WorkManager runs inside a coroutine cancellation handler:
      * anything thrown here crashes the process, so this function must never throw.
      */
-    fun abortUpload(onSuccess: () -> Unit) {
+    fun stop() {
         isUploadAborted = true
+        okHttpClientNoRedirects?.dispatcher?.cancelAll()
+    }
+
+    /**
+     * Interrupts a running [upload] and removes its parts from the server. Same contract as [stop]: never throws.
+     */
+    fun abortUpload(onSuccess: () -> Unit) {
+        stop()
         val client = okHttpClientNoRedirects
         val folderUrl = uploadFolderUri.toHttpUrlOrNull()
         if (client == null || folderUrl == null) {
@@ -399,6 +430,10 @@ class ChunkedFileUploader(
                 remoteFileBrowserItem.modifiedTimestamp = property.lastModified
             }
 
+            is GetContentLength -> {
+                remoteFileBrowserItem.size = property.contentLength
+            }
+
             is GetContentType -> {
                 remoteFileBrowserItem.mimeType = property.type
             }
@@ -434,5 +469,8 @@ class ChunkedFileUploader(
         private const val READ_PERMISSION = "R"
         private const val CHUNK_SIZE: Long = 1024000
         private const val METHOD_NOT_ALLOWED_CODE: Int = 405
+        private const val CHUNK_NUMBER_LENGTH = 16
+        private val CHUNK_NAME_REGEX = Regex("^\\d{16}-\\d{16}$")
+        private const val TOTAL_LENGTH_HEADER = "OC-Total-Length"
     }
 }
