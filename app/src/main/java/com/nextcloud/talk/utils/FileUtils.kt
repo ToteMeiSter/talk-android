@@ -142,7 +142,7 @@ object FileUtils {
     }
 
     @Suppress("ThrowsCount")
-    fun getFileFromUri(context: Context, sourceFileUri: Uri): File? {
+    fun getFileFromUri(context: Context, sourceFileUri: Uri, targetDir: File = context.cacheDir): File? {
         val fileName = getFileName(sourceFileUri, context)
         val scheme = sourceFileUri.scheme
 
@@ -150,7 +150,7 @@ object FileUtils {
             Log.d(TAG, "relative uri: " + sourceFileUri.path)
             throw IllegalArgumentException("relative paths are not supported")
         } else if (ContentResolver.SCHEME_CONTENT == scheme) {
-            copyFileToCache(context, sourceFileUri, fileName)
+            copyFileToCache(context, sourceFileUri, fileName, targetDir)
         } else if (ContentResolver.SCHEME_FILE == scheme) {
             val path = sourceFileUri.path
                 ?: throw IllegalArgumentException("uri does not contain path")
@@ -169,10 +169,15 @@ object FileUtils {
     }
 
     @Suppress("NestedBlockDepth")
-    fun copyFileToCache(context: Context, sourceFileUri: Uri, filename: String): File? {
-        val cachedFile = File(context.cacheDir, filename)
+    fun copyFileToCache(
+        context: Context,
+        sourceFileUri: Uri,
+        filename: String,
+        targetDir: File = context.cacheDir
+    ): File? {
+        val cachedFile = File(targetDir, filename)
 
-        if (!cachedFile.toPath().normalize().startsWith(context.cacheDir.toPath())) {
+        if (!cachedFile.toPath().normalize().startsWith(targetDir.toPath())) {
             Log.w(TAG, "cachedFile was not created in cacheDir. Aborting for security reasons.")
             cachedFile.delete()
             return null
