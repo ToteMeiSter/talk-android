@@ -26,6 +26,7 @@ import androidx.work.ExistingWorkPolicy
 import androidx.work.ForegroundInfo
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
+import androidx.work.WorkInfo
 import androidx.work.WorkManager
 import androidx.work.WorkRequest
 import androidx.work.Worker
@@ -70,6 +71,7 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
 import java.io.File
+import java.io.IOException
 import java.util.Collections
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -131,9 +133,13 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
      * cancelUniqueWork() round-trips through WorkManager's internal executor and Room DB - for a
      * small/compressed image the whole upload+share can finish faster than that round-trip, so
      * isStopped alone arrives too late. [cancelledReferenceIds] is set synchronously by the UI
-     * before cancelUniqueWork() is even called, so it's visible to doWork() immediately.
+     * before cancelUniqueWork() is even called, so it's visible to doWork() immediately. A work that has not
+     * run yet is never cancelled in WorkManager (that would break the queue of the conversation); it only gets
+     * the `cancelled` flag in its workspace and aborts itself when it starts.
      */
-    private fun isCancelled(): Boolean = referenceId?.let { cancelledReferenceIds.contains(it) } == true
+    private fun isCancelled(): Boolean =
+        referenceId?.let { cancelledReferenceIds.contains(it) } == true ||
+            (::workspace.isInitialized && workspace.isCancelled())
 
     private fun mustAbort(): Boolean =
         UploadRetryPolicy.stopAction(stopReason, isCancelled()) == UploadRetryPolicy.StopAction.ABORT
@@ -141,7 +147,13 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     override fun doWork(): Result {
         NextcloudTalkApplication.sharedApplication!!.componentApplication.inject(this)
 
-        workspace = UploadWorkspace(File(File(context.cacheDir, WORKSPACE_DIR), id.toString()))
+        referenceId = inputData.getString(KEY_REFERENCE_ID)
+        workspace = UploadWorkspace(workspaceDir(context, id))
+        // WorkManager does not interrupt the thread of a stopped worker, so an old run can still be busy.
+        if (!workspace.tryLock()) {
+            Log.w(TAG, "Another run of this upload is still active, trying again later")
+            return Result.retry()
+        }
         try {
             return doUpload()
         } finally {
@@ -149,6 +161,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             if (!keepWorkspace) {
                 workspace.delete()
             }
+            workspace.unlock()
         }
     }
 
@@ -161,8 +174,10 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     private fun doUpload(): Result {
         return try {
             // Read first, so a failure below can still mark the placeholder message as failed.
-            referenceId = inputData.getString(KEY_REFERENCE_ID)
             internalConversationId = inputData.getString(KEY_INTERNAL_CONVERSATION_ID)
+            if (isCancelled()) {
+                return cancelledResult()
+            }
 
             val userId = inputData.getLong(KEY_INTERNAL_USER_ID, 0L)
             currentUser = runBlocking { userManager.getUserWithId(userId) } ?: run {
@@ -184,46 +199,39 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             deleteFinishedWorkspaces()
             startForeground()
 
-            val prepared = workspace.prepareOnce { dir -> prepareFile(sourceFileUri, dir) }
-                ?: return failUpload()
+            val prepared = try {
+                workspace.prepareOnce { dir -> prepareFile(sourceFileUri, dir) }
+            } catch (e: IOException) {
+                // A local problem such as a full disk does not go away by waiting.
+                Log.e(TAG, "Could not prepare the file", e)
+                null
+            } ?: return failUpload()
             file = prepared.file
             fileName = prepared.fileName
             if (isStopped || isCancelled()) {
                 return stoppedResult()
             }
-            val uploadUri = Uri.fromFile(prepared.file)
-
-            val remotePath = getRemotePath(currentUser)
+            if (workspace.isShared()) {
+                return successResult()
+            }
 
             val useConversationSubfolders = CapabilitiesUtil.hasConversationSubfoldersForAttachments(
                 currentUser.capabilities!!.spreedCapability!!
             )
             val allowUpdate = inputData.getBoolean(ALLOW_UPDATE, false)
             file?.let { isChunkedUploading = it.length() > CHUNK_UPLOAD_THRESHOLD_SIZE }
-            val uploadSuccess: Boolean = uploadFile(
-                sourceFileUri = uploadUri,
-                metaData = metaData,
-                remotePath = remotePath,
-                useConversationSubfolders = useConversationSubfolders,
-                allowUpdate = allowUpdate
-            )
+            val uploadUri = Uri.fromFile(prepared.file)
 
-            if (uploadSuccess && mustAbort()) {
-                // Cancelled right as the upload finished - don't share a cancelled upload.
-                return Result.failure()
+            val shared = if (useConversationSubfolders) {
+                // The conversation subfolder path shares as part of its last step, postConversationAttachment.
+                uploadUsingConversationSubfolders(uploadUri, metaData, allowUpdate)
+            } else {
+                uploadAndShare(uploadUri, metaData)
             }
 
-            if (uploadSuccess) {
-                // useConversationSubfolders already shares as part of uploadFile() via
-                // postConversationAttachment, so only share explicitly for the plain upload path.
-                val shareSuccess = useConversationSubfolders || shareFile(remotePath, metaData)
-                if (shareSuccess) {
-                    updatePlaceholderStatus(SendStatus.SENT_PENDING_ACK)
-                    _uploadCompletedFlow.tryEmit(roomToken)
-                    return Result.success()
-                }
-                Log.e(TAG, "Share operation failed after upload")
-                return failUpload()
+            if (shared) {
+                workspace.markShared()
+                return successResult()
             } else if (isStopped || isCancelled()) {
                 return stoppedResult()
             }
@@ -233,6 +241,28 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         } catch (e: Exception) {
             handleUploadError(e)
         }
+    }
+
+    /**
+     * Upload and share are two stages. What is done is kept in the workspace, so a run after a retry or after a
+     * stop does not upload the file or share it a second time.
+     */
+    private fun uploadAndShare(uploadUri: Uri, metaData: String?): Boolean {
+        val remotePath = workspace.uploadedPath() ?: getRemotePath(currentUser)
+        val uploaded = workspace.uploadedPath() != null || uploadFile(uploadUri, remotePath)
+        if (uploaded) {
+            workspace.markUploaded(remotePath)
+        }
+        // Not shared when the user cancelled right as the upload finished.
+        return uploaded && !mustAbort() && shareFile(remotePath, metaData)
+    }
+
+    private fun successResult(): Result {
+        // A stopped work is scheduled again whatever it returns; the stages in the workspace make that run short.
+        keepWorkspace = isStopped
+        updatePlaceholderStatus(SendStatus.SENT_PENDING_ACK)
+        _uploadCompletedFlow.tryEmit(roomToken)
+        return Result.success()
     }
 
     private fun handleUploadError(e: Exception): Result {
@@ -265,11 +295,47 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
      */
     private fun stoppedResult(): Result =
         if (mustAbort()) {
-            Result.failure()
+            cancelledResult()
         } else {
             keepWorkspace = true
             Result.retry()
         }
+
+    /**
+     * The user cancelled the upload. Removes the parts from the server (here, in the worker thread, not in
+     * onStopped, which runs inside a WorkManager cancellation handler) and the placeholder message. Returns
+     * success, not failure or cancelled: a failed or cancelled work in the queue of the conversation makes
+     * WorkManager delete the other uploads of that queue when the next file is sent.
+     */
+    private fun cancelledResult(): Result {
+        abortRemote()
+        deletePlaceholder()
+        return Result.success()
+    }
+
+    @Suppress("Detekt.TooGenericExceptionCaught")
+    private fun abortRemote() {
+        try {
+            val uploader = chunkedFileUploader
+            if (uploader != null) {
+                uploader.abortUpload {}
+                return
+            }
+            // No upload ran in this process: remove the parts an earlier run may have left.
+            val prepared = workspace.prepared()?.file
+            if (::currentUser.isInitialized && prepared != null && prepared.length() > CHUNK_UPLOAD_THRESHOLD_SIZE) {
+                ChunkedFileUploader(okHttpClient, currentUser, this, ncApiCoroutines).abortUpload(prepared) {}
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not remove the parts of the upload from the server", e)
+        }
+    }
+
+    private fun deletePlaceholder() {
+        val refId = referenceId?.takeIf { it.isNotEmpty() } ?: return
+        val convId = internalConversationId?.takeIf { it.isNotEmpty() } ?: return
+        chatDao.deleteTempChatMessageIfPending(convId, refId)
+    }
 
     @SuppressLint("InlinedApi")
     @Suppress("Detekt.TooGenericExceptionCaught")
@@ -302,13 +368,24 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
     private fun prepareFile(sourceFileUri: Uri, dir: File): PreparedUpload? {
         val original = FileUtils.getFileFromUri(context, sourceFileUri, dir) ?: return null
+        throwIfStopped()
         val compressed = if (inputData.getBoolean(COMPRESS_IMAGES, false)) {
             compressMediaIfPossible(sourceFileUri, original, dir)
         } else {
             null
         }
+        throwIfStopped()
         return compressed ?: PreparedUpload(original, fileName)
     }
+
+    /** Keeps a stopped run from storing its half-finished file as the prepared one (see [PreparationStopped]). */
+    private fun throwIfStopped() {
+        if (isStopped || isCancelled()) {
+            throw PreparationStopped()
+        }
+    }
+
+    private class PreparationStopped : RuntimeException("Stopped while preparing the file")
 
     // A work that WorkManager does not know, or knows as finished, cannot resume, so its workspace is garbage.
     @Suppress("Detekt.TooGenericExceptionCaught")
@@ -325,7 +402,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     }
 
     private fun failUpload(): Result {
-        chunkedFileUploader?.abortUpload {}
+        abortRemote()
         showFailedToUploadNotification()
         updatePlaceholderStatus(SendStatus.FAILED)
         return Result.failure()
@@ -339,33 +416,20 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         val mimeType = FileUtils.resolveMimeType(context, sourceFileUri)
 
         val compressedFile = when {
-            ImageCompressor.isCompressible(mimeType) -> ImageCompressor.compress(context, originalFile)
-            VideoCompressor.isCompressible(mimeType) -> VideoCompressor.compress(context, originalFile)
+            ImageCompressor.isCompressible(mimeType) -> ImageCompressor.compress(context, originalFile, dir)
+            VideoCompressor.isCompressible(mimeType) -> VideoCompressor.compress(context, originalFile, dir)
             else -> null
         } ?: return null
 
-        val target = File(dir, compressedFile.name)
-        if (!compressedFile.renameTo(target)) {
-            compressedFile.copyTo(target, overwrite = true)
-            compressedFile.delete()
-        }
         if (originalFile.parentFile == dir) {
             originalFile.delete()
         }
-        return PreparedUpload(target, target.name)
+        return PreparedUpload(compressedFile, compressedFile.name)
     }
 
-    private fun uploadFile(
-        sourceFileUri: Uri,
-        metaData: String?,
-        remotePath: String,
-        useConversationSubfolders: Boolean,
-        allowUpdate: Boolean
-    ): Boolean =
+    private fun uploadFile(sourceFileUri: Uri, remotePath: String): Boolean =
         if (file == null) {
             false
-        } else if (useConversationSubfolders) {
-            uploadUsingConversationSubfolders(sourceFileUri, metaData, allowUpdate)
         } else if (isChunkedUploading) {
             Log.d(TAG, "starting chunked upload because size is " + file!!.length())
             val mimeType = FileUtils.resolveMimeType(context, sourceFileUri)?.toMediaTypeOrNull()
@@ -429,7 +493,6 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 currentUser.username,
                 currentUser.token
             ) ?: return@runBlocking false
-            val uploadId = UUID.randomUUID().toString()
             val fileNames = ProbeConversationAttachmentRequestDto().apply {
                 fileNames = listOf(fileName)
                 this.allowUpdate = allowUpdate
@@ -447,23 +510,16 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 return@runBlocking false
             }
             val predictedName = resolveFinalFileName(fileName, probeResponse.ocs?.data!!)
-            val tempRemotePath = "/$draftFolderPath/$uploadId-$fileName"
+            // The same id on every run, so a run after the upload does not upload to another path.
+            val tempRemotePath = workspace.uploadedPath() ?: "/$draftFolderPath/${workspace.uploadId()}-$fileName"
 
-            val uploadSuccess = if (isChunkedUploading) {
-                val mimeType = FileUtils.resolveMimeType(context, sourceFileUri)?.toMediaTypeOrNull()
-                chunkedFileUploader = ChunkedFileUploader(
-                    okHttpClient,
-                    currentUser,
-                    this@UploadAndShareFilesWorker,
-                    ncApiCoroutines
-                )
-                chunkedFileUploader!!.upload(file!!, mimeType, tempRemotePath)
-            } else {
-                FileUploader(okHttpClient, context, currentUser, roomToken, ncApi, file!!, ncApiCoroutines)
-                    .uploadToConversationSubfolder(sourceFileUri, tempRemotePath)
+            if (workspace.uploadedPath() == null) {
+                if (!uploadToDraftFolder(sourceFileUri, tempRemotePath)) {
+                    return@runBlocking false
+                }
+                workspace.markUploaded(tempRemotePath)
             }
-
-            if (!uploadSuccess || mustAbort()) {
+            if (mustAbort()) {
                 return@runBlocking false
             }
 
@@ -475,15 +531,28 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 this.allowUpdate = allowUpdate
             }
 
-            runCatching {
-                ncApiCoroutines.postConversationAttachment(
-                    credentials,
-                    ApiUtils.getUrlForChatAttachment(ApiUtils.API_V1, currentUser.baseUrl, roomToken),
-                    params
-                )
-            }
-                .onFailure { Log.e(TAG, "Failed to finalize uploaded attachment", it) }
-                .isSuccess
+            // Errors are not caught: an IOException of a lost network must reach the retry policy.
+            ncApiCoroutines.postConversationAttachment(
+                credentials,
+                ApiUtils.getUrlForChatAttachment(ApiUtils.API_V1, currentUser.baseUrl, roomToken),
+                params
+            )
+            true
+        }
+
+    private suspend fun uploadToDraftFolder(sourceFileUri: Uri, tempRemotePath: String): Boolean =
+        if (isChunkedUploading) {
+            val mimeType = FileUtils.resolveMimeType(context, sourceFileUri)?.toMediaTypeOrNull()
+            chunkedFileUploader = ChunkedFileUploader(
+                okHttpClient,
+                currentUser,
+                this,
+                ncApiCoroutines
+            )
+            chunkedFileUploader!!.upload(file!!, mimeType, tempRemotePath)
+        } else {
+            FileUploader(okHttpClient, context, currentUser, roomToken, ncApi, file!!, ncApiCoroutines)
+                .uploadToConversationSubfolder(sourceFileUri, tempRemotePath)
         }
 
     @SuppressLint("CheckResult")
@@ -528,14 +597,20 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         entity?.let { chatDao.updateChatMessage(it.copy(sendStatus = status)) }
     }
 
+    /**
+     * WorkManager runs this inside a coroutine cancellation handler: an exception thrown here crashes the process,
+     * and a network call blocks WorkManager's own thread. So it only interrupts the upload; removing the parts
+     * from the server, if the user cancelled, is done by [doWork] in [cancelledResult].
+     */
+    @Suppress("Detekt.TooGenericExceptionCaught")
     override fun onStopped() {
-        if (mustAbort()) {
-            chunkedFileUploader?.abortUpload {}
-        } else {
+        try {
             chunkedFileUploader?.stop()
+            uploadDisposable?.dispose()
+            uploadLatch?.countDown()
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to interrupt the upload", e)
         }
-        uploadDisposable?.dispose()
-        uploadLatch?.countDown()
         super.onStopped()
     }
 
@@ -661,6 +736,11 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 .build()
             val uploadWorker: OneTimeWorkRequest = OneTimeWorkRequest.Builder(UploadAndShareFilesWorker::class.java)
                 .setInputData(data)
+                .apply {
+                    if (referenceId.isNotEmpty()) {
+                        addTag(referenceTag(referenceId))
+                    }
+                }
                 .setConstraints(
                     Constraints.Builder()
                         .setRequiredNetworkType(NetworkType.CONNECTED)
@@ -689,12 +769,49 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
 
         private fun uploadQueueName(internalConversationId: String) = "upload_queue_$internalConversationId"
 
-        // Cancellation is by the WorkRequest's own id (not enqueueUniqueWork's name) since that name
-        // is now shared by every file queued in the same conversation - cancelling by name would
-        // cancel the whole queue instead of just this one upload.
-        fun cancelUpload(referenceId: String, workerId: UUID) {
-            cancelledReferenceIds.add(referenceId)
-            WorkManager.getInstance().cancelWorkById(workerId)
+        private fun referenceTag(referenceId: String) = "upload_ref:$referenceId"
+
+        private fun workspaceDir(context: Context, workId: UUID) =
+            File(File(context.cacheDir, WORKSPACE_DIR), workId.toString())
+
+        /**
+         * Cancels an upload by the id of its WorkRequest (not by the name of enqueueUniqueWork, which is shared by
+         * every file queued in the same conversation). The id is only known in memory of the chat, so after a
+         * restart the work is found by its reference id tag. Blocks on WorkManager: call it off the main thread.
+         *
+         * A work that has not started is not cancelled in WorkManager: a cancelled work left in the queue makes
+         * the APPEND_OR_REPLACE of the next upload delete the other, still living works of the queue. It gets the
+         * `cancelled` flag and aborts itself when it starts. Only a running work is also cancelled in WorkManager.
+         */
+        @Suppress("Detekt.TooGenericExceptionCaught")
+        fun cancelUpload(referenceId: String, workId: UUID?) {
+            if (referenceId.isNotEmpty()) {
+                cancelledReferenceIds.add(referenceId)
+            }
+            val context = NextcloudTalkApplication.sharedApplication!!.applicationContext
+            val workManager = WorkManager.getInstance(context)
+            var handled = false
+            try {
+                val infos = if (workId != null) {
+                    listOfNotNull(workManager.getWorkInfoById(workId).get())
+                } else if (referenceId.isNotEmpty()) {
+                    workManager.getWorkInfosByTag(referenceTag(referenceId)).get()
+                } else {
+                    emptyList()
+                }
+                infos.filter { !it.state.isFinished }.forEach { info ->
+                    handled = true
+                    UploadWorkspace(workspaceDir(context, info.id)).markCancelled()
+                    if (info.state == WorkInfo.State.RUNNING) {
+                        workManager.cancelWorkById(info.id)
+                    }
+                }
+            } finally {
+                if (!handled) {
+                    // Nothing alive to see the flag, which would stay in the set for the life of the process.
+                    cancelledReferenceIds.remove(referenceId)
+                }
+            }
         }
     }
 }

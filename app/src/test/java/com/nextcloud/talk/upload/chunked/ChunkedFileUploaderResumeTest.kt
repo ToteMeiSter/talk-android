@@ -10,11 +10,17 @@ import android.app.Application
 import at.bitfire.dav4jvm.exception.HttpException
 import com.nextcloud.talk.api.NcApiCoroutines
 import com.nextcloud.talk.data.user.model.User
+import com.nextcloud.talk.utils.FileUtils
+import okhttp3.Call
+import okhttp3.Callback
 import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.Response
 import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
+import okhttp3.mockwebserver.SocketPolicy
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -30,6 +36,7 @@ import org.mockito.kotlin.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.File
+import java.io.IOException
 import java.util.Collections
 import java.util.concurrent.TimeUnit
 
@@ -43,6 +50,8 @@ class ChunkedFileUploaderResumeTest {
 
     private val server = MockWebServer()
     private val requests: MutableList<RecordedRequest> = Collections.synchronizedList(mutableListOf())
+    private lateinit var client: OkHttpClient
+    private lateinit var user: User
     private lateinit var uploader: ChunkedFileUploader
     private lateinit var file: File
 
@@ -50,6 +59,10 @@ class ChunkedFileUploaderResumeTest {
     private var partsOnServer: Map<String, Int> = emptyMap()
     private var putResponseCode = CREATED
     private var propfindResponseCode: Int? = null
+    private var propfindDisconnects = false
+
+    /** Answers of the next MOVE requests; 201 when empty. */
+    private val moveResponseCodes: MutableList<Int> = Collections.synchronizedList(mutableListOf())
 
     @Before
     fun setUp() {
@@ -57,8 +70,14 @@ class ChunkedFileUploaderResumeTest {
             override fun dispatch(request: RecordedRequest): MockResponse {
                 requests.add(request)
                 return when (request.method) {
-                    "PROPFIND" -> propfindResponseCode?.let { MockResponse().setResponseCode(it) }
-                        ?: propfindResponse(request.path!!)
+                    "PROPFIND" -> when {
+                        propfindDisconnects -> MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                        propfindResponseCode != null -> MockResponse().setResponseCode(propfindResponseCode!!)
+                        else -> propfindResponse(request.path!!)
+                    }
+                    "MOVE" -> MockResponse().setResponseCode(
+                        if (moveResponseCodes.isEmpty()) CREATED else moveResponseCodes.removeAt(0)
+                    )
                     "PUT" -> MockResponse().setResponseCode(putResponseCode)
                     "MKCOL" -> MockResponse().setResponseCode(METHOD_NOT_ALLOWED)
                     else -> MockResponse().setResponseCode(CREATED)
@@ -66,12 +85,12 @@ class ChunkedFileUploaderResumeTest {
             }
         }
         server.start()
-        val client = OkHttpClient.Builder()
+        client = OkHttpClient.Builder()
             .retryOnConnectionFailure(false)
             .connectTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .readTimeout(TIMEOUT_SECONDS, TimeUnit.SECONDS)
             .build()
-        val user = User(
+        user = User(
             id = 1,
             userId = "alice",
             username = "alice",
@@ -183,6 +202,78 @@ class ChunkedFileUploaderResumeTest {
     }
 
     @Test
+    fun `stop does not cancel calls of other clients built from the same base client`() {
+        val hanging = MockWebServer()
+        hanging.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest) = MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
+        }
+        hanging.start()
+        try {
+            val other = client.newBuilder().build()
+            val call = other.newCall(Request.Builder().url(hanging.url("/")).build())
+            call.enqueue(object : Callback {
+                override fun onFailure(call: Call, e: IOException) = Unit
+                override fun onResponse(call: Call, response: Response) = Unit
+            })
+            hanging.takeRequest(TIMEOUT_SECONDS, TimeUnit.SECONDS)
+
+            uploader.stop()
+
+            assertFalse(call.isCanceled())
+            call.cancel()
+        } finally {
+            hanging.shutdown()
+        }
+    }
+
+    @Test
+    fun `a rejected assembly removes the parts once and uploads the file again`() {
+        moveResponseCodes.add(BAD_REQUEST)
+
+        assertTrue(uploader.upload(file, null, "/Talk/video.mp4"))
+
+        assertEquals(1, requests.count { it.method == "DELETE" })
+        assertEquals(2, requests.count { it.method == "MOVE" })
+        assertEquals(2, requests.count { it.method == "PROPFIND" })
+    }
+
+    @Test
+    fun `an assembly rejected twice is an error`() {
+        moveResponseCodes.addAll(listOf(BAD_REQUEST, BAD_REQUEST))
+
+        try {
+            uploader.upload(file, null, "/Talk/video.mp4")
+            fail("expected the upload to throw")
+        } catch (e: HttpException) {
+            assertEquals(BAD_REQUEST, e.code)
+        }
+        assertEquals(1, requests.count { it.method == "DELETE" })
+    }
+
+    @Test
+    fun `a lost network while listing the parts is an error and does not restart the upload`() {
+        propfindDisconnects = true
+
+        try {
+            uploader.upload(file, null, "/Talk/video.mp4")
+            fail("expected the upload to throw")
+        } catch (e: IOException) {
+            // retried later by the worker
+        }
+        assertEquals(emptyList<String>(), putPaths())
+    }
+
+    @Test
+    fun `abort of an uploader that did not start removes the folder of the file`() {
+        val fresh = ChunkedFileUploader(client, user, mock<OnDataTransferProgressListener>(), mock<NcApiCoroutines>())
+
+        fresh.abortUpload(file) {}
+
+        val delete = requests.single { it.method == "DELETE" }
+        assertTrue(delete.path!!.endsWith("/" + FileUtils.md5Sum(file)))
+    }
+
+    @Test
     fun `missing parts are planned around existing ones`() {
         val onServer = listOf(Chunk(0, CHUNK - 1L), Chunk(2L * CHUNK, FILE_SIZE.toLong()))
 
@@ -254,6 +345,7 @@ class ChunkedFileUploaderResumeTest {
         private const val MULTI_STATUS = 207
         private const val METHOD_NOT_ALLOWED = 405
         private const val NOT_FOUND = 404
+        private const val BAD_REQUEST = 400
         private const val SERVER_ERROR = 500
     }
 }

@@ -20,7 +20,11 @@ import java.io.FileNotFoundException
 import java.io.IOException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
+import java.net.UnknownServiceException
+import javax.net.ssl.SSLHandshakeException
+import javax.net.ssl.SSLPeerUnverifiedException
 
+@Suppress("TooManyFunctions")
 class UploadRetryPolicyTest {
 
     @Test
@@ -31,22 +35,60 @@ class UploadRetryPolicyTest {
     }
 
     @Test
-    fun `http errors are server errors`() {
-        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(DavHttpException(500, "boom")))
+    fun `http errors that may stay are server errors`() {
         assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(DavHttpException(403, "no")))
-        val retrofit = RetrofitHttpException(Response.error<Any>(503, "".toResponseBody()))
-        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(retrofit))
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(DavHttpException(400, "bad")))
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(DavHttpException(507, "full")))
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(retrofit(404)))
+    }
+
+    @Test
+    fun `a server that is unavailable is waited for like a lost network`() {
+        listOf(500, 502, 503, 504, 408, 429).forEach {
+            assertEquals("code $it", FailureKind.NETWORK, UploadRetryPolicy.classify(DavHttpException(it, "x")))
+        }
+        assertEquals(FailureKind.NETWORK, UploadRetryPolicy.classify(retrofit(503)))
     }
 
     @Test
     fun `http error wrapped in an IOException is still a server error`() {
-        val wrapped = IOException("failed to create folder", DavHttpException(507, "full"))
+        val wrapped = IOException("failed to create folder", DavHttpException(403, "no"))
         assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(wrapped))
+    }
+
+    @Test
+    fun `an IOException wrapped by RxJava is a network error`() {
+        assertEquals(FailureKind.NETWORK, UploadRetryPolicy.classify(RuntimeException(IOException("reset"))))
+        assertEquals(
+            FailureKind.NETWORK,
+            UploadRetryPolicy.classify(RuntimeException(RuntimeException(UnknownHostException())))
+        )
+    }
+
+    @Test
+    fun `an http error wrapped by RxJava is classified by its code`() {
+        assertEquals(FailureKind.NETWORK, UploadRetryPolicy.classify(RuntimeException(retrofit(503))))
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(RuntimeException(retrofit(403))))
+    }
+
+    @Test
+    fun `an http error wins over an IOException in the chain`() {
+        val error = IOException("outer", RuntimeException(DavHttpException(403, "no")))
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(error))
+    }
+
+    @Test
+    fun `tls problems count against the limit`() {
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(SSLHandshakeException("bad certificate")))
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(SSLPeerUnverifiedException("who")))
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(UnknownServiceException("cleartext")))
+        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(RuntimeException(SSLHandshakeException("x"))))
     }
 
     @Test
     fun `local problems are neither network nor server errors`() {
         assertEquals(FailureKind.OTHER, UploadRetryPolicy.classify(FileNotFoundException()))
+        assertEquals(FailureKind.OTHER, UploadRetryPolicy.classify(RuntimeException(FileNotFoundException())))
         assertEquals(FailureKind.OTHER, UploadRetryPolicy.classify(IllegalArgumentException()))
     }
 
@@ -105,4 +147,6 @@ class UploadRetryPolicyTest {
             assertEquals("reason ", StopAction.KEEP, UploadRetryPolicy.stopAction(it, false))
         }
     }
+
+    private fun retrofit(code: Int) = RetrofitHttpException(Response.error<Any>(code, "".toResponseBody()))
 }

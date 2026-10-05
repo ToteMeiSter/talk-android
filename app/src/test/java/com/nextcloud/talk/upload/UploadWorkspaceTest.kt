@@ -17,6 +17,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.File
 
+@Suppress("TooManyFunctions")
 class UploadWorkspaceTest {
 
     @get:Rule
@@ -121,6 +122,73 @@ class UploadWorkspaceTest {
 
         assertFalse(File(tempFolder.root, "finished").exists())
         assertTrue(File(tempFolder.root, "waiting-for-network").exists())
+    }
+
+    @Test
+    fun `a locked workspace is not removed even when its work is unknown`() {
+        val running = workspace("running")
+        running.prepareOnce { create(it, "a.jpg", 1_000) }
+        assertTrue(running.tryLock())
+
+        UploadWorkspace.deleteFinished(tempFolder.root) { false }
+
+        assertTrue(File(tempFolder.root, "running").exists())
+        running.unlock()
+        UploadWorkspace.deleteFinished(tempFolder.root) { false }
+        assertFalse(File(tempFolder.root, "running").exists())
+    }
+
+    @Test
+    fun `only one run can hold the lock of a workspace`() {
+        val first = workspace()
+        val second = workspace()
+
+        assertTrue(first.tryLock())
+        assertFalse(second.tryLock())
+        first.unlock()
+        assertTrue(second.tryLock())
+        second.unlock()
+    }
+
+    @Test
+    fun `the uploaded and shared stages are kept between runs`() {
+        val ws = workspace()
+        assertNull(ws.uploadedPath())
+        assertFalse(ws.isShared())
+
+        ws.markUploaded("/Talk/video.mp4")
+        assertEquals("/Talk/video.mp4", workspace().uploadedPath())
+        assertFalse(workspace().isShared())
+
+        ws.markShared()
+        assertTrue(workspace().isShared())
+    }
+
+    @Test
+    fun `the upload id stays the same on every run`() {
+        val id = workspace().uploadId()
+
+        assertEquals(id, workspace().uploadId())
+    }
+
+    @Test
+    fun `a cancel flag can be set before the work ran and survives a new preparation`() {
+        val ws = workspace()
+        assertFalse(ws.isCancelled())
+
+        ws.markCancelled()
+        ws.prepareOnce { create(it, "a.jpg", 1_000) }
+
+        assertTrue(workspace().isCancelled())
+    }
+
+    @Test
+    fun `the stored prepared file is available without preparing`() {
+        assertNull(workspace().prepared())
+
+        val prepared = workspace().prepareOnce { create(it, "a.jpg", 1_000) }
+
+        assertEquals(prepared, workspace().prepared())
     }
 
     companion object {

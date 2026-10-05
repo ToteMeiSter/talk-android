@@ -36,6 +36,7 @@ import com.nextcloud.talk.remotefilebrowser.model.RemoteFileBrowserItem
 import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.FileUtils
 import com.nextcloud.talk.utils.Mimetype
+import okhttp3.Dispatcher
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType
 import okhttp3.OkHttpClient
@@ -47,6 +48,7 @@ import java.io.RandomAccessFile
 import java.nio.channels.FileChannel
 import java.util.Locale
 
+@Suppress("TooManyFunctions")
 @AutoInjector(NextcloudTalkApplication::class)
 class ChunkedFileUploader(
     okHttpClient: OkHttpClient,
@@ -58,7 +60,10 @@ class ChunkedFileUploader(
     private var okHttpClientNoRedirects: OkHttpClient? = null
     private var remoteChunkUrl: String
     private var uploadFolderUri: String = ""
+
+    @Volatile
     private var isUploadAborted = false
+    private var restartedAfterRejectedAssembly = false
 
     init {
         initHttpClient(okHttpClient, currentUser)
@@ -73,7 +78,25 @@ class ChunkedFileUploader(
      * @throws Exception when a request fails; the parts already on the server are kept
      */
     fun upload(localFile: File, mimeType: MediaType?, targetPath: String): Boolean {
-        uploadFolderUri = remoteChunkUrl + "/" + FileUtils.md5Sum(localFile)
+        uploadFolderUri = folderUriOf(localFile)
+        return try {
+            uploadParts(localFile, mimeType, targetPath)
+        } catch (e: HttpException) {
+            // The server refused the assembly (e.g. the length does not match its parts): the parts it holds are
+            // not usable, so remove them once and send the file again.
+            if (e.code != HTTP_BAD_REQUEST || restartedAfterRejectedAssembly) {
+                throw e
+            }
+            Log.w(TAG, "Server rejected the assembly, uploading the file again", e)
+            restartedAfterRejectedAssembly = true
+            deleteUploadFolder()
+            uploadParts(localFile, mimeType, targetPath)
+        }
+    }
+
+    private fun folderUriOf(localFile: File) = remoteChunkUrl + "/" + FileUtils.md5Sum(localFile)
+
+    private fun uploadParts(localFile: File, mimeType: MediaType?, targetPath: String): Boolean {
         val davResource = DavResource(
             okHttpClientNoRedirects!!,
             uploadFolderUri.toHttpUrlOrNull()!!
@@ -149,13 +172,11 @@ class ChunkedFileUploader(
                 }
                 Unit
             }
-        } catch (e: IOException) {
-            // PROPFIND on Nextcloud chunked-upload folders can return unexpected responses
-            // (e.g. 200 instead of 207). Treat any failure as "no chunks uploaded yet" so
-            // we fall back to a full upload rather than aborting entirely.
-            Log.w(TAG, "PROPFIND failed — assuming no chunks on server, will upload from scratch: ${e.message}")
-            return ArrayList()
         } catch (e: DavException) {
+            // An IOException is not caught on purpose: a lost network must repeat the request,
+            // not send the whole file again.
+            // PROPFIND on Nextcloud chunked-upload folders can return unexpected responses
+            // (e.g. 200 instead of 207). Treat any such answer as "no chunks uploaded yet".
             Log.w(TAG, "PROPFIND failed — assuming no chunks on server, will upload from scratch: ${e.message}")
             return ArrayList()
         }
@@ -293,7 +314,10 @@ class ChunkedFileUploader(
     }
 
     private fun initHttpClient(okHttpClient: OkHttpClient, currentUser: User) {
+        // Own dispatcher: stop() cancels all calls of the dispatcher, and the one of okHttpClient is shared with
+        // the whole app (chat requests, signaling websocket, other uploads).
         val builder = okHttpClient.newBuilder()
+            .dispatcher(Dispatcher())
             .followRedirects(false)
             .followSslRedirects(false)
             .protocols(listOf(Protocol.HTTP_1_1))
@@ -370,6 +394,7 @@ class ChunkedFileUploader(
     /**
      * Interrupts a running [upload] and removes its parts from the server. Same contract as [stop]: never throws.
      */
+    @Suppress("Detekt.TooGenericExceptionCaught")
     fun abortUpload(onSuccess: () -> Unit) {
         stop()
         val client = okHttpClientNoRedirects
@@ -388,10 +413,22 @@ class ChunkedFileUploader(
         } catch (e: NotFoundException) {
             Log.i(TAG, "Chunk upload folder could not be found", e)
             onSuccess()
-        } catch (e: DavException) {
+        } catch (e: Exception) {
             Log.w(TAG, "Failed to remove chunk upload folder", e)
-        } catch (e: IOException) {
-            Log.w(TAG, "Failed to remove chunk upload folder", e)
+        }
+    }
+
+    /** Removes the parts of an earlier run of [localFile], for an uploader that has not started an upload. */
+    fun abortUpload(localFile: File, onSuccess: () -> Unit) {
+        uploadFolderUri = folderUriOf(localFile)
+        abortUpload(onSuccess)
+    }
+
+    private fun deleteUploadFolder() {
+        try {
+            DavResource(okHttpClientNoRedirects!!, uploadFolderUri.toHttpUrlOrNull()!!).delete { _ -> }
+        } catch (e: NotFoundException) {
+            Log.i(TAG, "Chunk upload folder is already gone", e)
         }
     }
 
@@ -469,6 +506,7 @@ class ChunkedFileUploader(
         private const val READ_PERMISSION = "R"
         private const val CHUNK_SIZE: Long = 1024000
         private const val METHOD_NOT_ALLOWED_CODE: Int = 405
+        private const val HTTP_BAD_REQUEST: Int = 400
         private const val CHUNK_NUMBER_LENGTH = 16
         private val CHUNK_NAME_REGEX = Regex("^\\d{16}-\\d{16}$")
         private const val TOTAL_LENGTH_HEADER = "OC-Total-Length"
