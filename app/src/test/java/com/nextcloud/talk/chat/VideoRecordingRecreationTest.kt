@@ -90,4 +90,16 @@ class VideoRecordingRecreationTest {
         assertFalse(shouldVibrateOnRecordingChange(true, true))
         assertFalse(shouldVibrateOnRecordingChange(null, false))
     }
+
+    @Test
+    fun activeVideoRecorderClearsStateOnlyOnFinalize() {
+        assertTrue(clearsRecordingStateOnFinalize(isVideo = true, recorderActive = true))
+    }
+
+    @Test
+    fun idleVideoRecorderAndAudioAreClearedAtOnce() {
+        assertFalse(clearsRecordingStateOnFinalize(isVideo = true, recorderActive = false))
+        assertFalse(clearsRecordingStateOnFinalize(isVideo = false, recorderActive = false))
+        assertFalse(clearsRecordingStateOnFinalize(isVideo = false, recorderActive = true))
+    }
 }
