@@ -157,6 +157,7 @@ import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartedStat
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartingState
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper.PeerConnectionObserver
+import com.nextcloud.talk.webrtc.PublisherRejoinPolicy
 import com.nextcloud.talk.webrtc.WebRTCUtils
 import com.nextcloud.talk.webrtc.WebRtcAudioManager
 import com.nextcloud.talk.webrtc.WebRtcAudioManager.AudioDevice
@@ -337,6 +338,15 @@ class CallActivity : CallBaseActivity() {
     // Whether onCreate() got past its early exits, so onDestroy() has a call to clean up.
     private var isCallSetUp = false
     private var handler: Handler? = null
+
+    // Own handler for the delayed rejoin: "handler" drops all its callbacks on every call state change.
+    private val rejoinHandler = Handler(Looper.getMainLooper())
+    private val publisherRejoinPolicy = PublisherRejoinPolicy()
+    private val rejoinRunnable = Runnable {
+        if (!isDestroyed && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
+            initiateCall()
+        }
+    }
 
     private val callingTimeoutRunnable = Runnable { setCallState(CallStatus.CALLING_TIMEOUT) }
 
@@ -1577,6 +1587,7 @@ class CallActivity : CallBaseActivity() {
 
     public override fun onDestroy() {
         Log.d(TAG, "onDestroy: currentCallStatus=$currentCallStatus")
+        rejoinHandler.removeCallbacksAndMessages(null)
 
         if (isCallSetUp) {
             // The call cannot survive the activity being destroyed (WebRTC connections, local stream and
@@ -2088,7 +2099,7 @@ class CallActivity : CallBaseActivity() {
             }
         } else {
             if (webSocketClient!!.isConnected && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
-                webSocketClient!!.restartWebSocket()
+                webSocketClient!!.restartWebSocketWithNewSession()
             }
         }
         joinRoomAndCall()
@@ -2228,11 +2239,12 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private fun hangup(shutDownView: Boolean, endCallForAll: Boolean) {
+    private fun hangup(shutDownView: Boolean, endCallForAll: Boolean, rejoinDelayMillis: Long = 0L) {
         Log.d(TAG, "hangup! shutDownView=$shutDownView, endCallForAll=$endCallForAll")
         joinRoomInitiated = false
         if (shutDownView) {
             setCallState(CallStatus.LEAVING)
+            rejoinHandler.removeCallbacksAndMessages(null)
         }
         stopCallingSound()
         callTimeHandler.removeCallbacksAndMessages(null)
@@ -2270,7 +2282,7 @@ class CallActivity : CallBaseActivity() {
             CallForegroundService.stop(applicationContext)
         }
 
-        hangupNetworkCalls(shutDownView, endCallForAll)
+        hangupNetworkCalls(shutDownView, endCallForAll, rejoinDelayMillis)
     }
 
     private fun terminateAudioVideo() {
@@ -2315,7 +2327,7 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private fun hangupNetworkCalls(shutDownView: Boolean, endCallForAll: Boolean) {
+    private fun hangupNetworkCalls(shutDownView: Boolean, endCallForAll: Boolean, rejoinDelayMillis: Long = 0L) {
         Log.d(TAG, "hangupNetworkCalls. shutDownView=$shutDownView")
         if (!::conversationUser.isInitialized) {
             Log.w(TAG, "hangupNetworkCalls: conversationUser not initialized, skipping network calls")
@@ -2361,9 +2373,15 @@ class CallActivity : CallBaseActivity() {
             finish()
         } else if (shutDownView) {
             finish()
-        } else if (currentCallStatus === CallStatus.RECONNECTING ||
-            currentCallStatus === CallStatus.PUBLISHER_FAILED
-        ) {
+        } else if (currentCallStatus === CallStatus.PUBLISHER_FAILED) {
+            rejoinHandler.removeCallbacks(rejoinRunnable)
+            if (rejoinDelayMillis > 0) {
+                Log.d(TAG, "Rejoining the call in $rejoinDelayMillis ms")
+                rejoinHandler.postDelayed(rejoinRunnable, rejoinDelayMillis)
+            } else {
+                initiateCall()
+            }
+        } else if (currentCallStatus === CallStatus.RECONNECTING) {
             initiateCall()
         }
     }
@@ -3278,10 +3296,10 @@ class CallActivity : CallBaseActivity() {
     }
 
     // Same recovery as the web client for a failed connection to the MCU: join the call again with a new session.
-    private fun rejoinCallWithNewSession() {
+    private fun rejoinCallWithNewSession(rejoinDelayMillis: Long = 0L) {
         setCallState(CallStatus.PUBLISHER_FAILED)
         webSocketClient!!.clearResumeId()
-        hangup(false, false)
+        hangup(false, false, rejoinDelayMillis)
     }
 
     // The connections are bound to the address of the old network, so recover now instead of waiting for ICE to fail.
@@ -3322,7 +3340,13 @@ class CallActivity : CallBaseActivity() {
                         Log.d(TAG, "ICE FAILED while backgrounded, skipping hangup (will recover on resume)")
                         return@runOnUiThread
                     }
-                    rejoinCallWithNewSession()
+                    // Only this ICE handler counts failures and sets a pause. Other callers of the same
+                    // rejoin path rejoin at once.
+                    rejoinCallWithNewSession(publisherRejoinPolicy.onPublisherFailed())
+                } else if (iceConnectionState == IceConnectionState.CONNECTED ||
+                    iceConnectionState == IceConnectionState.COMPLETED
+                ) {
+                    publisherRejoinPolicy.onPublisherConnected()
                 }
             }
         }
