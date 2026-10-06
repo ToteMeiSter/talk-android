@@ -211,6 +211,19 @@ class NetworkLoginDataSourceTest {
     }
 
     @Test
+    fun `testing performLoginFlowV2 invalid JSON in a 200 response`() {
+        val server = MockWebServer()
+        server.enqueue(MockResponse(body = """{"server":"""))
+        server.enqueue(MockResponse(body = """{"server":null,"loginName":"user","appPassword":"pass"}"""))
+        server.start()
+        val httpUrl = server.url("login/v2/poll")
+        val loginResponse = LoginResponse(token = "token", pollUrl = httpUrl.toString(), loginUrl = "")
+
+        assertNull(network.performLoginFlowV2(loginResponse))
+        assertNull(network.performLoginFlowV2(loginResponse))
+    }
+
+    @Test
     fun `testing performLoginFlowV2 request failure is thrown`() {
         val server = MockWebServer()
         server.start()
