@@ -125,10 +125,10 @@ public class PeerConnectionWrapper {
 
         PeerConnection.RTCConfiguration configuration = new PeerConnection.RTCConfiguration(iceServerList);
         configuration.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-        // WebRTC only knows a fixed set of root certificates (no ISRG/Let's Encrypt); let the system decide for TURNS.
+        // WebRTC knows no ISRG (Let's Encrypt) roots; let the trust anchors of the app decide for TURNS.
         PeerConnectionDependencies dependencies = PeerConnectionDependencies
             .builder(new InitialPeerConnectionObserver())
-            .setSSLCertificateVerifier(new SystemTrustSslCertificateVerifier())
+            .setSSLCertificateVerifier(SystemTrustSslCertificateVerifier.shared())
             .createPeerConnectionDependencies();
         peerConnection = peerConnectionFactory.createPeerConnection(configuration, dependencies);
 

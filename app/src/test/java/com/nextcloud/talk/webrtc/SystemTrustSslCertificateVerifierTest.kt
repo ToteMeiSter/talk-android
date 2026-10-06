@@ -11,69 +11,87 @@ import org.conscrypt.Conscrypt
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import org.junit.runner.RunWith
-import org.junit.runners.Parameterized
 import java.security.KeyStore
-import java.security.Provider
+import java.security.cert.CertificateFactory
 import java.security.cert.X509Certificate
 import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
 /**
- * The verifier must accept a certificate only if the trust store would accept it as a chain of one certificate.
- * Run against the JDK trust manager and against Conscrypt, which is the one used on Android.
+ * Runs against the Conscrypt trust manager, which Android uses. The PEM fixtures in `resources/turns-tls` have
+ * realistic key usages (CA: keyCertSign, serverAuth + clientAuth); HeldCertificate sets none.
  */
-@RunWith(Parameterized::class)
-class SystemTrustSslCertificateVerifierTest(
-    @Suppress("UNUSED_PARAMETER") name: String,
-    private val provider: Provider?
-) {
+class SystemTrustSslCertificateVerifierTest {
 
-    private val root = HeldCertificate.Builder()
+    private val heldRoot = HeldCertificate.Builder()
         .certificateAuthority(2)
         .commonName("Test Root")
         .build()
 
-    private fun verifierTrusting(anchor: X509Certificate): SystemTrustSslCertificateVerifier {
+    private fun pem(name: String): ByteArray {
+        val stream = javaClass.classLoader!!.getResourceAsStream("turns-tls/$name.pem")!!
+        return CertificateFactory.getInstance("X.509").generateCertificate(stream).encoded
+    }
+
+    private fun verifierTrusting(anchor: ByteArray): SystemTrustSslCertificateVerifier {
+        val cert = CertificateFactory.getInstance("X.509").generateCertificate(anchor.inputStream()) as X509Certificate
         val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
             load(null, null)
-            setCertificateEntry("anchor", anchor)
+            setCertificateEntry("anchor", cert)
         }
-        val algorithm = TrustManagerFactory.getDefaultAlgorithm()
-        val factory = if (provider != null) {
-            TrustManagerFactory.getInstance(algorithm, provider)
-        } else {
-            TrustManagerFactory.getInstance(algorithm)
-        }
+        val factory = TrustManagerFactory.getInstance(
+            TrustManagerFactory.getDefaultAlgorithm(),
+            Conscrypt.newProvider()
+        )
         factory.init(keyStore)
         return SystemTrustSslCertificateVerifier(factory.trustManagers.filterIsInstance<X509TrustManager>().first())
     }
 
-    private fun verify(verifier: SystemTrustSslCertificateVerifier, cert: HeldCertificate) =
-        verifier.verify(cert.certificate.encoded)
+    private val verifier by lazy { verifierTrusting(pem("root")) }
 
     @Test
     fun trustAnchorItselfIsAccepted() {
-        assertTrue(verify(verifierTrusting(root.certificate), root))
+        assertTrue(verifier.verify(pem("root")))
     }
 
     @Test
-    fun certificateIssuedByAnchorIsAccepted() {
+    fun intermediateCaIssuedByAnchorIsAccepted() {
+        assertTrue(verifier.verify(pem("intermediate-ca")))
+        assertTrue(verifier.verify(pem("intermediate-ca-no-eku")))
+        assertTrue(verifier.verify(pem("intermediate-ca-any-eku")))
+    }
+
+    @Test
+    fun intermediateCaWithoutKeyUsageIsAccepted() {
         val intermediate = HeldCertificate.Builder()
             .certificateAuthority(1)
             .commonName("Test Intermediate")
-            .signedBy(root)
+            .signedBy(heldRoot)
             .build()
+
+        assertTrue(verifierTrusting(heldRoot.certificate.encoded).verify(intermediate.certificate.encoded))
+    }
+
+    @Test
+    fun nonCaCertificateIssuedByAnchorIsRejected() {
         val leaf = HeldCertificate.Builder()
             .commonName("turn.example.org")
             .addSubjectAlternativeName("turn.example.org")
-            .signedBy(root)
+            .signedBy(heldRoot)
             .build()
 
-        val verifier = verifierTrusting(root.certificate)
+        assertFalse(verifierTrusting(heldRoot.certificate.encoded).verify(leaf.certificate.encoded))
+        assertFalse(verifier.verify(pem("not-ca-under-root")))
+    }
 
-        assertTrue(verify(verifier, intermediate))
-        assertTrue(verify(verifier, leaf))
+    @Test
+    fun caWithoutKeyCertSignIsRejected() {
+        assertFalse(verifier.verify(pem("ca-without-key-cert-sign")))
+    }
+
+    @Test
+    fun caWithoutServerAuthIsRejected() {
+        assertFalse(verifier.verify(pem("intermediate-ca-client-eku")))
     }
 
     @Test
@@ -81,7 +99,7 @@ class SystemTrustSslCertificateVerifierTest(
         val intermediate = HeldCertificate.Builder()
             .certificateAuthority(1)
             .commonName("Test Intermediate")
-            .signedBy(root)
+            .signedBy(heldRoot)
             .build()
         val leaf = HeldCertificate.Builder()
             .commonName("turn.example.org")
@@ -89,15 +107,14 @@ class SystemTrustSslCertificateVerifierTest(
             .signedBy(intermediate)
             .build()
 
-        // the intermediate is not in the chain handed over by WebRTC for this depth, only the leaf is
-        assertFalse(verify(verifierTrusting(root.certificate), leaf))
+        assertFalse(verifierTrusting(heldRoot.certificate.encoded).verify(leaf.certificate.encoded))
     }
 
     @Test
-    fun foreignSelfSignedCertificateIsRejected() {
-        val foreign = HeldCertificate.Builder().commonName("turn.example.org").build()
-
-        assertFalse(verify(verifierTrusting(root.certificate), foreign))
+    fun foreignCertificatesAreRejected() {
+        assertFalse(verifier.verify(pem("foreign-root")))
+        val selfSigned = HeldCertificate.Builder().commonName("turn.example.org").build()
+        assertFalse(verifier.verify(selfSigned.certificate.encoded))
     }
 
     @Test
@@ -107,26 +124,16 @@ class SystemTrustSslCertificateVerifierTest(
             .commonName("Test Root")
             .build()
 
-        assertFalse(verify(verifierTrusting(root.certificate), impostor))
+        assertFalse(verifierTrusting(heldRoot.certificate.encoded).verify(impostor.certificate.encoded))
     }
 
     @Test
-    fun expiredCertificateIsRejected() {
-        val now = System.currentTimeMillis()
-        val expired = HeldCertificate.Builder()
-            .commonName("turn.example.org")
-            .addSubjectAlternativeName("turn.example.org")
-            .validityInterval(now - TWO_DAYS_MS, now - ONE_DAY_MS)
-            .signedBy(root)
-            .build()
-
-        assertFalse(verify(verifierTrusting(root.certificate), expired))
+    fun expiredCaIsRejected() {
+        assertFalse(verifier.verify(pem("expired-intermediate-ca")))
     }
 
     @Test
     fun garbageBytesAreRejected() {
-        val verifier = verifierTrusting(root.certificate)
-
         assertFalse(verifier.verify(byteArrayOf(1, 2, 3, 4)))
         assertFalse(verifier.verify(ByteArray(0)))
         assertFalse(verifier.verify(null))
@@ -134,19 +141,6 @@ class SystemTrustSslCertificateVerifierTest(
 
     @Test
     fun missingTrustManagerRejectsEverything() {
-        assertFalse(SystemTrustSslCertificateVerifier(null).verify(root.certificate.encoded))
-    }
-
-    companion object {
-        private const val ONE_DAY_MS = 24L * 60 * 60 * 1000
-        private const val TWO_DAYS_MS = 2 * ONE_DAY_MS
-
-        @JvmStatic
-        @Parameterized.Parameters(name = "{0}")
-        fun providers(): List<Array<Any?>> =
-            listOf(
-                arrayOf("jdk", null),
-                arrayOf("conscrypt", Conscrypt.newProvider())
-            )
+        assertFalse(SystemTrustSslCertificateVerifier(null).verify(pem("root")))
     }
 }
