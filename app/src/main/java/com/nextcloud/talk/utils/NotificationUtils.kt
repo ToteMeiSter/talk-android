@@ -15,9 +15,11 @@ import android.graphics.Bitmap
 import android.graphics.drawable.BitmapDrawable
 import android.media.AudioAttributes
 import android.net.Uri
+import android.os.Bundle
 import android.service.notification.StatusBarNotification
 import android.text.TextUtils
 import android.util.Log
+import androidx.core.app.NotificationCompat
 import androidx.core.content.FileProvider
 import androidx.core.graphics.drawable.IconCompat
 import androidx.core.graphics.drawable.toBitmap
@@ -41,6 +43,7 @@ import java.io.IOException
 
 @Suppress("TooManyFunctions")
 object NotificationUtils {
+    const val CALL_NOTIFICATION_TIMEOUT_MS = 90_000L
 
     val TAG = NotificationUtils::class.java.simpleName
 
@@ -232,6 +235,32 @@ object NotificationUtils {
             }
         }
     }
+
+    /**
+     * Makes the incoming call notification dismissable by a server "delete" push and bounds how long it rings.
+     *
+     * The extras let [cancelNotification] and [cancelAllNotificationsForAccount] find the notification. The room
+     * token is left out on purpose: [cancelExistingNotificationsForRoom] would otherwise end the ringing when the
+     * chat is opened.
+     *
+     * The timeout is a safety net for a killed worker (FLAG_INSISTENT would ring forever). Normally the worker
+     * polls for 60 s (12 x 5 s) plus one request and then shows the "missed call". If the system removes the
+     * notification earlier, that "missed call" is not shown. A poll that outlives the timeout (slow requests on a bad
+     * network, no per-request limit) therefore ends the ring silently.
+     */
+    fun applyCallDismissal(
+        builder: NotificationCompat.Builder,
+        userId: Long,
+        serverNotificationId: Long?
+    ): NotificationCompat.Builder =
+        builder
+            .addExtras(
+                Bundle().apply {
+                    putLong(BundleKeys.KEY_INTERNAL_USER_ID, userId)
+                    serverNotificationId?.let { putLong(BundleKeys.KEY_NOTIFICATION_ID, it) }
+                }
+            )
+            .setTimeoutAfter(CALL_NOTIFICATION_TIMEOUT_MS)
 
     fun cancelAllNotificationsForAccount(context: Context?, conversationUser: User) {
         scanNotifications(context, conversationUser) { notificationManager, statusBarNotification, _ ->
