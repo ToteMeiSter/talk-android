@@ -1212,21 +1212,21 @@ class CallActivity : CallBaseActivity() {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
                 !permissionUtil!!.isPostNotificationsPermissionGranted()
             ) {
-                // the call works without the persistent notification, but returning to it is harder
-                Log.w(TAG, "Notification permission not granted - no persistent notification will be shown")
+                // The service must still start: without POST_NOTIFICATIONS only its notification is hidden,
+                // while the service keeps the process and microphone (camera if granted) alive in the background.
+                Log.w(TAG, "Notification permission not granted - the call notification will not be visible")
                 Snackbar.make(
                     binding!!.root,
                     resources.getString(R.string.nc_notification_permission_hint),
                     SEC_10
                 ).show()
-            } else {
-                CallForegroundService.start(
-                    applicationContext,
-                    conversationName,
-                    intent.extras,
-                    CallForegroundService.AvatarInfo(roomToken, baseUrl, credentials)
-                )
             }
+            CallForegroundService.start(
+                applicationContext,
+                conversationName,
+                intent.extras,
+                CallForegroundService.AvatarInfo(roomToken, baseUrl, credentials)
+            )
 
             if (!microphoneOn && !appPreferences.callMicrophoneMuted) {
                 onMicrophoneClick()
