@@ -30,6 +30,7 @@ import org.mockito.kotlin.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import java.io.IOException
+import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -45,13 +46,29 @@ class WebSocketInstanceSessionReplaceTest {
     private val server = MockWebServer()
     private val serverLog = CopyOnWriteArrayList<String>()
     private val connectionCount = AtomicInteger()
+    private val eventBus = EventBus.builder().build()
     private var instance: WebSocketInstance? = null
+
+    // A failed instance keeps reconnecting after the test. A path of its own keeps it away from the connections
+    // of other tests, even if a later MockWebServer gets the same port.
+    private val path = "/t-${UUID.randomUUID()}/"
 
     @Before
     fun setUp() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
+                if (request.path != path) {
+                    return MockResponse().setResponseCode(HTTP_NOT_FOUND)
+                }
                 val connection = connectionCount.incrementAndGet()
+                if (connection == 2) {
+                    // Hold the second upgrade until the "bye" of the first connection arrived, so the order
+                    // "bye before the new hello" is decided by the client and not by timing.
+                    val deadline = System.currentTimeMillis() + BYE_WAIT_MILLIS
+                    while (!serverLog.contains("c1:bye") && System.currentTimeMillis() < deadline) {
+                        Thread.sleep(POLL_MILLIS)
+                    }
+                }
                 return MockResponse().withWebSocketUpgrade(RecordingServerListener("c$connection"))
             }
         }
@@ -60,6 +77,7 @@ class WebSocketInstanceSessionReplaceTest {
 
     @After
     fun tearDown() {
+        instance?.let { eventBus.unregister(it) }
         server.shutdown()
     }
 
@@ -128,10 +146,10 @@ class WebSocketInstanceSessionReplaceTest {
         val client = OkHttpClient()
         val created = WebSocketInstance(
             user,
-            server.url("/").toString(),
+            server.url(path).toString(),
             "ticket",
             client,
-            EventBus.builder().build(),
+            eventBus,
             WebSocketConnectionHelper(client)
         )
         instance = created
@@ -173,6 +191,8 @@ class WebSocketInstanceSessionReplaceTest {
 
     companion object {
         private const val NORMAL_CLOSURE = 1000
+        private const val HTTP_NOT_FOUND = 404
+        private const val BYE_WAIT_MILLIS = 2_000L
         private const val TIMEOUT_MILLIS = 10_000L
         private const val POLL_MILLIS = 20L
         private const val SETTLE_MILLIS = 500L

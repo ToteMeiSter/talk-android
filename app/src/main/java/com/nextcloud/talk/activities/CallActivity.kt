@@ -333,7 +333,6 @@ class CallActivity : CallBaseActivity() {
     // Own handler for the delayed rejoin: "handler" drops all its callbacks on every call state change.
     private val rejoinHandler = Handler(Looper.getMainLooper())
     private val publisherRejoinPolicy = PublisherRejoinPolicy()
-    private var pendingRejoinDelayMillis = 0L
     private val rejoinRunnable = Runnable {
         if (!isDestroyed && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
             initiateCall()
@@ -2228,12 +2227,12 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private fun hangup(shutDownView: Boolean, endCallForAll: Boolean) {
+    private fun hangup(shutDownView: Boolean, endCallForAll: Boolean, rejoinDelayMillis: Long = 0L) {
         Log.d(TAG, "hangup! shutDownView=$shutDownView, endCallForAll=$endCallForAll")
         joinRoomInitiated = false
         if (shutDownView) {
-            rejoinHandler.removeCallbacksAndMessages(null)
             setCallState(CallStatus.LEAVING)
+            rejoinHandler.removeCallbacksAndMessages(null)
         }
         stopCallingSound()
         callTimeHandler.removeCallbacksAndMessages(null)
@@ -2271,7 +2270,7 @@ class CallActivity : CallBaseActivity() {
             CallForegroundService.stop(applicationContext)
         }
 
-        hangupNetworkCalls(shutDownView, endCallForAll)
+        hangupNetworkCalls(shutDownView, endCallForAll, rejoinDelayMillis)
     }
 
     private fun terminateAudioVideo() {
@@ -2316,7 +2315,7 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private fun hangupNetworkCalls(shutDownView: Boolean, endCallForAll: Boolean) {
+    private fun hangupNetworkCalls(shutDownView: Boolean, endCallForAll: Boolean, rejoinDelayMillis: Long = 0L) {
         Log.d(TAG, "hangupNetworkCalls. shutDownView=$shutDownView")
         if (!::conversationUser.isInitialized) {
             Log.w(TAG, "hangupNetworkCalls: conversationUser not initialized, skipping network calls")
@@ -2363,10 +2362,13 @@ class CallActivity : CallBaseActivity() {
         } else if (shutDownView) {
             finish()
         } else if (currentCallStatus === CallStatus.PUBLISHER_FAILED) {
-            Log.d(TAG, "Rejoining the call in $pendingRejoinDelayMillis ms")
             rejoinHandler.removeCallbacks(rejoinRunnable)
-            rejoinHandler.postDelayed(rejoinRunnable, pendingRejoinDelayMillis)
-            pendingRejoinDelayMillis = 0L
+            if (rejoinDelayMillis > 0) {
+                Log.d(TAG, "Rejoining the call in $rejoinDelayMillis ms")
+                rejoinHandler.postDelayed(rejoinRunnable, rejoinDelayMillis)
+            } else {
+                initiateCall()
+            }
         } else if (currentCallStatus === CallStatus.RECONNECTING) {
             initiateCall()
         }
@@ -3297,11 +3299,11 @@ class CallActivity : CallBaseActivity() {
                         return@runOnUiThread
                     }
                     // Only this ICE handler counts failures and sets a pause. Other callers of the same
-                    // hangup path rejoin at once (pendingRejoinDelayMillis stays 0).
-                    pendingRejoinDelayMillis = publisherRejoinPolicy.onPublisherFailed()
+                    // hangup path rejoin at once.
+                    val rejoinDelayMillis = publisherRejoinPolicy.onPublisherFailed()
                     setCallState(CallStatus.PUBLISHER_FAILED)
                     webSocketClient!!.clearResumeId()
-                    hangup(false, false)
+                    hangup(false, false, rejoinDelayMillis)
                 } else if (iceConnectionState == IceConnectionState.CONNECTED ||
                     iceConnectionState == IceConnectionState.COMPLETED
                 ) {

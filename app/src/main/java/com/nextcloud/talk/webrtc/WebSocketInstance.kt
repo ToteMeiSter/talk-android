@@ -10,6 +10,7 @@ package com.nextcloud.talk.webrtc
 import android.content.Context
 import android.text.TextUtils
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import autodagger.AutoInjector
 import com.bluelinelabs.logansquare.LoganSquare
 import com.nextcloud.talk.application.NextcloudTalkApplication
@@ -48,7 +49,10 @@ import javax.inject.Inject
 
 @AutoInjector(NextcloudTalkApplication::class)
 @Suppress("TooManyFunctions")
-class WebSocketInstance @JvmOverloads internal constructor(
+class WebSocketInstance
+@JvmOverloads
+@VisibleForTesting
+internal constructor(
     conversationUser: User,
     connectionUrl: String,
     webSocketTicket: String,
@@ -78,6 +82,8 @@ class WebSocketInstance @JvmOverloads internal constructor(
     var isConnected: Boolean
         private set
     private val webSocketConnectionHelper: WebSocketConnectionHelper
+
+    @Volatile
     private var internalWebSocket: WebSocket? = null
     private val connectionUrl: String
     private var currentRoomToken: String? = null
@@ -91,6 +97,9 @@ class WebSocketInstance @JvmOverloads internal constructor(
     private val signalingHttpClient: OkHttpClient by lazy { createSignalingHttpClient(okHttpClient!!) }
 
     init {
+        require((testOkHttpClient == null) == (testEventBus == null)) {
+            "testOkHttpClient and testEventBus must be given together"
+        }
         if (testOkHttpClient != null && testEventBus != null) {
             okHttpClient = testOkHttpClient
             eventBus = testEventBus
@@ -157,7 +166,9 @@ class WebSocketInstance @JvmOverloads internal constructor(
     }
 
     fun restartWebSocket() {
-        replaceWebSocket(cancelPrevious = true)
+        val previousWebSocket = openNewWebSocket()
+        previousWebSocket?.close(NORMAL_CLOSURE, null)
+        previousWebSocket?.cancel()
     }
 
     /**
@@ -167,26 +178,32 @@ class WebSocketInstance @JvmOverloads internal constructor(
      * be resumed.
      *
      * The old WebSocket is closed gracefully and not cancelled: cancel() drops the send queue, so the "bye" would
-     * never leave the device.
+     * never leave the device. The new WebSocket is made the current one before the "bye" is sent, so callbacks of
+     * the old one are never taken for the current one.
      */
     fun restartWebSocketWithNewSession() {
         Log.d(TAG, "restartWebSocketWithNewSession: $connectionUrl")
-        val byeSent = sendBye()
+        val wasConnected = isConnected
         resumeId = ""
-        replaceWebSocket(cancelPrevious = !byeSent)
+        val previousWebSocket = openNewWebSocket()
+        val byeSent = wasConnected && previousWebSocket != null && sendBye(previousWebSocket)
+        previousWebSocket?.close(NORMAL_CLOSURE, null)
+        if (!byeSent) {
+            previousWebSocket?.cancel()
+        }
     }
 
-    private fun replaceWebSocket(cancelPrevious: Boolean) {
+    /**
+     * @return the previous WebSocket, which is still open
+     */
+    private fun openNewWebSocket(): WebSocket? {
         Log.d(TAG, "restartWebSocket: $connectionUrl")
         val previousWebSocket = internalWebSocket
         isConnected = false
         reconnecting = true
         val request = Request.Builder().url(connectionUrl).build()
         internalWebSocket = signalingHttpClient.newWebSocket(request, this)
-        previousWebSocket?.close(NORMAL_CLOSURE, null)
-        if (cancelPrevious) {
-            previousWebSocket?.cancel()
-        }
+        return previousWebSocket
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -509,20 +526,23 @@ class WebSocketInstance @JvmOverloads internal constructor(
         }
     }
 
-    /**
-     * @return true if the "bye" was handed over to the current WebSocket
-     */
     fun sendBye(): Boolean {
+        val webSocket = internalWebSocket
+        return isConnected && webSocket != null && sendBye(webSocket)
+    }
+
+    /**
+     * @return true if the "bye" was handed over to [webSocket]
+     */
+    private fun sendBye(webSocket: WebSocket): Boolean {
         var sent = false
-        if (isConnected) {
-            try {
-                val byeWebSocketMessage = ByeWebSocketMessageDto()
-                byeWebSocketMessage.type = "bye"
-                byeWebSocketMessage.bye = HashMap()
-                sent = internalWebSocket!!.send(LoganSquare.serialize(byeWebSocketMessage))
-            } catch (e: IOException) {
-                Log.e(TAG, "Failed to serialize bye message")
-            }
+        try {
+            val byeWebSocketMessage = ByeWebSocketMessageDto()
+            byeWebSocketMessage.type = "bye"
+            byeWebSocketMessage.bye = HashMap()
+            sent = webSocket.send(LoganSquare.serialize(byeWebSocketMessage))
+        } catch (e: IOException) {
+            Log.e(TAG, "Failed to serialize bye message")
         }
         return sent
     }
