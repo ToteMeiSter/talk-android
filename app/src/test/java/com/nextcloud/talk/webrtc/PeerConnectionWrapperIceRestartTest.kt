@@ -38,6 +38,7 @@ import org.webrtc.PeerConnection.SignalingState
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.SdpObserver
 import org.webrtc.SessionDescription
+import org.webrtc.observer
 
 @Suppress("TooManyFunctions")
 class PeerConnectionWrapperIceRestartTest {
@@ -59,10 +60,7 @@ class PeerConnectionWrapperIceRestartTest {
                 any(PeerConnectionDependencies::class.java)
             )
         ).thenAnswer {
-            // the observer is package-private in PeerConnectionDependencies
-            observer = PeerConnectionDependencies::class.java.getDeclaredMethod("getObserver")
-                .apply { isAccessible = true }
-                .invoke(it.getArgument<PeerConnectionDependencies>(1)) as PeerConnection.Observer
+            observer = it.getArgument<PeerConnectionDependencies>(1).observer()
             peerConnection
         }
         Mockito.`when`(peerConnection.createDataChannel(anyString(), any()))
