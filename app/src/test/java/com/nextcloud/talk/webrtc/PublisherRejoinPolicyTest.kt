@@ -36,7 +36,7 @@ class PublisherRejoinPolicyTest {
     fun connectedPublisherStartsTheCountOver() {
         repeat(6) { policy.onPublisherFailed() }
 
-        policy.onPublisherConnected()
+        policy.reset()
 
         assertEquals(0L, policy.onPublisherFailed())
         assertEquals(2_000L, policy.onPublisherFailed())

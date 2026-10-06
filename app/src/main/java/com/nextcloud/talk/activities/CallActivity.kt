@@ -3307,7 +3307,7 @@ class CallActivity : CallBaseActivity() {
                 } else if (iceConnectionState == IceConnectionState.CONNECTED ||
                     iceConnectionState == IceConnectionState.COMPLETED
                 ) {
-                    publisherRejoinPolicy.onPublisherConnected()
+                    publisherRejoinPolicy.reset()
                 }
             }
         }
