@@ -3310,10 +3310,11 @@ class CallActivity : CallBaseActivity() {
     // A switch while joining again is not repeated; if that attempt fails, the ICE failure handling recovers it.
     private fun onNetworkSwitched() {
         if (currentCallStatus === CallStatus.PUBLISHER_FAILED && isRejoinPaused) {
-            // The pause is meant for a network that keeps failing; a new network deserves a new attempt now.
+            // The pause is meant for a network that keeps failing; a new network starts over without a pause.
             Log.d(TAG, "Network switched during the rejoin pause, rejoining at once")
             rejoinHandler.removeCallbacks(rejoinRunnable)
             isRejoinPaused = false
+            publisherRejoinPolicy.reset()
             initiateCall()
             return
         }
