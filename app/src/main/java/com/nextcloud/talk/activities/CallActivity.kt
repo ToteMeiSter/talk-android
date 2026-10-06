@@ -342,7 +342,9 @@ class CallActivity : CallBaseActivity() {
     // Own handler for the delayed rejoin: "handler" drops all its callbacks on every call state change.
     private val rejoinHandler = Handler(Looper.getMainLooper())
     private val publisherRejoinPolicy = PublisherRejoinPolicy()
+    private var isRejoinPaused = false
     private val rejoinRunnable = Runnable {
+        isRejoinPaused = false
         if (!isDestroyed && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
             initiateCall()
         }
@@ -2375,6 +2377,7 @@ class CallActivity : CallBaseActivity() {
             finish()
         } else if (currentCallStatus === CallStatus.PUBLISHER_FAILED) {
             rejoinHandler.removeCallbacks(rejoinRunnable)
+            isRejoinPaused = rejoinDelayMillis > 0
             if (rejoinDelayMillis > 0) {
                 Log.d(TAG, "Rejoining the call in $rejoinDelayMillis ms")
                 rejoinHandler.postDelayed(rejoinRunnable, rejoinDelayMillis)
@@ -3306,6 +3309,14 @@ class CallActivity : CallBaseActivity() {
     // Joins again also in the background: the connection is dead for sure, not just paused by a stopped activity.
     // A switch while joining again is not repeated; if that attempt fails, the ICE failure handling recovers it.
     private fun onNetworkSwitched() {
+        if (currentCallStatus === CallStatus.PUBLISHER_FAILED && isRejoinPaused) {
+            // The pause is meant for a network that keeps failing; a new network deserves a new attempt now.
+            Log.d(TAG, "Network switched during the rejoin pause, rejoining at once")
+            rejoinHandler.removeCallbacks(rejoinRunnable)
+            isRejoinPaused = false
+            initiateCall()
+            return
+        }
         if (currentCallStatus !== CallStatus.IN_CONVERSATION && currentCallStatus !== CallStatus.JOINED) {
             Log.d(TAG, "Network switched, nothing to recover in call status $currentCallStatus")
             return
