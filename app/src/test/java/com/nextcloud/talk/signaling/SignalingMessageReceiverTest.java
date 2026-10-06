@@ -55,8 +55,8 @@ public class SignalingMessageReceiverTest {
 
         InOrder inOrder = inOrder(mockedOfferMessageListener, mockedWebRtcMessageListener);
 
-        inOrder.verify(mockedOfferMessageListener).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
-        inOrder.verify(mockedWebRtcMessageListener).onOffer("theSdp", "theNick");
+        inOrder.verify(mockedOfferMessageListener).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
+        inOrder.verify(mockedWebRtcMessageListener).onOffer("theSdp", "theNick", null);
     }
 
     @Test
@@ -69,7 +69,7 @@ public class SignalingMessageReceiverTest {
         doAnswer((invocation) -> {
             signalingMessageReceiver.addListener(mockedWebRtcMessageListener, "theSessionId", "theRoomType");
             return null;
-        }).when(mockedOfferMessageListener).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        }).when(mockedOfferMessageListener).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
 
         signalingMessageReceiver.addListener(mockedOfferMessageListener);
 
@@ -86,8 +86,8 @@ public class SignalingMessageReceiverTest {
 
         InOrder inOrder = inOrder(mockedOfferMessageListener, mockedWebRtcMessageListener);
 
-        inOrder.verify(mockedOfferMessageListener).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
-        inOrder.verify(mockedWebRtcMessageListener).onOffer("theSdp", "theNick");
+        inOrder.verify(mockedOfferMessageListener).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
+        inOrder.verify(mockedWebRtcMessageListener).onOffer("theSdp", "theNick", null);
     }
 
     @Test
@@ -100,7 +100,7 @@ public class SignalingMessageReceiverTest {
         doAnswer((invocation) -> {
             signalingMessageReceiver.removeListener(mockedWebRtcMessageListener);
             return null;
-        }).when(mockedOfferMessageListener).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        }).when(mockedOfferMessageListener).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
 
         signalingMessageReceiver.addListener(mockedOfferMessageListener);
         signalingMessageReceiver.addListener(mockedWebRtcMessageListener, "theSessionId", "theRoomType");
@@ -116,7 +116,7 @@ public class SignalingMessageReceiverTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedOfferMessageListener, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        verify(mockedOfferMessageListener, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
         verifyNoInteractions(mockedWebRtcMessageListener);
     }
 }

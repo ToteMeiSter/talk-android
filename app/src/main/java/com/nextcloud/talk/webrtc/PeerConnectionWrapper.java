@@ -39,8 +39,13 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 import androidx.annotation.Nullable;
+import androidx.annotation.VisibleForTesting;
 
 public class PeerConnectionWrapper {
 
@@ -64,7 +69,32 @@ public class PeerConnectionWrapper {
     private final SdpObserver sdpObserver;
 
     private final boolean isMCUPublisher;
+    private final boolean hasMCU;
     private final String videoStreamType;
+
+    // Identifies this connection towards the remote side, like "sid" in the web client and iOS. An offer with an
+    // unknown "sid" makes the remote side drop its connection, so all messages of this connection carry it.
+    private volatile String sid = String.valueOf(System.currentTimeMillis());
+
+    @VisibleForTesting
+    static volatile long disconnectedRestartDelayMs = 5000;
+    @VisibleForTesting
+    static volatile long unansweredOfferTimeoutMs = 10000;
+    @VisibleForTesting
+    static volatile long restartAfterRollbackJitterMs = 2000;
+    private static final int MAX_AUTOMATIC_ICE_RESTARTS = 5;
+    // All ICE restart work runs on this single thread, so the restart count needs no lock and PeerConnection
+    // calls are never made while holding a lock the signaling thread needs.
+    private static final ScheduledExecutorService TIMER = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable, "PeerConnectionWrapperTimer");
+        thread.setDaemon(true);
+        return thread;
+    });
+
+    private volatile PeerConnection.IceConnectionState lastIceConnectionState;
+    private int automaticIceRestarts; // only used on TIMER
+    private ScheduledFuture<?> disconnectedRestartTask;
+    private ScheduledFuture<?> unansweredOfferTask;
 
     // It is assumed that there will be at most one remote stream at each time.
     private MediaStream stream;
@@ -113,6 +143,22 @@ public class PeerConnectionWrapper {
                                  boolean isMCUPublisher, boolean hasMCU, String videoStreamType,
                                  SignalingMessageReceiver signalingMessageReceiver,
                                  SignalingMessageSender signalingMessageSender) {
+        this(peerConnectionFactory, iceServerList, mediaConstraints, sessionId, localSession, localStream,
+             isMCUPublisher, hasMCU, videoStreamType, signalingMessageReceiver, signalingMessageSender, false);
+    }
+
+    /**
+     * @param createdFromOffer true if the connection is created because an offer of the remote side arrived; no
+     *                         offer is requested from the MCU then, as it is already sent
+     */
+    public PeerConnectionWrapper(PeerConnectionFactory peerConnectionFactory,
+                                 List<PeerConnection.IceServer> iceServerList,
+                                 MediaConstraints mediaConstraints,
+                                 String sessionId, String localSession, @Nullable MediaStream localStream,
+                                 boolean isMCUPublisher, boolean hasMCU, String videoStreamType,
+                                 SignalingMessageReceiver signalingMessageReceiver,
+                                 SignalingMessageSender signalingMessageSender,
+                                 boolean createdFromOffer) {
         this.videoStreamType = videoStreamType;
 
         this.sessionId = sessionId;
@@ -121,6 +167,7 @@ public class PeerConnectionWrapper {
         sdpObserver = new SdpObserver();
         boolean hasInitiated = isOfferer(localSession, sessionId);
         this.isMCUPublisher = isMCUPublisher;
+        this.hasMCU = hasMCU;
 
         PeerConnection.RTCConfiguration configuration = new PeerConnection.RTCConfiguration(iceServerList);
         configuration.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
@@ -152,7 +199,9 @@ public class PeerConnectionWrapper {
 
                 if (isMCUPublisher) {
                     peerConnection.createOffer(sdpObserver, mediaConstraints);
-                } else if (hasMCU && "video".equals(this.videoStreamType)) {
+                } else if (hasMCU && "video".equals(this.videoStreamType) && !createdFromOffer) {
+                    // If the connection is created because of an offer, a second request would make the MCU join
+                    // again with a new "sid", which replaces this connection again and so on.
                     // If the connection type is "screen" the client sharing the screen will send an
                     // offer; offers should be requested only for videos.
                     // "to" property is not actually needed in the "requestoffer" signaling message, but it is used to
@@ -190,6 +239,136 @@ public class PeerConnectionWrapper {
      */
     static boolean isOfferer(String localSession, String remoteSession) {
         return remoteSession.compareTo(localSession) < 0;
+    }
+
+    /**
+     * Restarts ICE with a new offer, e.g. after the device moved to another network. Skipped with the MCU (the call
+     * is joined again there), for screen sharing, before the first negotiation is finished and while another
+     * negotiation is in progress. Runs asynchronously.
+     */
+    public void restartIce() {
+        runOnTimer(this::restartIceNow);
+    }
+
+    private static void runOnTimer(Runnable task) {
+        TIMER.execute(() -> runSafely(task));
+    }
+
+    private static void runSafely(Runnable task) {
+        try {
+            task.run();
+        } catch (RuntimeException e) {
+            Log.w(TAG, "ICE restart task failed", e);
+        }
+    }
+
+    @VisibleForTesting
+    static void waitForTimerIdle() throws Exception {
+        TIMER.submit(() -> { }).get();
+    }
+
+    private boolean restartIceNow() {
+        PeerConnection connection = peerConnection;
+        if (!canRestartIce(connection)) {
+            return false;
+        }
+
+        Log.d(TAG, "Restarting ICE over " + sessionId + " " + videoStreamType);
+        connection.restartIce();
+        connection.createOffer(sdpObserver, mediaConstraints);
+        scheduleUnansweredOfferRollback();
+        return true;
+    }
+
+    private boolean canRestartIce(@Nullable PeerConnection connection) {
+        return !hasMCU
+            && "video".equals(videoStreamType)
+            && connection != null
+            && connection.signalingState() == PeerConnection.SignalingState.STABLE
+            && connection.getLocalDescription() != null
+            && connection.getRemoteDescription() != null;
+    }
+
+    private void restartIceWithinLimit() {
+        if (automaticIceRestarts >= MAX_AUTOMATIC_ICE_RESTARTS) {
+            Log.w(TAG, "Not restarting ICE again after " + MAX_AUTOMATIC_ICE_RESTARTS + " tries over " + sessionId);
+        } else if (restartIceNow()) {
+            automaticIceRestarts++;
+        }
+    }
+
+    // An offer can get lost (e.g. dropped with the signaling connection); without an answer the connection would
+    // stay in "have-local-offer" for good, so the offer is rolled back after a timeout.
+    private void scheduleUnansweredOfferRollback() {
+        synchronized (this) {
+            cancelTask(unansweredOfferTask);
+            unansweredOfferTask = TIMER.schedule(() -> runSafely(this::rollbackUnansweredOffer),
+                                                 unansweredOfferTimeoutMs, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void rollbackUnansweredOffer() {
+        PeerConnection connection = peerConnection;
+        if (connection != null && connection.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+            Log.d(TAG, "No answer to the offer, rolling back over " + sessionId + " " + videoStreamType);
+            connection.setLocalDescription(new RollbackObserver(this::restartIceIfStillBroken),
+                                           new SessionDescription(SessionDescription.Type.ROLLBACK, ""));
+        }
+    }
+
+    // The jitter keeps two Android clients that dropped each other's offers from colliding again.
+    private void restartIceIfStillBroken() {
+        PeerConnection.IceConnectionState state = lastIceConnectionState;
+        if (state == PeerConnection.IceConnectionState.DISCONNECTED
+            || state == PeerConnection.IceConnectionState.FAILED) {
+            long delay = (long) (Math.random() * restartAfterRollbackJitterMs);
+            TIMER.schedule(() -> runSafely(this::restartIceWithinLimit), delay, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    // Same rule as the web client: ICE disconnected for more than 5 s, or failed, restarts ICE if the last local
+    // description is an offer; at most 5 times in a row, counted again after a connection was established.
+    private void handleIceStateForRestart(PeerConnection.IceConnectionState state) {
+        if (hasMCU || !"video".equals(videoStreamType)) {
+            return;
+        }
+
+        lastIceConnectionState = state;
+        synchronized (this) {
+            cancelTask(disconnectedRestartTask);
+            disconnectedRestartTask = null;
+            if (state == PeerConnection.IceConnectionState.DISCONNECTED) {
+                disconnectedRestartTask = TIMER.schedule(() -> runSafely(this::restartIceIfStillDisconnected),
+                                                         disconnectedRestartDelayMs, TimeUnit.MILLISECONDS);
+            }
+        }
+
+        if (state == PeerConnection.IceConnectionState.CONNECTED
+            || state == PeerConnection.IceConnectionState.COMPLETED) {
+            runOnTimer(() -> automaticIceRestarts = 0);
+        } else if (state == PeerConnection.IceConnectionState.FAILED) {
+            runOnTimer(this::restartIceAutomatically);
+        }
+    }
+
+    private void restartIceIfStillDisconnected() {
+        if (lastIceConnectionState == PeerConnection.IceConnectionState.DISCONNECTED) {
+            restartIceAutomatically();
+        }
+    }
+
+    private void restartIceAutomatically() {
+        PeerConnection connection = peerConnection;
+        SessionDescription localDescription = connection == null ? null : connection.getLocalDescription();
+        if (localDescription != null && localDescription.type == SessionDescription.Type.OFFER) {
+            restartIceWithinLimit();
+        }
+    }
+
+    private static void cancelTask(@Nullable ScheduledFuture<?> task) {
+        if (task != null) {
+            task.cancel(false);
+        }
     }
 
     public void raiseHand(Boolean raise) {
@@ -305,6 +484,10 @@ public class PeerConnectionWrapper {
 
     public void removePeerConnection() {
         signalingMessageReceiver.removeListener(webRtcMessageListener);
+        synchronized (this) {
+            cancelTask(disconnectedRestartTask);
+            cancelTask(unansweredOfferTask);
+        }
 
         final PeerConnection connectionToClose;
         synchronized (this) {
@@ -409,6 +592,16 @@ public class PeerConnectionWrapper {
         }
     }
 
+    /**
+     * Whether an offer with the given "sid" starts a new connection instead of renegotiating this one. The web
+     * client and iOS drop the old connection in that case, so the owner should do the same.
+     */
+    public boolean isReplacedByOffer(@Nullable String offerSid) {
+        PeerConnection connection = peerConnection;
+        return offerSid != null && !offerSid.isEmpty() && !offerSid.equals(sid)
+            && connection != null && connection.getRemoteDescription() != null;
+    }
+
     public PeerConnection getPeerConnection() {
         return peerConnection;
     }
@@ -435,36 +628,87 @@ public class PeerConnectionWrapper {
         ncSignalingMessage.setTo(sessionId);
         ncSignalingMessage.setRoomType(videoStreamType);
         ncSignalingMessage.setType(type);
+        // "requestoffer" with a "sid" asks to update an existing connection, so it must not carry our own one.
+        if (!"requestoffer".equals(type)) {
+            ncSignalingMessage.setSid(sid);
+        }
 
         return ncSignalingMessage;
     }
 
     private class WebRtcMessageListener implements SignalingMessageReceiver.WebRtcMessageListener {
 
-        public void onOffer(String sdp, String nick) {
-            onOfferOrAnswer("offer", sdp);
-        }
-
-        public void onAnswer(String sdp, String nick) {
-            onOfferOrAnswer("answer", sdp);
-        }
-
-        private void onOfferOrAnswer(String type, String sdp) {
-            SessionDescription sessionDescriptionWithPreferredCodec;
-
-            boolean isAudio = false;
-            String sessionDescriptionStringWithPreferredCodec = WebRTCUtils.preferCodec(sdp, "H264", isAudio);
-
-            sessionDescriptionWithPreferredCodec = new SessionDescription(
-                SessionDescription.Type.fromCanonicalForm(type),
-                sessionDescriptionStringWithPreferredCodec);
-
-            if (getPeerConnection() != null) {
-                getPeerConnection().setRemoteDescription(sdpObserver, sessionDescriptionWithPreferredCodec);
+        public void onOffer(String sdp, String nick, String remoteSid) {
+            PeerConnection connection = getPeerConnection();
+            if (connection == null) {
+                return;
             }
+
+            if (hasSid(remoteSid) && !remoteSid.equals(sid) && connection.getRemoteDescription() != null) {
+                // The owner of the connection replaces it when the "sid" changes; see isReplacedByOffer().
+                Log.w(TAG, "Ignoring offer with sid " + remoteSid + " for connection " + sid + " " + sessionId);
+                return;
+            }
+
+            // The state is read on the signaling thread, not on TIMER, so it can change right after. Crossed offers
+            // and answers that may result are repaired by the answer check in onAnswer().
+            if (connection.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+                // Offer collision. The web client gives way (a browser rolls back its own offer by itself), so this
+                // side keeps its offer: two sides that give way would answer crossed offers.
+                Log.d(TAG, "Offer collision, keeping own offer over " + sessionId);
+                return;
+            }
+
+            if (hasSid(remoteSid)) {
+                sid = remoteSid;
+            }
+            connection.setRemoteDescription(sdpObserver, createSessionDescription("offer", sdp));
         }
 
-        public void onCandidate(String sdpMid, int sdpMLineIndex, String sdp) {
+        public void onAnswer(String sdp, String nick, String remoteSid) {
+            if (isFromOtherConnection(remoteSid)) {
+                return;
+            }
+
+            PeerConnection connection = getPeerConnection();
+            if (connection == null) {
+                return;
+            }
+
+            // Read on the signaling thread, see onOffer(); a wrong reading only costs one more ICE restart.
+            if (connection.signalingState() != PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
+                // The own offer was rolled back or lost a collision, so the sides disagree about ICE credentials.
+                // A new offer brings them back in sync.
+                Log.w(TAG, "Answer without own offer, restarting ICE over " + sessionId + " " + videoStreamType);
+                runOnTimer(PeerConnectionWrapper.this::restartIceWithinLimit);
+                return;
+            }
+
+            connection.setRemoteDescription(sdpObserver, createSessionDescription("answer", sdp));
+        }
+
+        private boolean hasSid(@Nullable String value) {
+            return value != null && !value.isEmpty();
+        }
+
+        // Clients that do not send a "sid" (older ones) are treated as matching.
+        private boolean isFromOtherConnection(String remoteSid) {
+            if (hasSid(remoteSid) && !remoteSid.equals(sid)) {
+                Log.d(TAG, "Ignoring message with sid " + remoteSid + " for connection " + sid + " " + sessionId);
+                return true;
+            }
+            return false;
+        }
+
+        private SessionDescription createSessionDescription(String type, String sdp) {
+            String sdpWithPreferredCodec = WebRTCUtils.preferCodec(sdp, "H264", false);
+            return new SessionDescription(SessionDescription.Type.fromCanonicalForm(type), sdpWithPreferredCodec);
+        }
+
+        public void onCandidate(String sdpMid, int sdpMLineIndex, String sdp, String remoteSid) {
+            if (isFromOtherConnection(remoteSid)) {
+                return;
+            }
             IceCandidate iceCandidate = new IceCandidate(sdpMid, sdpMLineIndex, sdp);
             addCandidate(iceCandidate);
         }
@@ -596,6 +840,7 @@ public class PeerConnectionWrapper {
             Log.d("iceConnectionChangeTo: ", iceConnectionState.name() + " over " + peerConnection.hashCode() + " " + sessionId);
 
             peerConnectionNotifier.notifyIceConnectionStateChanged(iceConnectionState);
+            handleIceStateForRestart(iceConnectionState);
         }
 
         @Override
@@ -730,6 +975,49 @@ public class PeerConnectionWrapper {
         }
     }
 
+    private void stopVideoTransceiversIfNotReceivingVideo() {
+        if (shouldNotReceiveVideo()) {
+            for (RtpTransceiver t : peerConnection.getTransceivers()) {
+                if (t.getMediaType() == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO && !t.isStopped()) {
+                    t.stop();
+                }
+            }
+            Log.d(TAG, "Stop all Transceivers for MEDIA_TYPE_VIDEO.");
+        }
+    }
+
+    /**
+     * Observer for the rollback of an own offer; runs {@code afterRollback} once it was applied.
+     */
+    private class RollbackObserver implements org.webrtc.SdpObserver {
+        @Nullable
+        private final Runnable afterRollback;
+
+        RollbackObserver(@Nullable Runnable afterRollback) {
+            this.afterRollback = afterRollback;
+        }
+
+        @Override
+        public void onCreateSuccess(SessionDescription sessionDescription) {
+        }
+
+        @Override
+        public void onSetSuccess() {
+            if (afterRollback != null) {
+                afterRollback.run();
+            }
+        }
+
+        @Override
+        public void onCreateFailure(String s) {
+        }
+
+        @Override
+        public void onSetFailure(String s) {
+            Log.w(TAG, "Rollback failed over " + sessionId + ": " + s);
+        }
+    }
+
     private class SdpObserver implements org.webrtc.SdpObserver {
         private static final String TAG = "SdpObserver";
 
@@ -776,14 +1064,7 @@ public class PeerConnectionWrapper {
             if (peerConnection != null) {
                 if (peerConnection.getLocalDescription() == null) {
 
-                    if (shouldNotReceiveVideo()) {
-                        for (RtpTransceiver t : peerConnection.getTransceivers()) {
-                            if (t.getMediaType() == MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO) {
-                                t.stop();
-                            }
-                        }
-                        Log.d(TAG, "Stop all Transceivers for MEDIA_TYPE_VIDEO.");
-                    }
+                    stopVideoTransceiversIfNotReceivingVideo();
 
                     /*
                         Passed 'MediaConstraints' will be ignored by WebRTC when using UNIFIED PLAN.
@@ -791,6 +1072,10 @@ public class PeerConnectionWrapper {
                      */
                     peerConnection.createAnswer(sdpObserver, new MediaConstraints());
 
+                } else if (peerConnection.signalingState() == PeerConnection.SignalingState.HAVE_REMOTE_OFFER) {
+                    // The other side restarted ICE (or renegotiates) on an already negotiated connection.
+                    stopVideoTransceiversIfNotReceivingVideo();
+                    peerConnection.createAnswer(sdpObserver, new MediaConstraints());
                 }
 
                 if (peerConnection.getRemoteDescription() != null) {
