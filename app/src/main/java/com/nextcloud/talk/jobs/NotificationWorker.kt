@@ -112,7 +112,6 @@ import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_SYSTEM_NOTIFICATION_ID
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_THREAD_ID
 import com.nextcloud.talk.utils.preferences.AppPreferences
 import com.nextcloud.talk.utils.setExpeditedIfSupported
-import io.reactivex.Observable
 import io.reactivex.Observer
 import io.reactivex.disposables.Disposable
 import io.reactivex.schedulers.Schedulers
@@ -125,7 +124,6 @@ import java.net.CookieManager
 import java.security.InvalidKeyException
 import java.security.NoSuchAlgorithmException
 import java.security.PrivateKey
-import java.util.concurrent.TimeUnit
 import java.util.zip.CRC32
 import javax.crypto.BadPaddingException
 import javax.crypto.Cipher
@@ -323,7 +321,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         getNcDataAndShowNotification(mainActivityIntent)
     }
 
-    @Suppress("LongMethod", "TooGenericExceptionCaught")
+    @Suppress("LongMethod")
     private fun handleCallPushMessage() {
         val userBeingCalled = runBlocking { userManager.getUserWithId(user.id!!) }
 
@@ -461,18 +459,30 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             checkIfCallIsActive(conversation)
         }
 
-        val conversation = try {
-            runBlocking { chatNetworkDataSource?.getRoom(userBeingCalled!!, roomToken = pushMessage.id!!) }
-        } catch (e: Exception) {
-            Log.e(TAG, "Failed to get room", e)
-            null
-        }
+        val conversation = fetchRoomForCall(userBeingCalled)
 
         if (conversation != null && userBeingCalled != null) {
             if (CapabilitiesUtil.isCallEndToEndEncryptionEnabled(userBeingCalled.capabilities?.spreedCapability)) {
                 showEndToEndEncryptionUnsupportedNotification(conversation)
             } else {
                 prepareCallNotificationScreen(conversation)
+            }
+        }
+    }
+
+    /**
+     * Loads the room of a call push. The network may come up late after the push woke the device (Doze, microG),
+     * so transient failures are retried inside the call window, see [CallPushRetryPolicy.fetchRoomWithRetry].
+     */
+    private fun fetchRoomForCall(userBeingCalled: User?): ConversationModel? {
+        val startedAt = SystemClock.elapsedRealtime()
+        return runBlocking {
+            CallPushRetryPolicy.fetchRoomWithRetry(
+                elapsedMs = { SystemClock.elapsedRealtime() - startedAt },
+                isStopped = { isStopped },
+                hasCall = { it.hasCall }
+            ) {
+                chatNetworkDataSource?.getRoom(userBeingCalled!!, roomToken = pushMessage.id!!)
             }
         }
     }
@@ -1264,6 +1274,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         )
 
         var isCallNotificationVisible = true
+        val pollStartedAt = SystemClock.elapsedRealtime()
+        fun pollElapsed() = SystemClock.elapsedRealtime() - pollStartedAt
 
         ncApi.getPeersForCall(
             credentials,
@@ -1273,11 +1285,20 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 pushMessage.id!!
             )
         )
-            .repeatWhen { completed ->
-                completed.zipWith(Observable.range(TIMER_START, TIMER_COUNT)) { _, i -> i }
-                    .flatMap { Observable.timer(TIMER_DELAY, TimeUnit.SECONDS) }
-                    .takeWhile { isCallNotificationVisible && hasParticipantsInCall && !inCallOnDifferentDevice }
-            }
+            // a failed poll is not the end of the call: retry transient errors until the poll window is used up
+            .compose(
+                CallPushRetryPolicy.pollTransformer(
+                    elapsedMs = { pollElapsed() },
+                    isCallVisible = {
+                        NotificationUtils.isNotificationVisible(context, pushMessage.timestamp.toInt())
+                    },
+                    shouldKeepPolling = {
+                        isCallNotificationVisible && hasParticipantsInCall && !inCallOnDifferentDevice
+                    },
+                    scheduler = Schedulers.computation(),
+                    onRetry = { Log.w(TAG, "getPeersForCall failed, retrying", it) }
+                )
+            )
             .subscribeOn(Schedulers.io())
             .subscribe(object : Observer<ParticipantsOverall> {
                 override fun onSubscribe(d: Disposable) = Unit
@@ -1314,7 +1335,12 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
                 override fun onError(e: Throwable) {
                     Log.e(TAG, "Error in getPeersForCall", e)
-                    if (isCallNotificationVisible) {
+                    val outcome = CallPushRetryPolicy.pollFailureOutcome(e, pollElapsed())
+                    // only a call that rang for the whole window without being confirmed over counts as missed;
+                    // a permanent error says nothing about the call, so it only stops the ringing
+                    if (outcome == CallPushRetryPolicy.PollFailureOutcome.WINDOW_EXHAUSTED &&
+                        isCallNotificationVisible
+                    ) {
                         showMissedCallNotification(conversation)
                     }
                     removeNotification(pushMessage.timestamp.toInt())
@@ -1470,9 +1496,6 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         private const val SPREED_APP = "spreed"
         private const val INTERNAL = "internal"
         private const val ADMIN_NOTIFICATION_TALK = "admin_notification_talk"
-        private const val TIMER_START = 1
-        private const val TIMER_COUNT = 12
-        private const val TIMER_DELAY: Long = 5
         private const val LINEBREAK: String = "\n"
         private const val ANSWER_VOICE_REQUEST_OFFSET = 1
         private const val ANSWER_VIDEO_REQUEST_OFFSET = 2
