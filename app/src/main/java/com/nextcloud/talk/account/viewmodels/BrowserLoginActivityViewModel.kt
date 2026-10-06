@@ -112,7 +112,9 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
     fun handleWebBrowserLogin() {
         savedResponse?.let { response ->
             viewModelScope.launch {
-                val loginCompletion = runCatching { repository.pollLogin(response) }
+                // Canceled or expired logins stop the poll, also while it waits to retry.
+                val isLoginPending = { PendingBrowserLoginStore.active() != null }
+                val loginCompletion = runCatching { repository.pollLogin(response, isLoginPending) }
                     .onFailure { e ->
                         // This view model is cleared: the login stays pending.
                         if (e is CancellationException) throw e

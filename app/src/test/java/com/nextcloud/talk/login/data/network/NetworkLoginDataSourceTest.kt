@@ -16,12 +16,14 @@ import okhttp3.Credentials
 import okhttp3.OkHttpClient
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
+import org.junit.Assert.assertThrows
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.MockitoAnnotations
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.io.IOException
 
 @Suppress("ktlint:standard:max-line-length", "MaxLineLength")
 @RunWith(RobolectricTestRunner::class)
@@ -194,5 +196,16 @@ class NetworkLoginDataSourceTest {
         val appPassword =
             network.oneTimePasswordRequest(server.url("").toString(), Credentials.basic("username", "oneTimePassword"))
         assertNull(appPassword)
+    }
+
+    @Test
+    fun `testing performLoginFlowV2 request failure is thrown`() {
+        val server = MockWebServer()
+        server.start()
+        val httpUrl = server.url("login/v2/poll")
+        server.close()
+        val loginResponse = LoginResponse(token = "token", pollUrl = httpUrl.toString(), loginUrl = "")
+
+        assertThrows(IOException::class.java) { network.performLoginFlowV2(loginResponse) }
     }
 }
