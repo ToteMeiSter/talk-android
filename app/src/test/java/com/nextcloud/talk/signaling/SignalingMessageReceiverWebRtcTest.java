@@ -78,7 +78,7 @@ public class SignalingMessageReceiverWebRtcTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedWebRtcMessageListener, only()).onOffer("theSdp", null);
+        verify(mockedWebRtcMessageListener, only()).onOffer("theSdp", null, null);
     }
 
     @Test
@@ -99,7 +99,7 @@ public class SignalingMessageReceiverWebRtcTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedWebRtcMessageListener, only()).onOffer("theSdp", "theNick");
+        verify(mockedWebRtcMessageListener, only()).onOffer("theSdp", "theNick", null);
     }
 
     @Test
@@ -119,7 +119,7 @@ public class SignalingMessageReceiverWebRtcTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedWebRtcMessageListener, only()).onAnswer("theSdp", null);
+        verify(mockedWebRtcMessageListener, only()).onAnswer("theSdp", null, null);
     }
 
     @Test
@@ -140,7 +140,7 @@ public class SignalingMessageReceiverWebRtcTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedWebRtcMessageListener, only()).onAnswer("theSdp", "theNick");
+        verify(mockedWebRtcMessageListener, only()).onAnswer("theSdp", "theNick", null);
     }
 
     @Test
@@ -163,7 +163,7 @@ public class SignalingMessageReceiverWebRtcTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedWebRtcMessageListener, only()).onCandidate("theSdpMid", 42, "theSdp");
+        verify(mockedWebRtcMessageListener, only()).onCandidate("theSdpMid", 42, "theSdp", null);
     }
 
     @Test
@@ -349,5 +349,44 @@ public class SignalingMessageReceiverWebRtcTest {
 
         inOrder.verify(mockedWebRtcMessageListener1).onEndOfCandidates();
         inOrder.verify(mockedWebRtcMessageListener2).onEndOfCandidates();
+    }
+
+    @Test
+    public void testWebRtcMessagesPassTheSid() {
+        SignalingMessageReceiver.WebRtcMessageListener mockedWebRtcMessageListener =
+            mock(SignalingMessageReceiver.WebRtcMessageListener.class);
+
+        signalingMessageReceiver.addListener(mockedWebRtcMessageListener, "theSessionId", "theRoomType");
+
+        for (String type : new String[]{"offer", "answer"}) {
+            NCSignalingMessageDto signalingMessage = new NCSignalingMessageDto();
+            signalingMessage.setFrom("theSessionId");
+            signalingMessage.setType(type);
+            signalingMessage.setRoomType("theRoomType");
+            signalingMessage.setSid("theSid");
+            NCMessagePayloadDto messagePayload = new NCMessagePayloadDto();
+            messagePayload.setType(type);
+            messagePayload.setSdp("theSdp");
+            signalingMessage.setPayload(messagePayload);
+            signalingMessageReceiver.processSignalingMessage(signalingMessage);
+        }
+
+        NCSignalingMessageDto candidateMessage = new NCSignalingMessageDto();
+        candidateMessage.setFrom("theSessionId");
+        candidateMessage.setType("candidate");
+        candidateMessage.setRoomType("theRoomType");
+        candidateMessage.setSid("theSid");
+        NCMessagePayloadDto candidatePayload = new NCMessagePayloadDto();
+        NCIceCandidateDto iceCandidate = new NCIceCandidateDto();
+        iceCandidate.setSdpMid("theSdpMid");
+        iceCandidate.setSdpMLineIndex(42);
+        iceCandidate.setCandidate("theSdp");
+        candidatePayload.setIceCandidate(iceCandidate);
+        candidateMessage.setPayload(candidatePayload);
+        signalingMessageReceiver.processSignalingMessage(candidateMessage);
+
+        verify(mockedWebRtcMessageListener).onOffer("theSdp", null, "theSid");
+        verify(mockedWebRtcMessageListener).onAnswer("theSdp", null, "theSid");
+        verify(mockedWebRtcMessageListener).onCandidate("theSdpMid", 42, "theSdp", "theSid");
     }
 }

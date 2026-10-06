@@ -32,9 +32,9 @@ class OfferMessageNotifier {
         offerMessageListeners.remove(listener);
     }
 
-    public synchronized void notifyOffer(String sessionId, String roomType, String sdp, String nick) {
+    public synchronized void notifyOffer(String sessionId, String roomType, String sdp, String nick, String sid) {
         for (SignalingMessageReceiver.OfferMessageListener listener : new ArrayList<>(offerMessageListeners)) {
-            listener.onOffer(sessionId, roomType, sdp, nick);
+            listener.onOffer(sessionId, roomType, sdp, nick, sid);
         }
     }
 }
