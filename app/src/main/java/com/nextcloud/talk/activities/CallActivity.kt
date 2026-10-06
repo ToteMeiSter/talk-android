@@ -157,6 +157,7 @@ import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartedStat
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartingState
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper.PeerConnectionObserver
+import com.nextcloud.talk.webrtc.PublisherRejoinPolicy
 import com.nextcloud.talk.webrtc.WebRTCUtils
 import com.nextcloud.talk.webrtc.WebRtcAudioManager
 import com.nextcloud.talk.webrtc.WebRtcAudioManager.AudioDevice
@@ -328,6 +329,16 @@ class CallActivity : CallBaseActivity() {
     // Whether onCreate() got past its early exits, so onDestroy() has a call to clean up.
     private var isCallSetUp = false
     private var handler: Handler? = null
+
+    // Own handler for the delayed rejoin: "handler" drops all its callbacks on every call state change.
+    private val rejoinHandler = Handler(Looper.getMainLooper())
+    private val publisherRejoinPolicy = PublisherRejoinPolicy()
+    private var pendingRejoinDelayMillis = 0L
+    private val rejoinRunnable = Runnable {
+        if (!isDestroyed && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
+            initiateCall()
+        }
+    }
 
     private val callingTimeoutRunnable = Runnable { setCallState(CallStatus.CALLING_TIMEOUT) }
 
@@ -1565,6 +1576,7 @@ class CallActivity : CallBaseActivity() {
 
     public override fun onDestroy() {
         Log.d(TAG, "onDestroy: currentCallStatus=$currentCallStatus")
+        rejoinHandler.removeCallbacksAndMessages(null)
 
         if (isCallSetUp) {
             // The call cannot survive the activity being destroyed (WebRTC connections, local stream and
@@ -2220,6 +2232,7 @@ class CallActivity : CallBaseActivity() {
         Log.d(TAG, "hangup! shutDownView=$shutDownView, endCallForAll=$endCallForAll")
         joinRoomInitiated = false
         if (shutDownView) {
+            rejoinHandler.removeCallbacksAndMessages(null)
             setCallState(CallStatus.LEAVING)
         }
         stopCallingSound()
@@ -2349,9 +2362,12 @@ class CallActivity : CallBaseActivity() {
             finish()
         } else if (shutDownView) {
             finish()
-        } else if (currentCallStatus === CallStatus.RECONNECTING ||
-            currentCallStatus === CallStatus.PUBLISHER_FAILED
-        ) {
+        } else if (currentCallStatus === CallStatus.PUBLISHER_FAILED) {
+            Log.d(TAG, "Rejoining the call in $pendingRejoinDelayMillis ms")
+            rejoinHandler.removeCallbacks(rejoinRunnable)
+            rejoinHandler.postDelayed(rejoinRunnable, pendingRejoinDelayMillis)
+            pendingRejoinDelayMillis = 0L
+        } else if (currentCallStatus === CallStatus.RECONNECTING) {
             initiateCall()
         }
     }
@@ -3280,9 +3296,16 @@ class CallActivity : CallBaseActivity() {
                         Log.d(TAG, "ICE FAILED while backgrounded, skipping hangup (will recover on resume)")
                         return@runOnUiThread
                     }
+                    // Only this ICE handler counts failures and sets a pause. Other callers of the same
+                    // hangup path rejoin at once (pendingRejoinDelayMillis stays 0).
+                    pendingRejoinDelayMillis = publisherRejoinPolicy.onPublisherFailed()
                     setCallState(CallStatus.PUBLISHER_FAILED)
                     webSocketClient!!.clearResumeId()
                     hangup(false, false)
+                } else if (iceConnectionState == IceConnectionState.CONNECTED ||
+                    iceConnectionState == IceConnectionState.COMPLETED
+                ) {
+                    publisherRejoinPolicy.onPublisherConnected()
                 }
             }
         }
