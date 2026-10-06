@@ -93,7 +93,8 @@ class CallForegroundService : Service() {
         loadConversationAvatarAsync()
         startTimeBasedNotificationUpdates()
 
-        return START_STICKY
+        // The call lives in CallActivity's process: after a process kill there is no call to restore.
+        return START_NOT_STICKY
     }
 
     override fun onDestroy() {
