@@ -88,10 +88,10 @@ import com.nextcloud.talk.camera.BlurBackgroundViewModel.BackgroundBlurOn
 import com.nextcloud.talk.chat.ChatActivity
 import com.nextcloud.talk.callnotification.CallNotificationActivity
 import com.nextcloud.talk.conversationlist.ConversationsListActivity
+import com.nextcloud.talk.data.network.NetworkMonitor
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.databinding.CallActivityBinding
 import com.nextcloud.talk.events.ConfigurationChangeEvent
-import com.nextcloud.talk.events.NetworkEvent
 import com.nextcloud.talk.events.ProximitySensorEvent
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
 import com.nextcloud.talk.models.ExternalSignalingServer
@@ -223,6 +223,9 @@ class CallActivity : CallBaseActivity() {
     @Inject
     lateinit var viewModelFactory: ViewModelProvider.Factory
     lateinit var callViewModel: CallViewModel
+
+    @Inject
+    lateinit var networkMonitor: NetworkMonitor
 
     var audioManager: WebRtcAudioManager? = null
     var callRecordingViewModel: CallRecordingViewModel? = null
@@ -455,6 +458,9 @@ class CallActivity : CallBaseActivity() {
         conversationUser = setUpBoundUserOrFinish() ?: return
 
         callViewModel = ViewModelProvider(this, viewModelFactory)[CallViewModel::class.java]
+
+        // Not repeatOnLifecycle: the call has to recover in the background and in picture-in-picture too.
+        lifecycleScope.launch { networkMonitor.networkSwitches.collect { onNetworkSwitched() } }
 
         rootEglBase = EglBase.create()
         binding = CallActivityBinding.inflate(layoutInflater)
@@ -3271,6 +3277,32 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
+    // Same recovery as the web client for a failed connection to the MCU: join the call again with a new session.
+    private fun rejoinCallWithNewSession() {
+        setCallState(CallStatus.PUBLISHER_FAILED)
+        webSocketClient!!.clearResumeId()
+        hangup(false, false)
+    }
+
+    // The connections are bound to the address of the old network, so recover now instead of waiting for ICE to fail.
+    // Joins again also in the background: the connection is dead for sure, not just paused by a stopped activity.
+    // A switch while joining again is not repeated; if that attempt fails, the ICE failure handling recovers it.
+    private fun onNetworkSwitched() {
+        if (currentCallStatus !== CallStatus.IN_CONVERSATION && currentCallStatus !== CallStatus.JOINED) {
+            Log.d(TAG, "Network switched, nothing to recover in call status $currentCallStatus")
+            return
+        }
+        if (hasMCU && webSocketClient != null) {
+            Log.d(TAG, "Network switched, joining the call again with a new session")
+            rejoinCallWithNewSession()
+            return
+        }
+        Log.d(TAG, "Network switched, reconnecting signaling and restarting ICE")
+        webSocketClient?.restartWebSocket()
+        val wrappers = synchronized(remoteAudioPlayoutLock) { ArrayList(peerConnectionWrapperList) }
+        wrappers.forEach { it.restartIce() }
+    }
+
     private inner class CallActivitySelfPeerConnectionObserver : PeerConnectionObserver {
         override fun onStreamAdded(mediaStream: MediaStream) {
             // unused atm
@@ -3290,9 +3322,7 @@ class CallActivity : CallBaseActivity() {
                         Log.d(TAG, "ICE FAILED while backgrounded, skipping hangup (will recover on resume)")
                         return@runOnUiThread
                     }
-                    setCallState(CallStatus.PUBLISHER_FAILED)
-                    webSocketClient!!.clearResumeId()
-                    hangup(false, false)
+                    rejoinCallWithNewSession()
                 }
             }
         }
@@ -3397,21 +3427,6 @@ class CallActivity : CallBaseActivity() {
         binding!!.microphoneButton.setImageResource(R.drawable.ic_mic_off_white_24px)
         pulseAnimation!!.stop()
         toggleMedia(false, false)
-    }
-
-    @Subscribe(threadMode = ThreadMode.BACKGROUND)
-    fun onMessageEvent(networkEvent: NetworkEvent) {
-        if (networkEvent.networkConnectionEvent == NetworkEvent.NetworkConnectionEvent.NETWORK_CONNECTED) {
-            if (handler != null) {
-                handler!!.removeCallbacks(callingTimeoutRunnable)
-            }
-        } else if (networkEvent.networkConnectionEvent ==
-            NetworkEvent.NetworkConnectionEvent.NETWORK_DISCONNECTED
-        ) {
-            if (handler != null) {
-                handler!!.removeCallbacks(callingTimeoutRunnable)
-            }
-        }
     }
 
     override fun onPictureInPictureModeChanged(isInPictureInPictureMode: Boolean, newConfig: Configuration) {

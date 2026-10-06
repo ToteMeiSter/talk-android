@@ -18,7 +18,10 @@ import androidx.lifecycle.LiveData
 import androidx.lifecycle.asLiveData
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.MutableSharedFlow
+import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.callbackFlow
@@ -45,6 +48,13 @@ class NetworkMonitorImpl @Inject constructor(private val context: Context) : Net
 
     override val isOnline: StateFlow<Boolean> get() = _isOnline
 
+    private val switchTracker = NetworkSwitchTracker()
+    private val _networkSwitches = MutableSharedFlow<Unit>(
+        extraBufferCapacity = 1,
+        onBufferOverflow = BufferOverflow.DROP_OLDEST
+    )
+    override val networkSwitches: SharedFlow<Unit> get() = _networkSwitches
+
     private val _isOnline: StateFlow<Boolean> = callbackFlow {
         val callback = object : ConnectivityManager.NetworkCallback() {
             override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
@@ -54,6 +64,10 @@ class NetworkMonitorImpl @Inject constructor(private val context: Context) : Net
                 )
                 trySend(connected)
                 Log.d(TAG, "Network status changed: $connected")
+                if (connected && switchTracker.onValidated(network.networkHandle)) {
+                    Log.d(TAG, "Network switched to ${network.networkHandle}")
+                    _networkSwitches.tryEmit(Unit)
+                }
             }
 
             override fun onUnavailable() {
