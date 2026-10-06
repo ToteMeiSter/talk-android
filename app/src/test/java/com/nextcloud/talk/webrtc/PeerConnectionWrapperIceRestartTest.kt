@@ -32,6 +32,7 @@ import org.webrtc.DataChannel
 import org.webrtc.IceCandidate
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
+import org.webrtc.PeerConnectionDependencies
 import org.webrtc.PeerConnection.IceConnectionState
 import org.webrtc.PeerConnection.SignalingState
 import org.webrtc.PeerConnectionFactory
@@ -55,10 +56,13 @@ class PeerConnectionWrapperIceRestartTest {
         Mockito.`when`(
             factory.createPeerConnection(
                 any(PeerConnection.RTCConfiguration::class.java),
-                any(PeerConnection.Observer::class.java)
+                any(PeerConnectionDependencies::class.java)
             )
         ).thenAnswer {
-            observer = it.getArgument(1)
+            // the observer is package-private in PeerConnectionDependencies
+            observer = PeerConnectionDependencies::class.java.getDeclaredMethod("getObserver")
+                .apply { isAccessible = true }
+                .invoke(it.getArgument<PeerConnectionDependencies>(1)) as PeerConnection.Observer
             peerConnection
         }
         Mockito.`when`(peerConnection.createDataChannel(anyString(), any()))
