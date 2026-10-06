@@ -357,7 +357,11 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             val callerPerson = callerPersonBuilder.build()
 
             val notification =
-                NotificationCompat.Builder(applicationContext, notificationChannelId)
+                NotificationUtils.applyCallDismissal(
+                    NotificationCompat.Builder(applicationContext, notificationChannelId),
+                    user.id!!,
+                    pushMessage.notificationId
+                )
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
                     .setCategory(NotificationCompat.CATEGORY_CALL)
                     .setSmallIcon(R.drawable.ic_call_black_24dp)
