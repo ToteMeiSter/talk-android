@@ -31,6 +31,9 @@ import javax.net.ssl.X509TrustManager
  *
  * Called on a WebRTC network thread: no UI and no waiting. Certificates the user accepted for the server connection
  * in the app's own key store are not considered; that decision was made for a different purpose.
+ *
+ * When WebRTC is updated, re-check which certificate [verify] receives (M132: the one at the failing depth; newer
+ * builds may pass only the leaf). Otherwise TURNS fails again, which is a safe refusal.
  */
 class SystemTrustSslCertificateVerifier @JvmOverloads constructor(
     private val trustManager: X509TrustManager? = defaultTrustManager()
