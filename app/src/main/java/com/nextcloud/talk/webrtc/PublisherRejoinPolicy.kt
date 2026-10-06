@@ -13,8 +13,8 @@ package com.nextcloud.talk.webrtc
  * Without a pause a permanently failing ICE connection (e.g. TURNS does not work) rejoins every few seconds and
  * piles up signaling sessions. A single glitch heals at once, because the first rejoin has no pause. Every
  * further consecutive failure waits longer: 2, 4, 8 and then 15 seconds, which is also the ceiling. There is no
- * limit of attempts; the user ends the call. The count starts over as soon as the publisher connected again
- * ([onPublisherConnected]).
+ * limit of attempts; the user ends the call. The count starts over ([reset]) as soon as the publisher connected
+ * again.
  *
  * Not thread-safe, call it from one thread (the main thread).
  */
@@ -39,7 +39,7 @@ internal class PublisherRejoinPolicy {
         }
     }
 
-    fun onPublisherConnected() {
+    fun reset() {
         failuresSinceConnected = 0
     }
 
