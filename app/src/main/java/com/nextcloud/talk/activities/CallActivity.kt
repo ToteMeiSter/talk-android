@@ -2076,7 +2076,7 @@ class CallActivity : CallBaseActivity() {
             }
         } else {
             if (webSocketClient!!.isConnected && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
-                webSocketClient!!.restartWebSocket()
+                webSocketClient!!.restartWebSocketWithNewSession()
             }
         }
         joinRoomAndCall()

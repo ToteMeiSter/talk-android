@@ -48,8 +48,15 @@ import javax.inject.Inject
 
 @AutoInjector(NextcloudTalkApplication::class)
 @Suppress("TooManyFunctions")
-class WebSocketInstance internal constructor(conversationUser: User, connectionUrl: String, webSocketTicket: String) :
-    WebSocketListener() {
+class WebSocketInstance @JvmOverloads internal constructor(
+    conversationUser: User,
+    connectionUrl: String,
+    webSocketTicket: String,
+    // Test seam: when the client and the bus are given, dependency injection via the application component is skipped.
+    testOkHttpClient: OkHttpClient? = null,
+    testEventBus: EventBus? = null,
+    testConnectionHelper: WebSocketConnectionHelper? = null
+) : WebSocketListener() {
     @JvmField
     @Inject
     var okHttpClient: OkHttpClient? = null
@@ -84,11 +91,16 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
     private val signalingHttpClient: OkHttpClient by lazy { createSignalingHttpClient(okHttpClient!!) }
 
     init {
-        sharedApplication!!.componentApplication.inject(this)
+        if (testOkHttpClient != null && testEventBus != null) {
+            okHttpClient = testOkHttpClient
+            eventBus = testEventBus
+        } else {
+            sharedApplication!!.componentApplication.inject(this)
+        }
         this.connectionUrl = connectionUrl
         this.conversationUser = conversationUser
         this.webSocketTicket = webSocketTicket
-        webSocketConnectionHelper = WebSocketConnectionHelper()
+        webSocketConnectionHelper = testConnectionHelper ?: WebSocketConnectionHelper()
         usersHashMap = HashMap()
         isConnected = false
         eventBus!!.register(this)
@@ -145,6 +157,26 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
     }
 
     fun restartWebSocket() {
+        replaceWebSocket(cancelPrevious = true)
+    }
+
+    /**
+     * Opens a new signaling session (hello without resumeid) and closes the old one at the server at once with a
+     * "bye", instead of leaving it to expire after the resume window. The old session would otherwise stay in the
+     * call for up to 30 seconds and show up as a second participant. Use it when the old session is not going to
+     * be resumed.
+     *
+     * The old WebSocket is closed gracefully and not cancelled: cancel() drops the send queue, so the "bye" would
+     * never leave the device.
+     */
+    fun restartWebSocketWithNewSession() {
+        Log.d(TAG, "restartWebSocketWithNewSession: $connectionUrl")
+        val byeSent = sendBye()
+        resumeId = ""
+        replaceWebSocket(cancelPrevious = !byeSent)
+    }
+
+    private fun replaceWebSocket(cancelPrevious: Boolean) {
         Log.d(TAG, "restartWebSocket: $connectionUrl")
         val previousWebSocket = internalWebSocket
         isConnected = false
@@ -152,7 +184,9 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
         val request = Request.Builder().url(connectionUrl).build()
         internalWebSocket = signalingHttpClient.newWebSocket(request, this)
         previousWebSocket?.close(NORMAL_CLOSURE, null)
-        previousWebSocket?.cancel()
+        if (cancelPrevious) {
+            previousWebSocket?.cancel()
+        }
     }
 
     override fun onMessage(webSocket: WebSocket, text: String) {
@@ -396,7 +430,11 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
         Log.d(TAG, "onClosed : WebSocket ${webSocket.hashCode()} $code / $reason")
-        isConnected = false
+        // A replaced socket is closed gracefully (see restartWebSocketWithNewSession) and reports here late. It must
+        // not mark the current connection as closed.
+        if (webSocket === internalWebSocket) {
+            isConnected = false
+        }
     }
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
@@ -471,17 +509,22 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
         }
     }
 
-    fun sendBye() {
+    /**
+     * @return true if the "bye" was handed over to the current WebSocket
+     */
+    fun sendBye(): Boolean {
+        var sent = false
         if (isConnected) {
             try {
                 val byeWebSocketMessage = ByeWebSocketMessageDto()
                 byeWebSocketMessage.type = "bye"
                 byeWebSocketMessage.bye = HashMap()
-                internalWebSocket!!.send(LoganSquare.serialize(byeWebSocketMessage))
+                sent = internalWebSocket!!.send(LoganSquare.serialize(byeWebSocketMessage))
             } catch (e: IOException) {
                 Log.e(TAG, "Failed to serialize bye message")
             }
         }
+        return sent
     }
 
     fun getDisplayNameForSession(session: String?): String? {
