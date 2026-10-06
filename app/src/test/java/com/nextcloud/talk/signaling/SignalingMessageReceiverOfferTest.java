@@ -57,7 +57,7 @@ public class SignalingMessageReceiverOfferTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedOfferMessageListener, only()).onOffer("theSessionId", "theRoomType", "theSdp", null);
+        verify(mockedOfferMessageListener, only()).onOffer("theSessionId", "theRoomType", "theSdp", null, null);
     }
 
     @Test
@@ -78,7 +78,7 @@ public class SignalingMessageReceiverOfferTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedOfferMessageListener, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        verify(mockedOfferMessageListener, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
     }
 
     @Test
@@ -128,8 +128,8 @@ public class SignalingMessageReceiverOfferTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedOfferMessageListener1, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
-        verify(mockedOfferMessageListener3, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        verify(mockedOfferMessageListener1, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
+        verify(mockedOfferMessageListener3, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
         verifyNoInteractions(mockedOfferMessageListener2);
     }
 
@@ -152,7 +152,7 @@ public class SignalingMessageReceiverOfferTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedOfferMessageListener, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        verify(mockedOfferMessageListener, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
     }
 
     @Test
@@ -165,7 +165,7 @@ public class SignalingMessageReceiverOfferTest {
         doAnswer((invocation) -> {
             signalingMessageReceiver.addListener(mockedOfferMessageListener2);
             return null;
-        }).when(mockedOfferMessageListener1).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        }).when(mockedOfferMessageListener1).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
 
         signalingMessageReceiver.addListener(mockedOfferMessageListener1);
 
@@ -180,7 +180,7 @@ public class SignalingMessageReceiverOfferTest {
         signalingMessage.setPayload(messagePayload);
         signalingMessageReceiver.processSignalingMessage(signalingMessage);
 
-        verify(mockedOfferMessageListener1, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        verify(mockedOfferMessageListener1, only()).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
         verifyNoInteractions(mockedOfferMessageListener2);
     }
 
@@ -194,7 +194,7 @@ public class SignalingMessageReceiverOfferTest {
         doAnswer((invocation) -> {
             signalingMessageReceiver.removeListener(mockedOfferMessageListener2);
             return null;
-        }).when(mockedOfferMessageListener1).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        }).when(mockedOfferMessageListener1).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
 
         signalingMessageReceiver.addListener(mockedOfferMessageListener1);
         signalingMessageReceiver.addListener(mockedOfferMessageListener2);
@@ -212,7 +212,28 @@ public class SignalingMessageReceiverOfferTest {
 
         InOrder inOrder = inOrder(mockedOfferMessageListener1, mockedOfferMessageListener2);
 
-        inOrder.verify(mockedOfferMessageListener1).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
-        inOrder.verify(mockedOfferMessageListener2).onOffer("theSessionId", "theRoomType", "theSdp", "theNick");
+        inOrder.verify(mockedOfferMessageListener1).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
+        inOrder.verify(mockedOfferMessageListener2).onOffer("theSessionId", "theRoomType", "theSdp", "theNick", null);
+    }
+
+    @Test
+    public void testOfferMessagePassesTheSid() {
+        SignalingMessageReceiver.OfferMessageListener mockedOfferMessageListener =
+            mock(SignalingMessageReceiver.OfferMessageListener.class);
+
+        signalingMessageReceiver.addListener(mockedOfferMessageListener);
+
+        NCSignalingMessageDto signalingMessage = new NCSignalingMessageDto();
+        signalingMessage.setFrom("theSessionId");
+        signalingMessage.setType("offer");
+        signalingMessage.setRoomType("theRoomType");
+        signalingMessage.setSid("theSid");
+        NCMessagePayloadDto messagePayload = new NCMessagePayloadDto();
+        messagePayload.setType("offer");
+        messagePayload.setSdp("theSdp");
+        signalingMessage.setPayload(messagePayload);
+        signalingMessageReceiver.processSignalingMessage(signalingMessage);
+
+        verify(mockedOfferMessageListener, only()).onOffer("theSessionId", "theRoomType", "theSdp", null, "theSid");
     }
 }

@@ -308,11 +308,17 @@ class CallActivity : CallBaseActivity() {
             endCallForAll = false
         )
     }
-    private val offerMessageListener = OfferMessageListener { sessionId, roomType, sdp, nick ->
+    private val offerMessageListener = OfferMessageListener { sessionId, roomType, sdp, nick, sid ->
+        // An offer with another "sid" starts a new connection; the web client and iOS drop the old one then.
+        if (getPeerConnectionWrapperForSessionIdAndType(sessionId, roomType)?.isReplacedByOffer(sid) == true) {
+            Log.d(TAG, "Offer with new sid $sid from $sessionId ($roomType), replacing the peer connection")
+            endPeerConnection(sessionId, roomType)
+        }
         getOrCreatePeerConnectionWrapperForSessionIdAndType(
             sessionId,
             roomType,
-            false
+            false,
+            createdFromOffer = true
         )
     }
     private var externalSignalingServer: ExternalSignalingServer? = null
@@ -2635,7 +2641,8 @@ class CallActivity : CallBaseActivity() {
     private fun getOrCreatePeerConnectionWrapperForSessionIdAndType(
         sessionId: String?,
         type: String,
-        publisher: Boolean
+        publisher: Boolean,
+        createdFromOffer: Boolean = false
     ): PeerConnectionWrapper? {
         var peerConnectionWrapper = getPeerConnectionWrapperForSessionIdAndType(sessionId, type)
 
@@ -2652,7 +2659,8 @@ class CallActivity : CallBaseActivity() {
                 hangup(shutDownView = true, endCallForAll = false)
                 return null
             }
-            peerConnectionWrapper = createPeerConnectionWrapperForSessionIdAndType(publisher, sessionId, type)
+            peerConnectionWrapper =
+                createPeerConnectionWrapperForSessionIdAndType(publisher, sessionId, type, createdFromOffer)
             synchronized(remoteAudioPlayoutLock) {
                 peerConnectionWrapperList.add(peerConnectionWrapper)
                 peerConnectionWrapper.setRemoteAudioPlayoutEnabled(remoteAudioPlayoutEnabled)
@@ -2679,7 +2687,8 @@ class CallActivity : CallBaseActivity() {
     private fun createPeerConnectionWrapperForSessionIdAndType(
         publisher: Boolean,
         sessionId: String?,
-        type: String
+        type: String,
+        createdFromOffer: Boolean
     ): PeerConnectionWrapper {
         fun getPeerConnectionFactory(type: String): PeerConnectionFactory? {
             fun initScreenSharePeerConnectionFactory(): PeerConnectionFactory? {
@@ -2754,7 +2763,8 @@ class CallActivity : CallBaseActivity() {
             tempHasMCU,
             type,
             signalingMessageReceiver,
-            signalingMessageSender
+            signalingMessageSender,
+            createdFromOffer
         )
     }
 
@@ -3206,15 +3216,15 @@ class CallActivity : CallBaseActivity() {
             private set
 
         private inner class WebRtcMessageListener : SignalingMessageReceiver.WebRtcMessageListener {
-            override fun onOffer(sdp: String, nick: String?) {
+            override fun onOffer(sdp: String, nick: String?, sid: String?) {
                 onOfferOrAnswer(nick)
             }
 
-            override fun onAnswer(sdp: String, nick: String?) {
+            override fun onAnswer(sdp: String, nick: String?, sid: String?) {
                 onOfferOrAnswer(nick)
             }
 
-            override fun onCandidate(sdpMid: String, sdpMLineIndex: Int, sdp: String) {
+            override fun onCandidate(sdpMid: String, sdpMLineIndex: Int, sdp: String, sid: String?) {
                 // unused atm
             }
 

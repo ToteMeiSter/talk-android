@@ -184,7 +184,7 @@ abstract class SignalingMessageReceiver {
      * When an offer is received all OfferMessageListeners are notified before any WebRtcMessageListener is notified.
      */
     fun interface OfferMessageListener {
-        fun onOffer(sessionId: String?, roomType: String, sdp: String?, nick: String?)
+        fun onOffer(sessionId: String?, roomType: String, sdp: String?, nick: String?, sid: String?)
     }
 
     /**
@@ -195,9 +195,9 @@ abstract class SignalingMessageReceiver {
      * a single peer connection.
      */
     interface WebRtcMessageListener {
-        fun onOffer(sdp: String, nick: String?)
-        fun onAnswer(sdp: String, nick: String?)
-        fun onCandidate(sdpMid: String, sdpMLineIndex: Int, sdp: String)
+        fun onOffer(sdp: String, nick: String?, sid: String?)
+        fun onAnswer(sdp: String, nick: String?, sid: String?)
+        fun onCandidate(sdpMid: String, sdpMLineIndex: Int, sdp: String, sid: String?)
         fun onEndOfCandidates()
     }
 
@@ -828,8 +828,8 @@ abstract class SignalingMessageReceiver {
             // although extremely unlikely, that the WebRtcMessageListeners for the second offer are notified before the
             // WebRtcMessageListeners for the first offer. This should not be a problem, though, so for simplicity
             // the statements are not synchronized.
-            offerMessageNotifier.notifyOffer(sessionId, roomType, sdp, nick)
-            webRtcMessageNotifier.notifyOffer(sessionId, roomType, sdp, nick)
+            offerMessageNotifier.notifyOffer(sessionId, roomType, sdp, nick, signalingMessage.sid)
+            webRtcMessageNotifier.notifyOffer(sessionId, roomType, sdp, nick, signalingMessage.sid)
 
             return
         }
@@ -842,7 +842,7 @@ abstract class SignalingMessageReceiver {
             val sdp = payload.sdp
             val nick = payload.nick
 
-            webRtcMessageNotifier.notifyAnswer(sessionId, roomType, sdp, nick)
+            webRtcMessageNotifier.notifyAnswer(sessionId, roomType, sdp, nick, signalingMessage.sid)
 
             return
         }
@@ -900,7 +900,8 @@ abstract class SignalingMessageReceiver {
                 roomType,
                 ncIceCandidate.sdpMid,
                 ncIceCandidate.sdpMLineIndex,
-                ncIceCandidate.candidate
+                ncIceCandidate.candidate,
+                signalingMessage.sid
             )
 
             return

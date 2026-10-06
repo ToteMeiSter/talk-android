@@ -81,21 +81,21 @@ class WebRtcMessageNotifier {
         return webRtcMessageListeners;
     }
 
-    public synchronized void notifyOffer(String sessionId, String roomType, String sdp, String nick) {
+    public synchronized void notifyOffer(String sessionId, String roomType, String sdp, String nick, String sid) {
         for (SignalingMessageReceiver.WebRtcMessageListener listener : getListenersFor(sessionId, roomType)) {
-            listener.onOffer(sdp, nick);
+            listener.onOffer(sdp, nick, sid);
         }
     }
 
-    public synchronized void notifyAnswer(String sessionId, String roomType, String sdp, String nick) {
+    public synchronized void notifyAnswer(String sessionId, String roomType, String sdp, String nick, String sid) {
         for (SignalingMessageReceiver.WebRtcMessageListener listener : getListenersFor(sessionId, roomType)) {
-            listener.onAnswer(sdp, nick);
+            listener.onAnswer(sdp, nick, sid);
         }
     }
 
-    public synchronized void notifyCandidate(String sessionId, String roomType, String sdpMid, int sdpMLineIndex, String sdp) {
+    public synchronized void notifyCandidate(String sessionId, String roomType, String sdpMid, int sdpMLineIndex, String sdp, String sid) {
         for (SignalingMessageReceiver.WebRtcMessageListener listener : getListenersFor(sessionId, roomType)) {
-            listener.onCandidate(sdpMid, sdpMLineIndex, sdp);
+            listener.onCandidate(sdpMid, sdpMLineIndex, sdp, sid);
         }
     }
 
