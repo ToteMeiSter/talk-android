@@ -16,28 +16,14 @@ import javax.net.ssl.TrustManagerFactory
 import javax.net.ssl.X509TrustManager
 
 /**
- * Lets WebRTC accept TURNS (TLS) server certificates that the platform trusts.
+ * Accepts a CA certificate for TURNS which the built-in WebRTC roots (no ISRG/Let's Encrypt) rejected.
  *
- * The WebRTC build used by the app ships only a fixed list of root certificates (2023) which does not contain the
- * ISRG roots of Let's Encrypt, so the TLS handshake with a `turns:` server is aborted right after the Certificate
- * message. WebRTC calls this verifier only for a certificate that its built-in check has rejected; the native code
- * still checks the host name itself afterwards, so only the trust decision is made here.
- *
- * The certificate handed over is the one at the depth of the failure, which is not necessarily the leaf: for a chain
- * whose top certificate is cross-signed by a root WebRTC does not know, it is that top certificate. It is therefore
- * accepted only if the system trust store trusts it as a chain of one certificate (it is a trust anchor or is issued
- * by one). A certificate below an untrusted intermediate is rejected, and so is every error that the system check
- * does not clear.
- *
- * Called on a WebRTC network thread: no UI and no waiting. Certificates the user accepted for the server connection
- * in the app's own key store are not considered; that decision was made for a different purpose.
- *
- * When WebRTC is updated, re-check which certificate [verify] receives (M132: the one at the failing depth; newer
- * builds may pass only the leaf). Otherwise TURNS fails again, which is a safe refusal.
+ * WebRTC calls this only after its own check failed, with the certificate at the failing depth and without the error
+ * type, so only a CA is accepted here: a non-CA, or a CA without keyCertSign or serverAuth, would clear errors of
+ * another kind. It must also be trusted alone by the trust anchors of the app's network security config (system and
+ * user CAs; a `domain-config` there makes the check fail). The host name is still checked by WebRTC.
  */
-class SystemTrustSslCertificateVerifier @JvmOverloads constructor(
-    private val trustManager: X509TrustManager? = defaultTrustManager()
-) : SSLCertificateVerifier {
+class SystemTrustSslCertificateVerifier(private val trustManager: X509TrustManager?) : SSLCertificateVerifier {
 
     @Suppress("TooGenericExceptionCaught")
     override fun verify(certificate: ByteArray?): Boolean {
@@ -47,18 +33,37 @@ class SystemTrustSslCertificateVerifier @JvmOverloads constructor(
         return try {
             val x509 = CertificateFactory.getInstance("X.509")
                 .generateCertificate(ByteArrayInputStream(certificate)) as X509Certificate
-            // The authType must not be empty for Conscrypt; it plays no role for the trust anchor lookup.
-            trustManager.checkServerTrusted(arrayOf(x509), AUTH_TYPE)
-            true
+            val isCa = isCaForServerAuth(x509)
+            if (isCa) {
+                // Conscrypt needs a non-empty authType; it plays no role for the trust anchor lookup.
+                trustManager.checkServerTrusted(arrayOf(x509), AUTH_TYPE)
+            }
+            isCa
         } catch (e: Exception) {
-            Log.d(TAG, "Certificate is not trusted by the system: " + e.javaClass.simpleName)
+            Log.d(TAG, "Certificate is not trusted: " + e.javaClass.simpleName)
             false
         }
+    }
+
+    private fun isCaForServerAuth(cert: X509Certificate): Boolean {
+        val keyCertSign = cert.keyUsage?.getOrNull(KEY_CERT_SIGN_BIT) ?: true
+        val eku = cert.extendedKeyUsage
+        return cert.basicConstraints >= 0 && keyCertSign && (eku == null || SERVER_AUTH in eku || ANY_EKU in eku)
     }
 
     companion object {
         private val TAG = SystemTrustSslCertificateVerifier::class.java.simpleName
         private const val AUTH_TYPE = "UNKNOWN"
+        private const val KEY_CERT_SIGN_BIT = 5
+        private const val SERVER_AUTH = "1.3.6.1.5.5.7.3.1"
+        private const val ANY_EKU = "2.5.29.37.0"
+
+        private val instance: SystemTrustSslCertificateVerifier by lazy {
+            SystemTrustSslCertificateVerifier(defaultTrustManager())
+        }
+
+        @JvmStatic
+        fun shared(): SystemTrustSslCertificateVerifier = instance
 
         @Suppress("TooGenericExceptionCaught")
         private fun defaultTrustManager(): X509TrustManager? =

@@ -33,20 +33,11 @@ import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionDependencies
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.observer
+import org.webrtc.sslCertificateVerifier
 import java.nio.ByteBuffer
 import java.util.HashMap
 import kotlin.concurrent.thread
-
-// PeerConnectionDependencies hides its members in a package-private scope of org.webrtc.
-private fun PeerConnectionDependencies.observer() =
-    PeerConnectionDependencies::class.java.getDeclaredMethod("getObserver")
-        .apply { isAccessible = true }
-        .invoke(this) as PeerConnection.Observer
-
-private fun PeerConnectionDependencies.sslCertificateVerifier() =
-    PeerConnectionDependencies::class.java.getDeclaredMethod("getSSLCertificateVerifier")
-        .apply { isAccessible = true }
-        .invoke(this)
 
 @Suppress("LongMethod", "TooGenericExceptionCaught")
 class PeerConnectionWrapperTest {
@@ -799,6 +790,7 @@ class PeerConnectionWrapperTest {
             mockedSignalingMessageSender
         )
 
-        assertTrue(dependenciesCaptor.value.sslCertificateVerifier() is SystemTrustSslCertificateVerifier)
+        val verifier = dependenciesCaptor.value.sslCertificateVerifier()
+        assertTrue(verifier === SystemTrustSslCertificateVerifier.shared())
     }
 }
