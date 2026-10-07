@@ -872,6 +872,10 @@ public class PeerConnectionWrapper {
 
         @Override
         public void onIceCandidate(IceCandidate iceCandidate) {
+            if (IceDiagnostics.isLoopbackCandidate(iceCandidate.sdp)) {
+                Log.i(IceDiagnostics.TAG, "Skipping loopback candidate over " + sessionId + " " + videoStreamType);
+                return;
+            }
             NCSignalingMessageDto ncSignalingMessage = createBaseSignalingMessage("candidate");
             Log.i(IceDiagnostics.TAG, "Sending candidate " + IceDiagnostics.describeCandidate(iceCandidate.sdp)
                 + " server=" + iceCandidate.serverUrl + " over " + sessionId + " " + videoStreamType
