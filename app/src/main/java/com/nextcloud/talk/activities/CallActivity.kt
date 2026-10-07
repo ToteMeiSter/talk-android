@@ -3302,7 +3302,7 @@ class CallActivity : CallBaseActivity() {
             return
         }
         Log.d(TAG, "Network switched, reconnecting signaling and restarting ICE")
-        webSocketClient?.restartWebSocket()
+        webSocketClient?.restartWebSocket("network switched during the call")
         val wrappers = synchronized(remoteAudioPlayoutLock) { ArrayList(peerConnectionWrapperList) }
         wrappers.forEach { it.restartIce() }
     }
