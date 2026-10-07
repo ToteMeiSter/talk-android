@@ -8,50 +8,13 @@ package com.nextcloud.talk.logger
 
 import com.nextcloud.talk.logger.FakeLogcat.Companion.eventually
 import com.nextcloud.talk.logger.FakeLogcat.Companion.line
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
-import java.util.concurrent.CopyOnWriteArrayList
 
-class LogcatCaptureTest {
-    private val fake = FakeLogcat()
-    private val written = CopyOnWriteArrayList<String>()
-    private val verified = CopyOnWriteArrayList<Level>()
-    private val unavailable = CopyOnWriteArrayList<String>()
-    private var capture: LogcatCapture? = null
-
-    private val listener = object : LogcatCaptureListener {
-        override fun onLine(line: String) {
-            written.add(line)
-        }
-
-        override fun onVerified(effectiveLevel: Level) {
-            verified.add(effectiveLevel)
-        }
-
-        override fun onUnavailable(reason: String) {
-            unavailable.add(reason)
-        }
-    }
-
-    private fun newCapture(verifyTimeoutMs: Long = 2000, respawnDelayMs: Long = 10): LogcatCapture =
-        LogcatCapture(
-            launcher = fake,
-            pid = 4242,
-            markerEmitter = fake.markerEmitter,
-            listener = listener,
-            verifyTimeoutMs = verifyTimeoutMs,
-            respawnDelayMs = respawnDelayMs
-        ).also { capture = it }
-
-    @After
-    fun tearDown() {
-        capture?.stop()
-    }
-
+class LogcatCaptureTest : LogcatCaptureTestBase() {
     @Test
     fun `logcat is started for the own process with threadtime and the priority of the level`() {
         newCapture().start(Level.DEBUG, fromProcessStart = true)
@@ -78,8 +41,7 @@ class LogcatCaptureTest {
         assertTrue(unavailable.isEmpty())
         assertTrue(capture!!.isActive)
         assertFalse(written.any { it.startsWith("---------") })
-        // the check line is written too: it shows in the file that and when the capture started
-        assertTrue(written.any { it.contains("LogcatCapture: capture check") })
+        assertFalse("the check line must not be written", written.any { it.contains("LogcatCapture: capture ") })
     }
 
     @Test
@@ -97,7 +59,7 @@ class LogcatCaptureTest {
     fun `a missing check line makes the capture unavailable and logcat is stopped`() {
         fake.echoMarker = false
         fake.history = listOf(line("I", "Other", "some line"))
-        newCapture(verifyTimeoutMs = 200).start(Level.DEBUG, fromProcessStart = true)
+        newCapture(LogcatTiming(verifyTimeoutMs = 200, respawnDelayMs = 10)).start(Level.DEBUG, fromProcessStart = true)
 
         assertTrue(eventually { unavailable.size == 1 })
         assertTrue(unavailable[0], unavailable[0].contains("did not come through logcat in 200 ms"))
@@ -111,7 +73,7 @@ class LogcatCaptureTest {
     fun `an error text of logcat is part of the reason`() {
         fake.echoMarker = false
         fake.history = listOf("logcat: Permission denied")
-        newCapture(verifyTimeoutMs = 5000).start(Level.INFO, fromProcessStart = true)
+        newCapture(LogcatTiming(verifyTimeoutMs = 5000, respawnDelayMs = 10)).start(Level.INFO, fromProcessStart = true)
         assertTrue(eventually { fake.streams.size == 1 })
         fake.current.end()
         assertTrue(eventually { unavailable.size == 1 })
@@ -133,7 +95,7 @@ class LogcatCaptureTest {
         assertTrue(eventually { verified.size == 1 })
         val stream = fake.current
         capture!!.stop()
-        assertTrue(stream.closed)
+        assertTrue(eventually { stream.closed })
         val before = written.size
         stream.emit(line("D", "Late", "after stop", time = "10-07 12:30:00.000"))
         Thread.sleep(150)
@@ -217,13 +179,14 @@ class LogcatCaptureTest {
     @Test
     fun `a device that drops debug lines gets a capture at info level`() {
         fake.dropDebug = true
-        newCapture(verifyTimeoutMs = 200).start(Level.DEBUG, fromProcessStart = true)
+        newCapture(LogcatTiming(verifyTimeoutMs = 200, respawnDelayMs = 10)).start(Level.DEBUG, fromProcessStart = true)
 
         assertTrue(eventually { verified.size == 1 })
         assertEquals(listOf(Level.INFO), verified.toList())
         assertEquals(2, fake.launches.size)
         assertEquals("*:D", fake.launches[0].last())
         assertEquals("*:I", fake.launches[1].last())
+        assertFalse("the history from the process start is read again", fake.launches[1].contains("-T"))
         assertTrue(fake.streams[0].closed)
         assertTrue(unavailable.isEmpty())
         assertTrue(capture!!.isActive)

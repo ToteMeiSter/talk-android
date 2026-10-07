@@ -19,8 +19,9 @@ package com.nextcloud.talk.logger
  *  - the login flow URL `nc://login/user:...&password:...&server:...` and `https://user:password@host`;
  *  - `IceServerDto(..., username=..., credential=...)` and `pushToken: ...` in `toString()`/interpolated texts.
  *
- * The room token (`"token"` in room JSON, `roomToken=`) is NOT masked: it is not a secret and the log is useless
- * without it. A bare `token=` is masked only in the form `token=value` (query, form, `toString()`).
+ * The room token (`"token"` in room JSON, `token=` in a conversation `toString()`, `roomToken=`) is NOT masked: it
+ * is no secret and the log is useless without it. A `token` value is masked from 32 characters on: the Login Flow v2
+ * poll token (`{"poll":{"token":"..."}}`, form body `token=...`, `/login/v2/flow/...`) has 128 characters.
  */
 object LogMasker {
     const val MASK = "***"
@@ -48,11 +49,12 @@ object LogMasker {
 
     private val IGNORE_CASE = RegexOption.IGNORE_CASE
 
-    private fun jsonField(keys: String) = Regex("(\"(?:$keys)\"\\s*:\\s*\")(?:[^\"\\\\]|\\\\.)*(\")", IGNORE_CASE)
+    // Possessive quantifiers: no backtracking and no recursion, so a value of 100 000 characters is safe.
+    private fun jsonField(keys: String) = Regex("(\"(?:$keys)\"\\s*:\\s*\")(?:[^\"\\\\]++|\\\\.)*+(\")", IGNORE_CASE)
 
     // The same JSON inside a JSON string: \"key\":\"value\"
     private fun escapedJsonField(keys: String) =
-        Regex("(\\\\\"(?:$keys)\\\\\"\\s*:\\s*\\\\\")(?:[^\"\\\\]|\\\\(?!\"))*(\\\\\")", IGNORE_CASE)
+        Regex("(\\\\\"(?:$keys)\\\\\"\\s*:\\s*\\\\\")(?:[^\"\\\\]++|\\\\(?!\"))*+(\\\\\")", IGNORE_CASE)
 
     private fun keyValue(keys: String) = Regex("(?i)(?<![A-Za-z0-9_])($keys)(\\s*[:=]\\s*)(?!\\*\\*\\*)[^\\s\"&]+")
 
@@ -62,7 +64,14 @@ object LogMasker {
     private val TURN_JSON_ESCAPED = escapedJsonField(TURN_KEYS)
     private val SECRET_KV = keyValue(SECRET_KEYS)
     private val TURN_KV = keyValue(TURN_KEYS)
-    private val BARE_TOKEN = Regex("(?<![A-Za-z0-9_])(token)(=)(?!\\*\\*\\*)[^\\s\"&]+", IGNORE_CASE)
+
+    // Room tokens are 8-15 characters and are kept. The Login Flow v2 poll token (and the token in the flow URL) has
+    // 128 characters (the server generates 128 alphanumeric characters), so only long values count as secrets.
+    private const val LONG_TOKEN_MIN = 32
+    private val BARE_TOKEN =
+        Regex("(?<![A-Za-z0-9_])(token)(=)(?!\\*\\*\\*)[^\\s\"&]{" + LONG_TOKEN_MIN + ",}+", IGNORE_CASE)
+    private val JSON_LONG_TOKEN = Regex("(\"token\"\\s*:\\s*\")[^\"\\\\]{" + LONG_TOKEN_MIN + ",}+(\")")
+    private val FLOW_URL_TOKEN = Regex("(/login/v2/flow/)(?!\\*\\*\\*)[A-Za-z0-9]{" + LONG_TOKEN_MIN + ",}+")
     private val RESUME_ID_WORD = Regex("(?i)(resume[_-]?id\\s+)(?!\\*\\*\\*)[A-Za-z0-9_+/=-]{8,}")
 
     private fun Regex.keepQuotes(s: String) = replace(s) { m -> m.groupValues[1] + MASK + m.groupValues[2] }
@@ -88,6 +97,8 @@ object LogMasker {
         },
         { s -> SECRET_KV.keepKey(s) },
         { s -> BARE_TOKEN.keepKey(s) },
+        { s -> JSON_LONG_TOKEN.keepQuotes(s) },
+        { s -> FLOW_URL_TOKEN.replace(s) { m -> m.groupValues[1] + MASK } },
         { s -> RESUME_ID_WORD.replace(s) { m -> m.groupValues[1] + MASK } }
     )
 
@@ -97,5 +108,28 @@ object LogMasker {
         return text.split('\n').joinToString("\n") { maskLine(it) }
     }
 
-    private fun maskLine(line: String): String = if (line.isEmpty()) line else steps.fold(line) { s, step -> step(s) }
+    // One pass over the line: most lines have none of the words that the rules above look for. A table by the first
+    // letter keeps the pass cheap (a regex alternation costs about 60 ns per character).
+    private val HINT_WORDS = listOf(
+        "pass", "pwd", "token", "ticket", "credential", "secret", "auth", "cookie", "bearer", "basic", "eyJ", "://",
+        "key", "resume", "username", "session", "flow"
+    )
+    private const val ASCII = 128
+    private val HINTS_BY_FIRST_CHAR: Array<List<String>> = Array(ASCII) { code ->
+        HINT_WORDS.filter { it[0].equals(code.toChar(), ignoreCase = true) }
+    }
+
+    private fun mayHaveSecret(line: String): Boolean {
+        for (i in line.indices) {
+            val code = line[i].code
+            if (code >= ASCII) continue
+            for (word in HINTS_BY_FIRST_CHAR[code]) {
+                if (line.regionMatches(i, word, 0, word.length, ignoreCase = true)) return true
+            }
+        }
+        return false
+    }
+
+    private fun maskLine(line: String): String =
+        if (line.isEmpty() || !mayHaveSecret(line)) line else steps.fold(line) { s, step -> step(s) }
 }

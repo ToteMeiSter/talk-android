@@ -62,7 +62,7 @@ class LogMaskerTest {
     @Test
     fun `form bodies and queries are masked`() {
         assertMasked("password=hunter2&roomName=test", "hunter2")
-        assertMasked("GET /ocs/v2.php/x?token=SecretTok3n&format=json", "SecretTok3n")
+        assertMasked("GET /ocs/v2.php/x?pushToken=SecretTok3n&format=json", "SecretTok3n")
         assertMasked("pushToken: fcm-token-0123456789", "fcm-token-0123456789")
         assertMasked("pushRegistrationToServer will be done with pushToken: ABC:APA91bHxyz", "APA91bHxyz")
     }

@@ -53,8 +53,10 @@ class FakeLogcat : LogcatLauncher {
 
         override fun readLine(): String? {
             while (true) {
+                // like the pipe of a process on Android: a close ends a blocked read with an exception
+                if (closed) throw IOException("Stream closed")
                 val line = queue.poll(POLL_MS, TimeUnit.MILLISECONDS)
-                if (line == END || closed) return null
+                if (line == END) return null
                 if (line != null) return line
             }
         }
@@ -77,18 +79,30 @@ class FakeLogcat : LogcatLauncher {
 
     val current: FakeStream get() = streams.last()
 
+    /** Every check and stop line that the capture wrote to logcat. */
+    val emitted = CopyOnWriteArrayList<String>()
+
+    private fun markerLine(priority: Int, tag: String, message: String): String {
+        val level = when (priority) {
+            PRIORITY_DEBUG -> "D"
+            PRIORITY_INFO -> "I"
+            PRIORITY_WARN -> "W"
+            else -> "E"
+        }
+        val time = markerTime ?: SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.ROOT).format(Date())
+        return line(level, tag, message, time = time)
+    }
+
     /** What `Log.println` does on a device: the line shows up in the stream. */
     val markerEmitter = MarkerEmitter { priority, tag, message ->
-        if (echoMarker && !(dropDebug && priority == PRIORITY_DEBUG)) {
-            val level = when (priority) {
-                PRIORITY_DEBUG -> "D"
-                PRIORITY_INFO -> "I"
-                PRIORITY_WARN -> "W"
-                else -> "E"
-            }
-            val time = markerTime ?: SimpleDateFormat("MM-dd HH:mm:ss.SSS", Locale.ROOT).format(Date())
-            streams.lastOrNull()?.emit(line(level, tag, message, time = time))
-        }
+        val text = markerLine(priority, tag, message)
+        if (!(dropDebug && priority == PRIORITY_DEBUG)) emitted.add(text)
+        if (echoMarker && !(dropDebug && priority == PRIORITY_DEBUG)) streams.lastOrNull()?.emit(text)
+    }
+
+    /** Lets the lines that were held back (echoMarker = false) reach the current stream now. */
+    fun deliverEmitted() {
+        emitted.forEach { current.emit(it) }
     }
 
     companion object {

@@ -92,7 +92,64 @@ class LogMaskerSignalingTest {
 
     @Test
     fun `every line of a multi line text is masked`() {
-        val masked = LogMasker.mask("first\npassword=aaaa1111\nthird token=bbbb2222\n")
-        assertEquals("first\npassword=***\nthird token=***\n", masked)
+        val masked = LogMasker.mask("first\npassword=aaaa1111\nthird password=bbbb2222\n")
+        assertEquals("first\npassword=***\nthird password=***\n", masked)
+    }
+
+    @Test
+    fun `login flow poll token is masked in json and in the form body`() {
+        val token = "a".repeat(LOGIN_TOKEN_LENGTH)
+        assertMasked("""{"poll":{"token":"$token","endpoint":"https://c.example/login/v2/poll"}}""", token)
+        assertMasked("token=$token", token)
+        assertMasked("D HTTP: token=$token&other=1", token)
+        assertMasked("login url https://c.example/login/v2/flow/$token", token)
+        assertTrue(
+            LogMasker.mask("""{"poll":{"token":"$token","endpoint":"https://c.example/p"}}""").contains("endpoint")
+        )
+    }
+
+    @Test
+    fun `short room tokens are kept in json and in to string`() {
+        val lines = listOf(
+            """{"token":"abc12345","type":2}""",
+            "Conversation(token=abc12345, name=Test, type=GROUP)",
+            "Room(token=abcdefghijklmno)"
+        )
+        lines.forEach { assertEquals(it, LogMasker.mask(it)) }
+    }
+
+    @Test
+    fun `a value of 100000 characters is masked without a stack overflow`() {
+        val value = "p".repeat(HUGE)
+        listOf(
+            """{"password":"$value"}""",
+            """{"message":"{\"credential\":\"$value\",\"urls\":\"turn:x\"}"}""",
+            """{"poll":{"token":"$value"}}"""
+        ).forEach { line ->
+            val masked = LogMasker.mask(line)
+            assertFalse(masked.contains("ppppp"))
+        }
+    }
+
+    @Test
+    fun `masking a line of 4 KB stays far below the rate of the log`() {
+        val line = "10-07 12:00:00.000  1  2 D WebSocketInstance: Receiving : " +
+            """{"type":"message","message":{"data":{"sdp":"v=0\r\na=ice-pwd:Zk3pQ9sd8fgh2jkl3mnop4qr\r\n""" +
+            "m=audio ".repeat(TYPICAL_REPEAT) + """","token":"abc12345"}}}"""
+        repeat(WARM_UP) { LogMasker.mask(line) }
+        val begin = System.nanoTime()
+        repeat(RUNS) { LogMasker.mask(line) }
+        val perCallUs = (System.nanoTime() - begin) / RUNS / NANOS_PER_MICRO
+        assertTrue(perCallUs < MAX_US)
+    }
+
+    private companion object {
+        const val LOGIN_TOKEN_LENGTH = 128
+        const val HUGE = 100_000
+        const val TYPICAL_REPEAT = 470
+        const val WARM_UP = 200
+        const val RUNS = 2000
+        const val NANOS_PER_MICRO = 1000L
+        const val MAX_US = 5000L
     }
 }

@@ -7,10 +7,8 @@
 package com.nextcloud.talk.logger
 
 import android.util.Log
-import java.io.BufferedReader
 import java.io.Closeable
 import java.io.IOException
-import java.io.InputStreamReader
 import java.text.SimpleDateFormat
 import java.util.Locale
 import java.util.UUID
@@ -19,7 +17,10 @@ import java.util.concurrent.TimeUnit
 
 /** Lines of the output of one `logcat` run. */
 interface LogcatStream : Closeable {
-    /** The next line, or null when the output has ended (also after [close]). */
+    /**
+     * The next line, or null when the output has ended. A [close] from another thread ends a blocked call with null
+     * or with an [IOException] (on Android the closed pipe throws).
+     */
     @Throws(IOException::class)
     fun readLine(): String?
 }
@@ -35,7 +36,7 @@ fun interface MarkerEmitter {
 }
 
 interface LogcatCaptureListener {
-    /** A line of logcat (threadtime format), without the service lines. Called in the order of the lines. */
+    /** A line of logcat (threadtime format) without banner lines and without the capture's own check lines. */
     fun onLine(line: String)
 
     /**
@@ -49,24 +50,29 @@ interface LogcatCaptureListener {
     fun onUnavailable(reason: String)
 }
 
+data class LogcatTiming(
+    val verifyTimeoutMs: Long = LogcatCapture.DEFAULT_VERIFY_TIMEOUT_MS,
+    val respawnDelayMs: Long = 1000L,
+    /** A logcat run that lasted this long counts as stable: the restart counter starts again. */
+    val steadyAfterMs: Long = 60_000L,
+    /** How long a stopping capture waits for the stop line, so that lines in transit are not lost. */
+    val drainTimeoutMs: Long = 1000L
+)
+
 /**
- * Runs `logcat -v threadtime --pid=<own pid>` through a small shell wrapper and hands every line to a sink.
- *
- * The wrapper ends `logcat` as soon as the app process is gone or the wrapper is stopped, so no logcat process
- * outlives the app. [ProcessLogcatLauncher] starts it; tests replace the launcher.
+ * Runs `logcat -v threadtime --pid=<own pid>` through a small shell wrapper ([ProcessLogcatLauncher]) and hands every
+ * line to the listener. The wrapper ends `logcat` as soon as the app process is gone or the wrapper is stopped.
  */
 class LogcatCapture(
     private val launcher: LogcatLauncher,
     private val pid: Int,
     private val markerEmitter: MarkerEmitter,
     private val listener: LogcatCaptureListener,
-    private val verifyTimeoutMs: Long = DEFAULT_VERIFY_TIMEOUT_MS,
-    private val respawnDelayMs: Long = DEFAULT_RESPAWN_DELAY_MS
+    private val timing: LogcatTiming = LogcatTiming()
 ) {
     companion object {
         const val MARKER_TAG = "LogcatCapture"
         const val DEFAULT_VERIFY_TIMEOUT_MS = 4000L
-        private const val DEFAULT_RESPAWN_DELAY_MS = 1000L
         private const val MAX_RESPAWNS = 3
         private const val PREDECESSOR_JOIN_MS = 3000L
         private const val MAX_PENDING_LINES = 20_000
@@ -74,6 +80,9 @@ class LogcatCapture(
         private const val NONCE_LENGTH = 8
         private const val JUNK_MAX_LENGTH = 200
         private const val BANNER_PREFIX = "--------- "
+        private const val NANOS_PER_MILLI = 1_000_000L
+        private const val CHECK_TEXT = "capture check"
+        private const val STOP_TEXT = "capture stop"
         private val THREADTIME = Regex("""^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}) +\d+ +\d+ [VDIWEFA] .*$""")
 
         fun priorityOf(level: Level): Int =
@@ -97,6 +106,10 @@ class LogcatCapture(
                 }
                 add("*:${level.tag}")
             }
+
+        // The check and stop lines of any capture of this process. They are not written to the log file.
+        private fun isServiceLine(line: String): Boolean =
+            line.contains(" $MARKER_TAG: $CHECK_TEXT ") || line.contains(" $MARKER_TAG: $STOP_TEXT ")
     }
 
     private val lock = Any()
@@ -110,7 +123,7 @@ class LogcatCapture(
     private var lastTimestamp: String? = null
     private val writtenAtLastTimestamp = HashMap<String, Int>()
 
-    val isActive: Boolean get() = session?.let { it.verified && !it.closed } ?: false
+    val isActive: Boolean get() = session?.let { it.verified && !it.closed && !it.draining } ?: false
 
     /**
      * Starts (or restarts) the capture. [fromProcessStart]: read everything the process logged so far, otherwise
@@ -120,6 +133,7 @@ class LogcatCapture(
         synchronized(lock) {
             val previous = session
             previous?.close()
+            if (previous?.draining == true) clearState()
             // A restart before the check line came continues the unverified run: the lines that the logger holds
             // since then must come from logcat again, so the new run reads from the same point.
             val continued = previous?.takeIf { !it.verified && !it.reported }
@@ -132,12 +146,25 @@ class LogcatCapture(
         }
     }
 
-    /** Stops the capture. A later [start] begins from now: the time while the capture was off is not read back. */
-    fun stop() {
+    /**
+     * Stops the capture. A later [start] begins from now: the time while the capture was off is not read back.
+     * With [drain] the capture first reads up to a stop line that it writes to logcat, so that the lines that are
+     * still in transit reach the listener; the listener must not write its own lines of the same levels meanwhile.
+     */
+    fun stop(drain: Boolean = false) {
+        val current = synchronized(lock) { session }
+        if (drain && current != null && current.verified && !current.closed) {
+            current.drain()
+            return
+        }
         synchronized(lock) {
             session?.close()
             session = null
         }
+        clearState()
+    }
+
+    private fun clearState() {
         synchronized(stateLock) {
             lastTimestamp = null
             writtenAtLastTimestamp.clear()
@@ -163,6 +190,14 @@ class LogcatCapture(
         @Volatile
         var verified = false
 
+        @Volatile
+        var draining = false
+            private set
+
+        @Volatile
+        var reported = false
+            private set
+
         // The level of the logcat filter and of the check line. Starts as the requested level; one step down to
         // INFO if the device does not deliver the check line of a debug level.
         @Volatile
@@ -170,17 +205,43 @@ class LogcatCapture(
 
         @Volatile
         private var stream: LogcatStream? = null
-        private val verifiedLatch = CountDownLatch(1)
 
         @Volatile
-        var reported = false
-            private set
+        private var timedOut = false
+
+        @Volatile
+        private var stopNonce: String? = null
+        private val verifiedLatch = CountDownLatch(1)
         val thread = Thread(this, "NcTalkLogcatReader").apply { isDaemon = true }
 
+        // The stream is closed on another thread: closing a pipe must never hold up the caller (the main thread).
         fun close() {
             closed = true
             verifiedLatch.countDown()
-            runCatching { stream?.close() }
+            val toClose = stream ?: return
+            Thread { runCatching { toClose.close() } }.apply {
+                isDaemon = true
+                name = "NcTalkLogcatClose"
+            }.start()
+        }
+
+        fun drain() {
+            val nonce = newNonce()
+            stopNonce = nonce
+            draining = true
+            markerEmitter.emit(priorityOf(captureLevel), MARKER_TAG, "$STOP_TEXT $nonce pid=$pid")
+            Thread {
+                runCatching { Thread.sleep(timing.drainTimeoutMs) }
+                if (!closed) finishDrain()
+            }.apply {
+                isDaemon = true
+                name = "NcTalkLogcatDrain"
+            }.start()
+        }
+
+        private fun finishDrain() {
+            close()
+            clearState()
         }
 
         @Suppress("TooGenericExceptionCaught")
@@ -195,24 +256,27 @@ class LogcatCapture(
             }
         }
 
+        private fun newNonce() = UUID.randomUUID().toString().take(NONCE_LENGTH)
+
         private fun capture() {
             var respawns = 0
             var failure: String? = null
+            // Fixed for the unverified attempts (also after the step down to INFO): the history from the same point.
             var since = if (fromProcessStart) null else (lastTimestamp ?: formatTime(requestedAt))
             while (!closed && failure == null) {
+                val startedAt = System.nanoTime()
                 val outcome = runOnce(since)
                 failure = (outcome as? Outcome.Failed)?.reason
                 if (outcome is Outcome.Failed && outcome.checkLineMissing && captureLevel < Level.INFO) {
                     captureLevel = Level.INFO
                     failure = null
-                    continue
-                }
-                if (outcome is Outcome.Ended && !closed) {
+                } else if (outcome is Outcome.Ended && !closed) {
+                    if ((System.nanoTime() - startedAt) / NANOS_PER_MILLI >= timing.steadyAfterMs) respawns = 0
                     respawns++
                     if (respawns > MAX_RESPAWNS) {
                         failure = "logcat keeps ending: ${outcome.detail}"
                     } else {
-                        Thread.sleep(respawnDelayMs)
+                        Thread.sleep(timing.respawnDelayMs)
                         since = lastTimestamp ?: formatTime(System.currentTimeMillis())
                     }
                 }
@@ -231,20 +295,15 @@ class LogcatCapture(
                 return Outcome.Failed("cannot start logcat: ${e.javaClass.simpleName}: ${e.message}")
             }
             stream = opened
-            return readAndClose(opened, skip)
-        }
-
-        private fun readAndClose(opened: LogcatStream, skip: HashMap<String, Int>?): Outcome =
-            try {
+            return try {
                 if (closed) Outcome.Ended("closed") else readLines(opened, skip)
-            } catch (e: IOException) {
-                if (closed) Outcome.Ended("closed") else Outcome.Ended("read error: ${e.message}")
             } finally {
                 runCatching { opened.close() }
             }
+        }
 
         private fun readLines(opened: LogcatStream, skip: HashMap<String, Int>?): Outcome {
-            val nonce = UUID.randomUUID().toString().take(NONCE_LENGTH)
+            val nonce = newNonce()
             val reader = LineReader(nonce, skip)
             timedOut = false
             if (!verified) {
@@ -252,33 +311,36 @@ class LogcatCapture(
                 markerEmitter.emit(
                     priorityOf(captureLevel),
                     MARKER_TAG,
-                    "capture check $nonce pid=$pid level=${captureLevel.name}"
+                    "$CHECK_TEXT $nonce pid=$pid level=${captureLevel.name}"
                 )
             }
-            while (true) {
-                val line = opened.readLine() ?: break
-                if (closed) break
-                reader.accept(line)
+            var readError: String? = null
+            try {
+                while (true) {
+                    val line = opened.readLine() ?: break
+                    if (closed) break
+                    reader.accept(line)
+                }
+            } catch (e: IOException) {
+                // A blocked read ends with an exception when the stream is closed (stop or the watchdog).
+                if (!closed && !timedOut) readError = "read error: ${e.message}"
             }
             if (!verified && !closed) {
                 val reason = if (timedOut) {
                     "the ${captureLevel.tag} check line did not come through logcat in " +
-                        "$verifyTimeoutMs ms${reader.junkText()}"
+                        "${timing.verifyTimeoutMs} ms${reader.junkText()}"
                 } else {
                     "logcat ended before the check line came${reader.junkText()}"
                 }
                 return Outcome.Failed(reason, checkLineMissing = timedOut)
             }
-            return Outcome.Ended(reader.junkText().ifEmpty { "end of output" })
+            return Outcome.Ended(readError ?: reader.junkText().ifEmpty { "end of output" })
         }
-
-        @Volatile
-        private var timedOut = false
 
         private fun startWatchdog(opened: LogcatStream) {
             Thread {
                 val ok = try {
-                    verifiedLatch.await(verifyTimeoutMs, TimeUnit.MILLISECONDS)
+                    verifiedLatch.await(timing.verifyTimeoutMs, TimeUnit.MILLISECONDS)
                 } catch (_: InterruptedException) {
                     true
                 }
@@ -304,10 +366,11 @@ class LogcatCapture(
                 if (match == null) {
                     if (line.isNotBlank() && !line.startsWith(BANNER_PREFIX)) junk = line.take(JUNK_MAX_LENGTH)
                 } else if (verified) {
-                    write(match.groupValues[1], line)
+                    deliver(match.groupValues[1], line)
+                    if (draining && stopNonce?.let { line.contains(it) } == true) finishDrain()
                 } else {
                     pending.add(line)
-                    if (line.contains(nonce) && line.contains(MARKER_TAG)) {
+                    if (line.contains(nonce) && isServiceLine(line)) {
                         confirm()
                     } else if (pending.size > MAX_PENDING_LINES) {
                         spill()
@@ -316,47 +379,50 @@ class LogcatCapture(
             }
 
             private fun confirm() {
-                for (held in pending) {
-                    THREADTIME.matchEntire(held)?.let { write(it.groupValues[1], held) }
+                deliverPending(pending.size)
+                val go = synchronized(lock) {
+                    if (!closed) {
+                        verified = true
+                        verifiedLatch.countDown()
+                    }
+                    !closed
                 }
-                pending.clear()
-                synchronized(lock) {
-                    if (closed) return
-                    verified = true
-                    verifiedLatch.countDown()
-                    listener.onVerified(captureLevel)
-                }
+                if (go) listener.onVerified(captureLevel)
             }
 
-            private fun spill() {
-                val half = pending.size / SPILL_DIVISOR
-                pending.subList(0, half).forEach { held ->
-                    THREADTIME.matchEntire(held)?.let { write(it.groupValues[1], held) }
-                }
-                pending.subList(0, half).clear()
+            private fun spill() = deliverPending(pending.size / SPILL_DIVISOR)
+
+            private fun deliverPending(count: Int) {
+                val part = pending.subList(0, count)
+                part.forEach { held -> THREADTIME.matchEntire(held)?.let { deliver(it.groupValues[1], held) } }
+                part.clear()
             }
 
-            private fun write(timestamp: String, line: String) {
-                synchronized(stateLock) {
-                    if (closed) return
-                    if (skip != null) {
-                        if (timestamp == lastTimestamp) {
-                            val left = skip?.get(line) ?: 0
-                            if (left > 0) {
-                                skip?.put(line, left - 1)
-                                return
-                            }
-                        } else {
-                            skip = null
-                        }
-                    }
-                    listener.onLine(line)
-                    if (timestamp != lastTimestamp) {
-                        lastTimestamp = timestamp
-                        writtenAtLastTimestamp.clear()
-                    }
-                    writtenAtLastTimestamp.merge(line, 1, Int::plus)
+            // The state is changed under the lock, the listener (which may block on a full queue) is called outside.
+            private fun deliver(timestamp: String, line: String) {
+                if (isServiceLine(line)) return
+                val write = synchronized(stateLock) { shouldWrite(timestamp, line) }
+                if (write && !closed) listener.onLine(line)
+            }
+
+            private fun shouldWrite(timestamp: String, line: String): Boolean {
+                if (closed || isSkipped(timestamp, line)) return false
+                if (timestamp != lastTimestamp) {
+                    lastTimestamp = timestamp
+                    writtenAtLastTimestamp.clear()
                 }
+                writtenAtLastTimestamp.merge(line, 1, Int::plus)
+                return true
+            }
+
+            // The lines of the last millisecond that an earlier run wrote already.
+            private fun isSkipped(timestamp: String, line: String): Boolean {
+                val budget = skip
+                val sameMillisecond = budget != null && timestamp == lastTimestamp
+                if (budget != null && !sameMillisecond) skip = null
+                val left = if (sameMillisecond) budget?.get(line) ?: 0 else 0
+                if (left > 0) budget?.put(line, left - 1)
+                return left > 0
             }
         }
 
@@ -370,45 +436,8 @@ class LogcatCapture(
             verifiedLatch.countDown()
             runCatching { stream?.close() }
             if (first) {
-                synchronized(stateLock) {
-                    lastTimestamp = null
-                    writtenAtLastTimestamp.clear()
-                }
+                clearState()
                 listener.onUnavailable(reason)
-            }
-        }
-    }
-}
-
-/**
- * Starts logcat through `sh`. The shell script runs logcat in the background and polls both the app process
- * (`$PPID`) and logcat: when the app dies or logcat ends, the script ends logcat / itself, and when the wrapper
- * gets SIGTERM (stop) the trap ends logcat. Without this, a logcat of a dead app would stay forever, because it
- * only notices a closed pipe when it writes the next line.
- */
-class ProcessLogcatLauncher(private val shell: String = "sh", private val logcat: String = "logcat") :
-    LogcatLauncher {
-
-    companion object {
-        const val WRAPPER_SCRIPT =
-            "\"\$@\" & LP=\$!\n" +
-                "trap 'kill \$LP 2>/dev/null; exit 0' TERM HUP INT\n" +
-                "while kill -0 \$PPID 2>/dev/null && kill -0 \$LP 2>/dev/null; do sleep 2 & wait \$!; done\n" +
-                "kill \$LP 2>/dev/null\n"
-    }
-
-    override fun launch(args: List<String>): LogcatStream {
-        val command = listOf(shell, "-c", WRAPPER_SCRIPT, "sh", logcat) + args
-        val process = ProcessBuilder(command).redirectErrorStream(true).start()
-        return object : LogcatStream {
-            private val reader = BufferedReader(InputStreamReader(process.inputStream, Charsets.UTF_8))
-
-            override fun readLine(): String? = reader.readLine()
-
-            override fun close() {
-                // destroy() first: BufferedReader.close() would wait for a readLine() that is blocked.
-                process.destroy()
-                runCatching { process.inputStream.close() }
             }
         }
     }

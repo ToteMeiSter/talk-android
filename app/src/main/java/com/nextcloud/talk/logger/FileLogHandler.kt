@@ -12,7 +12,7 @@ import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 
-class FileLogHandler(
+open class FileLogHandler(
     private val logDir: File,
     private val logFilename: String,
     private val maxSize: Long,
@@ -58,7 +58,7 @@ class FileLogHandler(
         }
     }
 
-    fun write(logEntry: String) {
+    open fun write(logEntry: String) {
         val bytes = LogMasker.mask(logEntry).toByteArray(Charsets.UTF_8)
         writer?.write(bytes)
         size += bytes.size
@@ -68,9 +68,12 @@ class FileLogHandler(
     }
 
     fun close() {
-        writer?.close()
-        writer = null
-        size = 0L
+        try {
+            writer?.close()
+        } finally {
+            writer = null
+            size = 0L
+        }
     }
 
     fun deleteAll() {

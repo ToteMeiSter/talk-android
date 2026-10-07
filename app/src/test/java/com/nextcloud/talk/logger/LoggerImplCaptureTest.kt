@@ -10,51 +10,12 @@ import com.nextcloud.talk.errorhandling.buildLogcatJson
 import com.nextcloud.talk.errorhandling.loadLogEntries
 import com.nextcloud.talk.logger.FakeLogcat.Companion.eventually
 import com.nextcloud.talk.logger.FakeLogcat.Companion.line
-import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
-import org.junit.Before
-import org.junit.Rule
 import org.junit.Test
-import org.junit.rules.TemporaryFolder
-import java.io.File
 
-class LoggerImplCaptureTest {
-    @get:Rule
-    val folder = TemporaryFolder()
-
-    private val fake = FakeLogcat()
-    private lateinit var logDir: File
-    private lateinit var handler: FileLogHandler
-    private var logger: LoggerImpl? = null
-
-    @Before
-    fun setUp() {
-        logDir = folder.newFolder("logs")
-        handler = FileLogHandler(logDir, "nc_talk_log.txt", 1_000_000L)
-    }
-
-    @After
-    fun tearDown() {
-        logger?.stopLogcatCapture()
-    }
-
-    private fun newLogger(withLogcat: Boolean = true, verifyTimeoutMs: Long = 2000): LoggerImpl =
-        LoggerImpl(
-            handler,
-            logcatSetup = if (withLogcat) {
-                LogcatSetup(fake, pid = 4242, markerEmitter = fake.markerEmitter, verifyTimeoutMs = verifyTimeoutMs)
-            } else {
-                null
-            }
-        ).also { logger = it }
-
-    private fun fileText(): String {
-        logger!!.flush()
-        return handler.loadLogFiles().lines.joinToString("\n")
-    }
-
+class LoggerImplCaptureTest : LoggerImplTestBase() {
     @Test
     fun `call diagnostics from logcat are in the log file and in the export`() {
         val tags = listOf("WebSocketInstance", "CallActivity", "IceDiag", "WebRtcAudioManager", "PeerConnectionWrapper")
@@ -90,35 +51,33 @@ class LoggerImplCaptureTest {
 
         assertTrue(eventually { fileText().contains("second line") })
         val text = fileText()
-        assertEquals(text, 1, Regex("written by the logger").findAll(text).count())
-        assertEquals(text, 1, Regex("second line").findAll(text).count())
+        assertEquals(text, 1, countOf(text, "written by the logger"))
+        assertEquals(text, 1, countOf(text, "second line"))
     }
 
     @Test
     fun `own lines held before the check line are not lost and not duplicated`() {
         fake.echoMarker = false
-        fake.history = listOf(line("I", "Early", "logged while the capture starts", time = "10-07 12:02:00.000"))
         val impl = newLogger(verifyTimeoutMs = 5000)
-        impl.minimumLevel = Level.INFO
+        impl.minimumLevel = Level.DEBUG
         impl.start()
         assertTrue(eventually { fake.streams.size == 1 })
-        impl.i("Early", "logged while the capture starts")
+        impl.d("Early", "logged while the capture starts")
+        // on a device Log.d puts the line into logcat before the check line
+        fake.current.emit(line("D", "Early", "logged while the capture starts", time = "10-07 12:02:00.000"))
+        assertTrue(eventually { fake.emitted.isNotEmpty() })
+        fake.deliverEmitted()
 
-        // the level changes before the check line came: the new run reads from the same point again
-        fake.echoMarker = true
-        impl.minimumLevel = Level.DEBUG
         assertTrue(eventually { impl.isLogcatCaptureActive })
-        assertEquals(2, fake.launches.size)
-        assertFalse(fake.launches.any { it.contains("-T") })
         assertTrue(eventually { fileText().contains("logged while the capture starts") })
-        assertEquals(1, Regex("logged while the capture starts").findAll(fileText()).count())
+        assertEquals(1, countOf(fileText(), "logged while the capture starts"))
     }
 
     @Test
     fun `when logcat is unavailable the logger writes its own lines and one warning`() {
         fake.echoMarker = false
         val impl = newLogger(verifyTimeoutMs = 200)
-        impl.minimumLevel = Level.INFO
+        impl.minimumLevel = Level.DEBUG
         impl.start()
         impl.i("Own", "line while pending")
         assertTrue(eventually { fileText().contains("logcat capture unavailable: ") })
@@ -136,7 +95,7 @@ class LoggerImplCaptureTest {
     fun `a failing exec gives the warning with the reason and the old behaviour`() {
         fake.failWith = java.io.IOException("error=13, Permission denied")
         val impl = newLogger()
-        impl.minimumLevel = Level.WARNING
+        impl.minimumLevel = Level.DEBUG
         impl.start()
         assertTrue(eventually { fileText().contains("logcat capture unavailable: cannot start logcat") })
         impl.e("Own", "error after the failure")
@@ -158,26 +117,60 @@ class LoggerImplCaptureTest {
     }
 
     @Test
-    fun `level none stops logcat and level change restarts it with the new filter`() {
+    fun `no logcat process at the normal levels`() {
+        for (level in listOf(Level.WARNING, Level.INFO, Level.NONE)) {
+            val impl = newLogger()
+            impl.minimumLevel = level
+            impl.start()
+            impl.e("Own", "line at " + level.name)
+            impl.flush()
+            assertFalse(impl.isLogcatCaptureActive)
+        }
+        assertTrue(fake.launches.isEmpty())
+    }
+
+    @Test
+    fun `advanced level starts logcat and leaving it stops logcat`() {
         val impl = newLogger()
         impl.minimumLevel = Level.INFO
         impl.start()
-        assertTrue(eventually { impl.isLogcatCaptureActive })
-        assertEquals("*:I", fake.launches[0].last())
-        val first = fake.current
+        assertTrue(fake.launches.isEmpty())
 
         impl.minimumLevel = Level.DEBUG
-        assertTrue(eventually { fake.launches.size == 2 })
-        assertEquals("*:D", fake.launches[1].last())
-        assertTrue(eventually { first.closed })
         assertTrue(eventually { impl.isLogcatCaptureActive })
+        assertEquals("*:D", fake.launches[0].last())
+        val stream = fake.current
 
-        val second = fake.current
-        impl.minimumLevel = Level.NONE
-        assertTrue(second.closed)
+        impl.minimumLevel = Level.INFO
+        assertTrue(eventually { stream.closed })
         assertFalse(impl.isLogcatCaptureActive)
+        impl.i("Own", "written by the logger again")
+        assertEquals(1, countOf(fileText(), "written by the logger again"))
+    }
+
+    @Test
+    fun `level none stops logcat at once and writes nothing`() {
+        val impl = startAdvanced()
+        val stream = fake.current
+        impl.minimumLevel = Level.NONE
+        assertTrue(eventually { stream.closed })
         impl.e("Own", "nothing is written with level none")
         assertFalse(fileText().contains("nothing is written with level none"))
+    }
+
+    @Test
+    fun `lines in transit at the change from advanced to info are neither lost nor doubled`() {
+        val impl = startAdvanced()
+        impl.d("Own", "debug before the change")
+        impl.i("Own", "info before the change")
+        // logcat has the first two lines in its pipe when the level changes
+        fake.current.emit(line("D", "Own", "debug before the change", time = "10-07 12:20:00.000"))
+        fake.current.emit(line("I", "Own", "info before the change", time = "10-07 12:20:00.001"))
+        impl.minimumLevel = Level.INFO
+
+        assertTrue(eventually { fileText().contains("debug before the change") })
+        assertEquals(1, countOf(fileText(), "debug before the change"))
+        assertEquals(1, countOf(fileText(), "info before the change"))
     }
 
     @Test
