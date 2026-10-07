@@ -7,7 +7,11 @@
  */
 package com.nextcloud.talk.webrtc
 
+import android.app.ActivityManager
 import android.content.Context
+import android.net.ConnectivityManager
+import android.net.NetworkCapabilities
+import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
 import android.text.TextUtils
@@ -92,6 +96,14 @@ internal constructor(
     private var pendingJoinRoomToken: String? = null
     private var currentFederation: FederationSettingsDto? = null
     private var reconnecting = false
+
+    // Times (SystemClock.elapsedRealtime) for the log of a failure: how long the connection lived and how long ago the
+    // server was heard from last.
+    @Volatile
+    private var connectStartedAt = 0L
+
+    @Volatile
+    private var lastFrameAt = 0L
     private val usersHashMap: HashMap<String?, ParticipantDto>
     private var messagesQueue: MutableList<String> = ArrayList()
     private val signalingMessageReceiver = ExternalSignalingMessageReceiver()
@@ -248,6 +260,8 @@ internal constructor(
         val previousWebSocket = internalWebSocket
         isConnected = false
         reconnecting = true
+        connectStartedAt = SystemClock.elapsedRealtime()
+        lastFrameAt = 0L
         val request = Request.Builder().url(connectionUrl).build()
         internalWebSocket = signalingHttpClient.newWebSocket(request, this)
         return previousWebSocket
@@ -255,6 +269,7 @@ internal constructor(
 
     override fun onMessage(webSocket: WebSocket, text: String) {
         if (webSocket === internalWebSocket) {
+            lastFrameAt = SystemClock.elapsedRealtime()
             Log.d(TAG, "Receiving : $webSocket $text")
             try {
                 val (messageType) = LoganSquare.parse(text, BaseWebSocketMessageDto::class.java)
@@ -537,10 +552,47 @@ internal constructor(
         Log.e(
             TAG,
             "Error : WebSocket ${webSocket.hashCode()} (isCurrentInternalWebSocket=$isCurrent, " +
-                "httpCode=${response?.code})",
+                "httpCode=${response?.code}, ${describeTimes()}, ${describeEnvironment()})",
             t
         )
         closeWebSocket(webSocket, "onFailure ${t.javaClass.simpleName}: ${t.message}")
+    }
+
+    private fun describeTimes(): String {
+        val now = SystemClock.elapsedRealtime()
+        val sinceConnectStart = if (connectStartedAt == 0L) -1 else now - connectStartedAt
+        val sinceLastFrame = if (lastFrameAt == 0L) -1 else now - lastFrameAt
+        return "sinceConnectStart=$sinceConnectStart ms, sinceLastFrame=$sinceLastFrame ms"
+    }
+
+    /**
+     * The state of the phone at a failure. A connection that the phone closes a few seconds after a call, with the
+     * network gone for seconds afterwards, points to the system (network switch, power management) and not to the app:
+     * this line tells which.
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private fun describeEnvironment(): String {
+        val appContext = context ?: return "no context"
+        return try {
+            val connectivityManager = appContext.getSystemService(ConnectivityManager::class.java)
+            val network = connectivityManager?.activeNetwork
+            val capabilities = network?.let { connectivityManager.getNetworkCapabilities(it) }
+            val transport = when {
+                capabilities == null -> "none"
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+                else -> "other"
+            }
+            val validated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+            val powerManager = appContext.getSystemService(PowerManager::class.java)
+            val processInfo = ActivityManager.RunningAppProcessInfo()
+            ActivityManager.getMyMemoryState(processInfo)
+            "network=${network?.networkHandle} $transport validated=$validated, " +
+                "interactive=${powerManager?.isInteractive}, idle=${powerManager?.isDeviceIdleMode}, " +
+                "importance=${processInfo.importance}"
+        } catch (e: RuntimeException) {
+            "environment unknown: ${e.javaClass.simpleName}"
+        }
     }
 
     fun hasMCU(): Boolean = hasMCU
