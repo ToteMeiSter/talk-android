@@ -10,6 +10,7 @@ package com.nextcloud.talk.webrtc
 import android.content.Context
 import android.text.TextUtils
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import autodagger.AutoInjector
 import com.bluelinelabs.logansquare.LoganSquare
 import com.nextcloud.talk.application.NextcloudTalkApplication
@@ -48,8 +49,18 @@ import javax.inject.Inject
 
 @AutoInjector(NextcloudTalkApplication::class)
 @Suppress("TooManyFunctions")
-class WebSocketInstance internal constructor(conversationUser: User, connectionUrl: String, webSocketTicket: String) :
-    WebSocketListener() {
+class WebSocketInstance
+@JvmOverloads
+@VisibleForTesting
+internal constructor(
+    conversationUser: User,
+    connectionUrl: String,
+    webSocketTicket: String,
+    // Test seam: when the client and the bus are given, dependency injection via the application component is skipped.
+    testOkHttpClient: OkHttpClient? = null,
+    testEventBus: EventBus? = null,
+    testConnectionHelper: WebSocketConnectionHelper? = null
+) : WebSocketListener() {
     @JvmField
     @Inject
     var okHttpClient: OkHttpClient? = null
@@ -84,11 +95,19 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
     private val signalingHttpClient: OkHttpClient by lazy { createSignalingHttpClient(okHttpClient!!) }
 
     init {
-        sharedApplication!!.componentApplication.inject(this)
+        require((testOkHttpClient == null) == (testEventBus == null)) {
+            "testOkHttpClient and testEventBus must be given together"
+        }
+        if (testOkHttpClient != null && testEventBus != null) {
+            okHttpClient = testOkHttpClient
+            eventBus = testEventBus
+        } else {
+            sharedApplication!!.componentApplication.inject(this)
+        }
         this.connectionUrl = connectionUrl
         this.conversationUser = conversationUser
         this.webSocketTicket = webSocketTicket
-        webSocketConnectionHelper = WebSocketConnectionHelper()
+        webSocketConnectionHelper = testConnectionHelper ?: WebSocketConnectionHelper()
         usersHashMap = HashMap()
         isConnected = false
         eventBus!!.register(this)
@@ -135,7 +154,15 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
             return
         }
         isConnected = false
-        messagesQueue = ArrayList()
+        if (TextUtils.isEmpty(resumeId)) {
+            Log.d(TAG, "closeWebSocket: dropping ${messagesQueue.size} queued messages, new session follows")
+            messagesQueue = ArrayList()
+        } else {
+            // The session is resumed, so the server still knows the room and the peers. Messages that did not
+            // leave the device (the "room" join, "requestoffer") must reach it, or the stream of the other
+            // participants is never requested.
+            Log.d(TAG, "closeWebSocket: keeping ${messagesQueue.size} queued messages for the resumed session")
+        }
         sleep(ONE_SECOND)
         restartWebSocket()
     }
