@@ -20,6 +20,7 @@ import com.nextcloud.talk.signaling.SignalingMessageSender;
 import org.webrtc.AudioTrack;
 import org.webrtc.DataChannel;
 import org.webrtc.IceCandidate;
+import org.webrtc.IceCandidateErrorEvent;
 import org.webrtc.MediaConstraints;
 import org.webrtc.MediaStream;
 import org.webrtc.MediaStreamTrack;
@@ -178,6 +179,9 @@ public class PeerConnectionWrapper {
             .setSSLCertificateVerifier(SystemTrustSslCertificateVerifier.shared())
             .createPeerConnectionDependencies();
         peerConnection = peerConnectionFactory.createPeerConnection(configuration, dependencies);
+        Log.i(IceDiagnostics.TAG, "Created " + videoStreamType + " connection over " + sessionId
+            + " publisher=" + isMCUPublisher + " fromOffer=" + createdFromOffer + " ok=" + (peerConnection != null)
+            + " iceServers=" + IceDiagnostics.describeServers(iceServerList));
 
         this.signalingMessageReceiver = signalingMessageReceiver;
         this.signalingMessageReceiver.addListener(webRtcMessageListener, sessionId, videoStreamType);
@@ -856,12 +860,22 @@ public class PeerConnectionWrapper {
 
         @Override
         public void onIceGatheringChange(PeerConnection.IceGatheringState iceGatheringState) {
+            Log.i(IceDiagnostics.TAG, "Gathering " + iceGatheringState + " over " + sessionId + " "
+                + videoStreamType + " sid=" + sid);
+        }
 
+        @Override
+        public void onIceCandidateError(IceCandidateErrorEvent event) {
+            Log.w(IceDiagnostics.TAG, "Candidate error over " + sessionId + " " + videoStreamType + " sid=" + sid
+                + " url=" + event.url + " code=" + event.errorCode + " text=" + event.errorText);
         }
 
         @Override
         public void onIceCandidate(IceCandidate iceCandidate) {
             NCSignalingMessageDto ncSignalingMessage = createBaseSignalingMessage("candidate");
+            Log.i(IceDiagnostics.TAG, "Sending candidate " + IceDiagnostics.describeCandidate(iceCandidate.sdp)
+                + " server=" + iceCandidate.serverUrl + " over " + sessionId + " " + videoStreamType
+                + " sid=" + ncSignalingMessage.getSid());
             NCMessagePayloadDto ncMessagePayload = new NCMessagePayloadDto();
             ncMessagePayload.setType("candidate");
 
