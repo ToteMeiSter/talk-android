@@ -332,6 +332,7 @@ class CallActivity : CallBaseActivity() {
     private var webSocketClient: WebSocketInstance? = null
     private var webSocketConnectionHelper: WebSocketConnectionHelper? = null
     private var joinRoomInitiated = false
+    private var callJoinRequested = false
     private var roomJoinRefreshes = 0
     private var hasMCU = false
     private var hasExternalSignalingServer = false
@@ -1918,6 +1919,7 @@ class CallActivity : CallBaseActivity() {
         }
 
         val apiVersion = ApiUtils.getCallApiVersion(conversationUser, intArrayOf(ApiUtils.API_V4, 1))
+        callJoinRequested = true
         ncApi!!.joinCall(
             credentials,
             ApiUtils.getUrlForCall(apiVersion, baseUrl, roomToken!!),
@@ -2327,6 +2329,27 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
+    private fun sendLeaveCall(apiVersion: Int, endCall: Boolean?) {
+        if (!callJoinRequested) {
+            // Without a join there is no call to leave; with endCall the DELETE would end a call of others.
+            Log.w(
+                TAG,
+                "hangupNetworkCalls: call was never joined, not sending DELETE /call " +
+                    "(endCall=$endCall, status=$currentCallStatus)"
+            )
+            return
+        }
+        callJoinRequested = false
+        // Fire DELETE best-effort; do not block the UI waiting for the server response.
+        // The subscription runs entirely on the IO thread — no observeOn(mainThread) needed.
+        ncApi!!.leaveCall(credentials, ApiUtils.getUrlForCall(apiVersion, baseUrl, roomToken!!), endCall)
+            .subscribeOn(Schedulers.io())
+            .subscribe(
+                { /* successfully left call */ },
+                { e -> Log.w(TAG, "Something went wrong when leaving the call", e) }
+            )
+    }
+
     private fun hangupNetworkCalls(shutDownView: Boolean, endCallForAll: Boolean, rejoinDelayMillis: Long = 0L) {
         Log.d(TAG, "hangupNetworkCalls. shutDownView=$shutDownView")
         if (!::conversationUser.isInitialized) {
@@ -2346,14 +2369,7 @@ class CallActivity : CallBaseActivity() {
         }
         val endCall: Boolean? = if (endCallForAll) true else null
 
-        // Fire DELETE best-effort; do not block the UI waiting for the server response.
-        // The subscription runs entirely on the IO thread — no observeOn(mainThread) needed.
-        ncApi!!.leaveCall(credentials, ApiUtils.getUrlForCall(apiVersion, baseUrl, roomToken!!), endCall)
-            .subscribeOn(Schedulers.io())
-            .subscribe(
-                { /* successfully left call */ },
-                { e -> Log.w(TAG, "Something went wrong when leaving the call", e) }
-            )
+        sendLeaveCall(apiVersion, endCall)
 
         val conversationModel = currentConversation?.let {
             ConversationModel.mapToConversationModel(it, conversationUser)
