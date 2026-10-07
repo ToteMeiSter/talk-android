@@ -1755,7 +1755,18 @@ class CallActivity : CallBaseActivity() {
 
     private fun joinRoomAndCall() {
         joinRoomInitiated = true
-        callSession = ApplicationWideCurrentRoomHolder.getInstance().session
+        // The holder keeps the session of the room the app is in, which is not the room of an incoming call when
+        // another chat is open: joining the call room with that session makes the signaling server close the
+        // signaling session. Only the session of this room and this account is reused.
+        val holder = ApplicationWideCurrentRoomHolder.getInstance()
+        callSession = holder.getSessionForRoom(roomToken, conversationUser.id)
+        if (TextUtils.isEmpty(callSession) && !TextUtils.isEmpty(holder.session)) {
+            Log.d(
+                TAG,
+                "Not reusing the room session of the holder, it is for room ${holder.currentRoomToken} " +
+                    "of user ${holder.userInRoom.id}, the call is for $roomToken of user ${conversationUser.id}"
+            )
+        }
         val apiVersion = ApiUtils.getConversationApiVersion(conversationUser, intArrayOf(ApiUtils.API_V4, 1))
         Log.d(TAG, "joinRoomAndCall")
         Log.d(TAG, "   baseUrl= $baseUrl")

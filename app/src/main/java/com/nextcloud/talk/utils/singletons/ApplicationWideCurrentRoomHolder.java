@@ -49,6 +49,15 @@ public class ApplicationWideCurrentRoomHolder {
         return currentRoomToken.equals(roomToken) && userInRoom.getId() != null && userInRoom.getId().equals(userId);
     }
 
+    /**
+     * The room session to reuse for the room with the given token of the account with the given internal id: the
+     * session held here if it belongs to that room, otherwise empty. A room session belongs to one room only. The
+     * signaling server closes the signaling session which joins another room with it ("room_session_reconnected").
+     */
+    public String getSessionForRoom(String roomToken, Long userId) {
+        return isCurrentRoom(roomToken, userId) && session != null ? session : "";
+    }
+
     public void setCurrentRoomToken(String currentRoomToken) {
         this.currentRoomToken = currentRoomToken;
     }
