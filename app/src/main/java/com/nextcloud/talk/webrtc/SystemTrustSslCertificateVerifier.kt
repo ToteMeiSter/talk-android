@@ -38,9 +38,10 @@ class SystemTrustSslCertificateVerifier(private val trustManager: X509TrustManag
                 // Conscrypt needs a non-empty authType; it plays no role for the trust anchor lookup.
                 trustManager.checkServerTrusted(arrayOf(x509), AUTH_TYPE)
             }
+            Log.i(IceDiagnostics.TAG, "TURNS certificate " + x509.subjectX500Principal.name + " accepted=" + isCa)
             isCa
         } catch (e: Exception) {
-            Log.d(TAG, "Certificate is not trusted: " + e.javaClass.simpleName)
+            Log.i(IceDiagnostics.TAG, "TURNS certificate is not trusted: " + e.javaClass.simpleName)
             false
         }
     }
