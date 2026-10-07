@@ -152,7 +152,15 @@ internal constructor(
             return
         }
         isConnected = false
-        messagesQueue = ArrayList()
+        if (TextUtils.isEmpty(resumeId)) {
+            Log.d(TAG, "closeWebSocket: dropping ${messagesQueue.size} queued messages, new session follows")
+            messagesQueue = ArrayList()
+        } else {
+            // The session is resumed, so the server still knows the room and the peers. Messages that did not
+            // leave the device (the "room" join, "requestoffer") must reach it, or the stream of the other
+            // participants is never requested.
+            Log.d(TAG, "closeWebSocket: keeping ${messagesQueue.size} queued messages for the resumed session")
+        }
         sleep(ONE_SECOND)
         restartWebSocket()
     }
