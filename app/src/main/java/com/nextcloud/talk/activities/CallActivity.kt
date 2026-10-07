@@ -155,6 +155,7 @@ import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingConfirmStop
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingErrorState
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartedState
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartingState
+import com.nextcloud.talk.webrtc.IceServersFactory
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper.PeerConnectionObserver
 import com.nextcloud.talk.webrtc.PublisherRejoinPolicy
@@ -247,6 +248,8 @@ class CallActivity : CallBaseActivity() {
     private var rootEglBase: EglBase? = null
     private var signalingDisposable: Disposable? = null
     private var nickSendingDisposable: Disposable? = null
+
+    @Volatile
     private var iceServers: MutableList<PeerConnection.IceServer>? = null
     private var cameraEnumerator: CameraEnumerator? = null
     private var roomToken: String? = null
@@ -1696,38 +1699,9 @@ class CallActivity : CallBaseActivity() {
     }
 
     private fun addIceServers(signalingSettingsOverall: SignalingSettingsOverall, apiVersion: Int) {
-        if (signalingSettingsOverall.ocs!!.settings!!.stunServers != null) {
-            val stunServers = signalingSettingsOverall.ocs!!.settings!!.stunServers
-            if (apiVersion == ApiUtils.API_V3) {
-                for ((_, urls) in stunServers!!) {
-                    if (urls != null) {
-                        for (url in urls) {
-                            Log.d(TAG, "   STUN server url: $url")
-                            iceServers!!.add(PeerConnection.IceServer(url))
-                        }
-                    }
-                }
-            } else {
-                if (signalingSettingsOverall.ocs!!.settings!!.stunServers != null) {
-                    for ((url) in stunServers!!) {
-                        Log.d(TAG, "   STUN server url: $url")
-                        iceServers!!.add(PeerConnection.IceServer(url))
-                    }
-                }
-            }
-        }
-
-        if (signalingSettingsOverall.ocs!!.settings!!.turnServers != null) {
-            val turnServers = signalingSettingsOverall.ocs!!.settings!!.turnServers
-            for ((_, urls, username, credential) in turnServers!!) {
-                if (urls != null) {
-                    for (url in urls) {
-                        Log.d(TAG, "   TURN server url: $url")
-                        iceServers!!.add(PeerConnection.IceServer(url, username, credential))
-                    }
-                }
-            }
-        }
+        val settings = signalingSettingsOverall.ocs!!.settings!!
+        iceServers = IceServersFactory.fromSettings(settings, apiVersion)
+        iceServers!!.forEach { Log.d(TAG, "   ICE server url: ${it.urls}") }
     }
 
     private fun checkCapabilities() {
