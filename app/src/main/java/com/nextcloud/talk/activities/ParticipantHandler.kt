@@ -188,6 +188,12 @@ class ParticipantHandler(
             it.removeListener(dataChannelMessageListener)
         }
 
+        Log.d(
+            TAG,
+            "setPeerConnection $sessionId: hasConnection=${peerConnection != null}, " +
+                "tracks audio=${peerConnection?.stream?.audioTracks?.size} " +
+                "video=${peerConnection?.stream?.videoTracks?.size}"
+        )
         this.peerConnection = peerConnection
 
         if (this.peerConnection == null) {
