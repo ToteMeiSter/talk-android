@@ -739,11 +739,18 @@ internal constructor(
         private const val CALLER_STACK_DEPTH = 6
         private const val PING_INTERVAL_SECONDS: Long = 30
 
+        // The server keeps the session for a resume 30 seconds. The base client waits 45 seconds for a connection
+        // and for the answer of the upgrade request, so one hanging attempt used up the whole window and the next
+        // one could only open a new session. Once connected the read timeout is off (OkHttp), pings take over.
+        private const val CONNECT_TIMEOUT_SECONDS: Long = 10
+
         // Dedicated client with pings, so half-open WebSocket connections
         // (e.g. after a WiFi to cellular switch without TCP reset) fail and trigger the reconnect path.
         internal fun createSignalingHttpClient(baseClient: OkHttpClient): OkHttpClient =
             baseClient.newBuilder()
                 .pingInterval(PING_INTERVAL_SECONDS, TimeUnit.SECONDS)
+                .connectTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                .readTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .build()
     }
 }
