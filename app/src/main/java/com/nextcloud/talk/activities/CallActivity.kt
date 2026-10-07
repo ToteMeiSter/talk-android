@@ -2330,19 +2330,16 @@ class CallActivity : CallBaseActivity() {
     }
 
     private fun sendLeaveCall(apiVersion: Int, endCall: Boolean?) {
-        if (!callJoinRequested) {
-            // Without a join there is no call to leave; with endCall the DELETE would end a call of others.
-            Log.w(
-                TAG,
-                "hangupNetworkCalls: call was never joined, not sending DELETE /call " +
-                    "(endCall=$endCall, status=$currentCallStatus)"
-            )
-            return
+        var endForAll = endCall
+        if (!callJoinRequested && endForAll == true) {
+            // The activity may have been recreated since the join (flag lost), so still leave, but never end the
+            // call for the others without knowing that this instance joined it.
+            Log.w(TAG, "call was never joined, leaving without ending the call for everyone")
+            endForAll = null
         }
-        callJoinRequested = false
         // Fire DELETE best-effort; do not block the UI waiting for the server response.
         // The subscription runs entirely on the IO thread — no observeOn(mainThread) needed.
-        ncApi!!.leaveCall(credentials, ApiUtils.getUrlForCall(apiVersion, baseUrl, roomToken!!), endCall)
+        ncApi!!.leaveCall(credentials, ApiUtils.getUrlForCall(apiVersion, baseUrl, roomToken!!), endForAll)
             .subscribeOn(Schedulers.io())
             .subscribe(
                 { /* successfully left call */ },
