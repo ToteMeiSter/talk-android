@@ -48,7 +48,7 @@ data class LogEntry(
 
         // Matches: "MM-dd HH:mm:ss.SSS  pid  tid LEVEL TAG: message"
         private val HEADER_REGEX = Regex(
-            """^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([DIWE])\s+(.+?):\s?(.*)$"""
+            """^(\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3})\s+(\d+)\s+(\d+)\s+([VDIWEFA])\s+(.+?):\s?(.*)$"""
         )
 
         fun parseHeader(line: String): LogEntry? {
