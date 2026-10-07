@@ -475,6 +475,7 @@ public class PeerConnectionWrapper {
         try {
             String trackId = audioTrack.id();
             audioTrack.setVolume(volume);
+            Log.d(TAG, "Remote audio volume " + volume + " for track " + trackId + " over " + sessionId);
             remoteAudioTracks.put(trackId, audioTrack);
         } catch (IllegalStateException exception) {
             Log.w(TAG, "Remote audio track was already disposed", exception);

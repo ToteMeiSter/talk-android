@@ -2705,6 +2705,12 @@ class CallActivity : CallBaseActivity() {
             synchronized(remoteAudioPlayoutLock) {
                 peerConnectionWrapperList.add(peerConnectionWrapper)
                 peerConnectionWrapper.setRemoteAudioPlayoutEnabled(remoteAudioPlayoutEnabled)
+                Log.d(
+                    TAG,
+                    "Remote audio of new wrapper $sessionId $type: playoutEnabled=$remoteAudioPlayoutEnabled, " +
+                        "callStatus=$currentCallStatus, audioRouteReady=$audioRouteReady, " +
+                        "audioRouteReadyTimedOut=$audioRouteReadyTimedOut"
+                )
             }
             if (!publisher) {
                 Log.d(
@@ -3163,6 +3169,12 @@ class CallActivity : CallBaseActivity() {
             val enabled = isRemoteAudioPlayoutAllowed()
             remoteAudioPlayoutEnabled = enabled
             peerConnectionWrapperList.forEach { it.setRemoteAudioPlayoutEnabled(enabled) }
+            Log.d(
+                TAG,
+                "updateRemoteAudioPlayout: playoutEnabled=$enabled, callStatus=$currentCallStatus, " +
+                    "audioRouteReady=$audioRouteReady, audioRouteReadyTimedOut=$audioRouteReadyTimedOut, " +
+                    "wrappers=${peerConnectionWrapperList.size}"
+            )
         }
     }
 
@@ -3707,13 +3719,6 @@ class CallActivity : CallBaseActivity() {
             action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
 
         /**
-         * The participants a connection is to be set up for: the ones which just joined, plus the ones in the call
-         * without a call participant yet. A participant reported while the local one was not in the call yet (events
-         * which waited for a resumed signaling session, or an update right before the own one) is known to the call
-         * participant list from then on, so the update which puts the local participant in the call does not report
-         * it as joined and nothing would request its stream.
-         */
-        /**
          * Whether a participant for which no connection is to be created gets its connection cleared. A connection
          * which exists already (an offer of the MCU can arrive before the update which reports the participant, or
          * after the one of an earlier session with the same ID) is kept: clearing it detaches the stream from the
@@ -3721,6 +3726,13 @@ class CallActivity : CallBaseActivity() {
          */
         internal fun shouldUnbindPeerConnection(hasConnection: Boolean): Boolean = !hasConnection
 
+        /**
+         * The participants a connection is to be set up for: the ones which just joined, plus the ones in the call
+         * without a call participant yet. A participant reported while the local one was not in the call yet (events
+         * which waited for a resumed signaling session, or an update right before the own one) is known to the call
+         * participant list from then on, so the update which puts the local participant in the call does not report
+         * it as joined and nothing would request its stream.
+         */
         internal fun peersToConnect(
             joined: Collection<ParticipantDto>,
             updated: Collection<ParticipantDto>,
