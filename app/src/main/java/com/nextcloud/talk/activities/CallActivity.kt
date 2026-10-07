@@ -1940,7 +1940,7 @@ class CallActivity : CallBaseActivity() {
 
                 override fun onError(e: Throwable) {
                     logger.e(TAG, "Failed to join call", e)
-                    if (shouldRetryRejoin(currentCallStatus, e)) {
+                    if (webSocketClient != null && shouldRetryRejoin(currentCallStatus, e)) {
                         // A rejoin that fails on a bad network must not end the call: the user would find the call
                         // screen gone and join again by hand.
                         Log.w(TAG, "Joining the call failed during a rejoin, rejoining again", e)
