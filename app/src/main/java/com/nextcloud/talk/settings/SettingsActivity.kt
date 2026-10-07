@@ -231,7 +231,7 @@ class SettingsActivity :
             when {
                 logsRepository.minimumLevel == Level.NONE -> R.string.nc_logs_logging_disabled_note
                 logsRepository.minimumLevel <= Level.DEBUG -> R.string.nc_logs_advanced_logging_enabled_warning
-                else -> R.string.nc_logs_logging_enabled
+                else -> R.string.nc_settings_logs_calls_need_advanced
             }
         )
 

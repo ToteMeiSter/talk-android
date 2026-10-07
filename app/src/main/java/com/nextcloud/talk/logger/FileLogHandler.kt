@@ -12,29 +12,41 @@ import java.io.FileNotFoundException
 import java.io.FileOutputStream
 import java.io.IOException
 
-class FileLogHandler(private val logDir: File, private val logFilename: String, private val maxSize: Long) {
+open class FileLogHandler(
+    private val logDir: File,
+    private val logFilename: String,
+    private val maxSize: Long,
+    rotatedFiles: Int = ROTATED_LOGS_COUNT
+) {
     data class RawLogs(val lines: List<String>, val logSize: Long)
 
     companion object {
         private val TAG = FileLogHandler::class.java.simpleName
-        const val ROTATED_LOGS_COUNT = 3
+
+        /** Rotated files next to the current one: `.0` is the newest of them, the highest number the oldest. */
+        const val ROTATED_LOGS_COUNT = 5
+
+        /**
+         * Age rank of a log file name for sorting oldest first: the highest `.N` suffix first, the current file
+         * last. Null if [name] is not [baseName] or one of its rotated files.
+         */
+        fun rotationRank(baseName: String, name: String): Int? {
+            if (name == baseName) return Int.MAX_VALUE
+            val number = name.removePrefix("$baseName.").takeIf { name.startsWith("$baseName.") }?.toIntOrNull()
+            return number?.let { -it }
+        }
     }
 
     private var writer: FileOutputStream? = null
     private var size: Long = 0
 
-    private val rotationList = listOf(
-        "$logFilename.2",
-        "$logFilename.1",
-        "$logFilename.0",
-        logFilename
-    )
+    private val rotationList = (rotatedFiles - 1 downTo 0).map { "$logFilename.$it" } + logFilename
 
     val logFile: File get() = File(logDir, logFilename)
 
     val isOpened: Boolean get() = writer != null
 
-    fun open() {
+    open fun open() {
         try {
             writer = FileOutputStream(logFile, true)
             size = logFile.length()
@@ -46,8 +58,8 @@ class FileLogHandler(private val logDir: File, private val logFilename: String, 
         }
     }
 
-    fun write(logEntry: String) {
-        val bytes = logEntry.toByteArray(Charsets.UTF_8)
+    open fun write(logEntry: String) {
+        val bytes = LogMasker.mask(logEntry).toByteArray(Charsets.UTF_8)
         writer?.write(bytes)
         size += bytes.size
         if (size > maxSize) {
@@ -56,9 +68,12 @@ class FileLogHandler(private val logDir: File, private val logFilename: String, 
     }
 
     fun close() {
-        writer?.close()
-        writer = null
-        size = 0L
+        try {
+            writer?.close()
+        } finally {
+            writer = null
+            size = 0L
+        }
     }
 
     fun deleteAll() {

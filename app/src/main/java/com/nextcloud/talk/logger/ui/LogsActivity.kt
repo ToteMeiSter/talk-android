@@ -326,10 +326,11 @@ private val colorMuted = Color(0xFF888888)
 @Composable
 private fun LogEntryRow(entry: LogEntry) {
     val levelColor = when (entry.level) {
+        Level.VERBOSE -> colorMuted
         Level.DEBUG -> colorDebug
         Level.INFO -> colorInfo
         Level.WARNING -> colorWarning
-        Level.ERROR -> colorError
+        Level.ERROR, Level.FATAL -> colorError
         Level.NONE -> colorMuted
     }
     val lines = entry.message.split('\n')

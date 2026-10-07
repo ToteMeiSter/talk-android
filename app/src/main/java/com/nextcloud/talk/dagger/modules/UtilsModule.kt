@@ -10,9 +10,11 @@ package com.nextcloud.talk.dagger.modules
 import android.content.Context
 import com.nextcloud.talk.logger.FileLogHandler
 import com.nextcloud.talk.logger.Level
+import com.nextcloud.talk.logger.LogcatSetup
 import com.nextcloud.talk.logger.Logger
 import com.nextcloud.talk.logger.LoggerImpl
 import com.nextcloud.talk.logger.LogsRepository
+import com.nextcloud.talk.logger.ProcessLogcatLauncher
 import com.nextcloud.talk.utils.DateUtils
 import com.nextcloud.talk.utils.message.MessageUtils
 import com.nextcloud.talk.utils.permissions.PlatformPermissionUtil
@@ -45,7 +47,7 @@ class UtilsModule {
     fun provideLoggerImpl(context: Context): LoggerImpl {
         val logDir = File(context.filesDir, LOG_DIR_NAME)
         val handler = FileLogHandler(logDir, LOG_FILE_NAME, maxSize = LOG_FILE_MAX_SIZE)
-        val impl = LoggerImpl(handler = handler)
+        val impl = LoggerImpl(handler = handler, logcatSetup = LogcatSetup(launcher = ProcessLogcatLauncher()))
         val savedLevelName = context
             .getSharedPreferences(LoggerImpl.PREFS_NAME, Context.MODE_PRIVATE)
             .getString(LoggerImpl.PREF_LOG_LEVEL, null)
@@ -66,7 +68,10 @@ class UtilsModule {
     companion object {
         const val LOG_DIR_NAME = "logs"
         const val LOG_FILE_NAME = "nc_talk_log.txt"
-        private const val LOG_FILE_MAX_SIZE = 1_000_000L // 1 MB per file, 4 files max = 4 MB
+
+        // 1 MB per file, the current file + FileLogHandler.ROTATED_LOGS_COUNT rotated ones = 6 MB at most. A 30
+        // minute call with advanced logging writes about 1-2 MB (4 MB in a bad case), see the card report.
+        private const val LOG_FILE_MAX_SIZE = 1_000_000L
     }
 
     @Provides
