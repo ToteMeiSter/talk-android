@@ -476,6 +476,10 @@ internal constructor(
                 Log.d(TAG, "chat-relay is NOT supported")
             }
         }
+        Log.d(
+            TAG,
+            "hello: resumed=${!TextUtils.isEmpty(oldResumeId)}, sending ${messagesQueue.size} queued messages"
+        )
         for (i in messagesQueue.indices) {
             webSocket.send(messagesQueue[i])
         }

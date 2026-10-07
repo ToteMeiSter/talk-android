@@ -1892,6 +1892,8 @@ class CallActivity : CallBaseActivity() {
         if (!isVoiceOnlyCall && canPublishVideoStream) {
             inCallFlag += ParticipantDto.InCallFlags.WITH_VIDEO
         }
+        // A call joined while the signaling socket is down (a reconnect is on its way) gets its events late.
+        Log.d(TAG, "performCall: signaling isConnected=${webSocketClient?.isConnected}, callSession=$callSession")
         callParticipantList = CallParticipantList(signalingMessageReceiver)
         callParticipantList!!.addObserver(callParticipantListObserver)
 
@@ -2530,7 +2532,8 @@ class CallActivity : CallBaseActivity() {
                 true
             )
         }
-        handleJoinedCallParticipantsChanged(selfParticipant, joined, currentSessionId)
+        val all = peersToConnect(joined, updated, unchanged, currentSessionId, callViewModel::doesParticipantExist)
+        handleJoinedCallParticipantsChanged(selfParticipant, all, currentSessionId)
 
         if (othersInCall && currentCallStatus !== CallStatus.IN_CONVERSATION) {
             setCallState(CallStatus.IN_CONVERSATION)
@@ -3665,6 +3668,31 @@ class CallActivity : CallBaseActivity() {
 
         internal fun isPushToTalkRelease(action: Int): Boolean =
             action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
+
+        /**
+         * The participants a connection is to be set up for: the ones which just joined, plus the ones in the call
+         * without a call participant yet. A participant reported while the local one was not in the call yet (events
+         * which waited for a resumed signaling session, or an update right before the own one) is known to the call
+         * participant list from then on, so the update which puts the local participant in the call does not report
+         * it as joined and nothing would request its stream.
+         */
+        internal fun peersToConnect(
+            joined: Collection<ParticipantDto>,
+            updated: Collection<ParticipantDto>,
+            unchanged: Collection<ParticipantDto>,
+            currentSessionId: String?,
+            hasCallParticipant: (String) -> Boolean
+        ): List<ParticipantDto> {
+            val joinedSessionIds = joined.mapNotNull { it.sessionId }.toSet()
+            val withoutConnection = (updated + unchanged).filter {
+                val sessionId = it.sessionId
+                sessionId != null &&
+                    sessionId != currentSessionId &&
+                    sessionId !in joinedSessionIds &&
+                    !hasCallParticipant(sessionId)
+            }
+            return joined + withoutConnection
+        }
 
         private const val MAX_ROOM_JOIN_REFRESHES: Int = 2
 
