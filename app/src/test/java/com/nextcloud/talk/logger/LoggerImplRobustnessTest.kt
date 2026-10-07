@@ -18,10 +18,21 @@ import java.util.concurrent.atomic.AtomicInteger
 class LoggerImplRobustnessTest : LoggerImplTestBase() {
     private val failures = AtomicInteger()
 
+    @Volatile
+    private var failEverything = false
+
+    @Volatile
+    private var failOpen = false
+
     override fun createHandler() =
         object : FileLogHandler(logDir, "nc_talk_log.txt", MAX_FILE_SIZE) {
+            override fun open() {
+                if (failOpen) throw OutOfMemoryError("no memory")
+                super.open()
+            }
+
             override fun write(logEntry: String) {
-                if (logEntry.contains("make-it-fail")) {
+                if (failEverything || logEntry.contains("make-it-fail")) {
                     failures.incrementAndGet()
                     throw IOException("disk is full")
                 }
@@ -129,6 +140,41 @@ class LoggerImplRobustnessTest : LoggerImplTestBase() {
         assertEquals(0, countOf(fileText(), "logcat line before the check"))
     }
 
+    @Test
+    fun `failing writes do not feed themselves through the capture`() {
+        val impl = startAdvanced()
+        failEverything = true
+        repeat(LINES) {
+            fake.current.emit(line("D", "Other", "line " + it, time = "10-07 12:40:00.000"))
+            // what the failure message of the logger looks like when it comes back through logcat
+            fake.current.emit(line("W", "LoggerImpl", "Cannot write to the log file: x", time = "10-07 12:40:00.001"))
+        }
+        assertTrue(eventually { failures.get() >= LINES })
+        impl.flush()
+        assertEquals(1, impl.failureLogCount)
+
+        failEverything = false
+        fake.current.emit(line("D", "Other", "line after the repair", time = "10-07 12:41:00.000"))
+        fake.current.emit(line("W", "LoggerImpl", "Cannot write to the log file: y", time = "10-07 12:41:00.001"))
+        assertTrue(eventually { fileText().contains("line after the repair") })
+        assertFalse(fileText().contains("LoggerImpl: Cannot write"))
+    }
+
+    @Test
+    fun `a flush is answered when the file cannot be opened`() {
+        val impl = newLogger(withLogcat = false)
+        impl.minimumLevel = Level.INFO
+        impl.start()
+        failOpen = true
+        impl.i("Own", "lost with the file")
+        val begin = System.nanoTime()
+        impl.flush(timeoutMs = FLUSH_MS)
+        assertTrue((System.nanoTime() - begin) / NANOS_PER_MILLI < FLUSH_MS)
+        failOpen = false
+        impl.i("Own", "written again")
+        assertTrue(eventually { fileText().contains("written again") })
+    }
+
     private companion object {
         const val FLUSH_MS = 1500L
         const val NANOS_PER_MILLI = 1_000_000L
@@ -136,5 +182,6 @@ class LoggerImplRobustnessTest : LoggerImplTestBase() {
         const val LONG = 5000
         const val STACK_LINES = 120
         const val HELD_LIMIT = 5000
+        const val LINES = 300
     }
 }

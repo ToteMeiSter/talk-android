@@ -46,7 +46,7 @@ open class FileLogHandler(
 
     val isOpened: Boolean get() = writer != null
 
-    fun open() {
+    open fun open() {
         try {
             writer = FileOutputStream(logFile, true)
             size = logFile.length()

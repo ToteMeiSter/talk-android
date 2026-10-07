@@ -15,6 +15,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
@@ -49,6 +50,7 @@ class LoggerImpl(
 
     companion object {
         private val TAG = LoggerImpl::class.java.simpleName
+        private val OWN_TAG_MARKER = " " + TAG + ": "
         private const val DEFAULT_QUEUE_CAPACITY = 1000
         private const val MAX_HELD_ENTRIES = 5000
         private const val ENQUEUE_TIMEOUT_SECONDS = 5L
@@ -87,7 +89,7 @@ class LoggerImpl(
                 Thread.currentThread().interrupt()
             } catch (t: Throwable) {
                 // The logger must outlive a failing write: the next events are written as usual.
-                runCatching { Log.e(TAG, "Logger loop failed, going on: " + t) }
+                logFailure("Logger loop failed, going on: " + t)
                 countMissed()
             }
         }
@@ -97,6 +99,22 @@ class LoggerImpl(
     }
 
     override val lostEntries: Boolean get() = missedLogs.get()
+
+    // Failures of the log file go to logcat once per series (until the next successful write), and the capture
+    // drops the lines of this tag: otherwise every failed write would come back as a new line to write.
+    @Volatile
+    private var failureSeries = false
+    private val failureLogs = AtomicInteger()
+
+    /** Number of failure lines that the logger sent to logcat. */
+    internal val failureLogCount: Int get() = failureLogs.get()
+
+    private fun logFailure(message: String) {
+        if (failureSeries) return
+        failureSeries = true
+        failureLogs.incrementAndGet()
+        runCatching { Log.w(TAG, message) }
+    }
 
     @Volatile
     private var started = false
@@ -171,6 +189,7 @@ class LoggerImpl(
     }
 
     override fun onLine(line: String) {
+        if (line.contains(OWN_TAG_MARKER)) return
         try {
             if (!eventQueue.offer(RawLine(line), ENQUEUE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) countMissed()
         } catch (_: InterruptedException) {
@@ -346,29 +365,31 @@ class LoggerImpl(
 
     @Suppress("TooGenericExceptionCaught")
     private fun writeEvents() {
+        for (event in processedEvents) if (event !is LogEntry && event !is RawLine) otherEvents.add(event)
         try {
             handler.open()
         } catch (t: Throwable) {
-            Log.w(TAG, "Cannot open the log file: " + t)
-            processedEvents.forEach { if (it is LogEntry || it is RawLine) countMissed() else otherEvents.add(it) }
+            logFailure("Cannot open the log file: " + t)
+            processedEvents.forEach { if (it is LogEntry || it is RawLine) countMissed() }
             return
         }
         for (event in processedEvents) {
             when (event) {
-                is LogEntry -> writeSafely(event.toString() + "\n")
-                is RawLine -> writeSafely(event.text + "\n")
-                else -> otherEvents.add(event)
+                is LogEntry -> writeSafely { event.toString() + "\n" }
+                is RawLine -> writeSafely { event.text + "\n" }
             }
         }
     }
 
-    // A failing write loses that entry only; the file is opened again for the next ones.
+    // A failing write (or a failing conversion of the entry to text) loses that entry only; the file is opened again
+    // for the next ones.
     @Suppress("TooGenericExceptionCaught")
-    private fun writeSafely(text: String) {
+    private fun writeSafely(text: () -> String) {
         try {
-            handler.write(text)
+            handler.write(text())
+            failureSeries = false
         } catch (t: Throwable) {
-            Log.w(TAG, "Cannot write to the log file: " + t)
+            logFailure("Cannot write to the log file: " + t)
             countMissed()
             runCatching { handler.close() }
             runCatching { handler.open() }
@@ -388,7 +409,8 @@ class LoggerImpl(
                     is Delete -> handler.deleteAll()
                 }
             } catch (t: Throwable) {
-                Log.w(TAG, "Cannot handle a log request: " + t)
+                logFailure("Cannot handle a log request: " + t)
+                if (event is Load) mainThreadHandler.post { event.onResult(emptyList(), 0L) }
             } finally {
                 if (event is Flush) event.latch.countDown()
             }
@@ -410,7 +432,7 @@ class LoggerImpl(
                 ).toString() + "\n"
             )
         } catch (t: Throwable) {
-            Log.w(TAG, "Cannot write the notice about lost entries: " + t)
+            logFailure("Cannot write the notice about lost entries: " + t)
         } finally {
             runCatching { handler.close() }
         }

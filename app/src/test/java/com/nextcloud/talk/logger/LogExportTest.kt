@@ -9,6 +9,7 @@ package com.nextcloud.talk.logger
 import com.nextcloud.talk.errorhandling.buildLogcatJson
 import com.nextcloud.talk.errorhandling.loadAllLogLines
 import com.nextcloud.talk.errorhandling.loadLogEntries
+import com.nextcloud.talk.errorhandling.writeJsonAtomically
 import com.nextcloud.talk.logger.FakeLogcat.Companion.line
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -64,5 +65,33 @@ class LogExportTest {
         val entry = LogEntry.parseHeader(line("E", "T", "bell\u0007 and \"quote\" and back\\slash"))!!
         val json = buildLogcatJson("pkg", listOf(entry))
         assertTrue(json, json.contains("bell\\u0007 and \\\"quote\\\" and back\\\\slash"))
+    }
+
+    @Test
+    fun `two exports at once leave one complete file and no temporary file`() {
+        val dir = logDir()
+        val target = File(dir, "nc_talk_log_export.json")
+        val threads = (1..2).map { n ->
+            Thread { writeJsonAtomically(target) { out -> repeat(BLOCKS) { out.append("export " + n + " line\n") } } }
+        }
+        threads.forEach { it.start() }
+        threads.forEach { it.join() }
+
+        val lines = target.readLines()
+        assertEquals(BLOCKS, lines.size)
+        assertEquals(1, lines.toSet().size)
+        assertEquals(listOf("nc_talk_log_export.json"), dir.list()!!.toList())
+    }
+
+    @Test
+    fun `a failing export removes its temporary file`() {
+        val dir = logDir()
+        val target = File(dir, "nc_talk_log_export.json")
+        runCatching { writeJsonAtomically(target) { error("serialization failed") } }
+        assertEquals(emptyList<String>(), dir.list()!!.toList())
+    }
+
+    private companion object {
+        const val BLOCKS = 20_000
     }
 }

@@ -22,6 +22,8 @@ import com.nextcloud.talk.logger.LogMasker
 import java.io.File
 import java.io.OutputStream
 import java.io.OutputStreamWriter
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import kotlinx.coroutines.CoroutineScope
@@ -35,6 +37,8 @@ private const val MILLIS_PER_SECOND = 1000L
 private const val NANOS_PER_MILLI = 1_000_000L
 private const val CONTROL_CHARS_END = 0x20
 private const val ESCAPE_HEADROOM_DIVISOR = 8
+private const val EXPORT_FILE_NAME = "nc_talk_log_export.json"
+private const val EXPORT_TEMP_PREFIX = "nc_talk_log_export_tmp"
 
 // The log files are read, masked and written as JSON on an IO thread, the chooser starts on the main thread.
 fun shareLogsAndDiagnosis(context: Context, subject: String, diagnosisText: String) {
@@ -45,7 +49,18 @@ fun shareLogsAndDiagnosis(context: Context, subject: String, diagnosisText: Stri
     }
 }
 
+// An error here must not end the app: it is logged and the user sees a message.
+@Suppress("TooGenericExceptionCaught")
 private fun startShareChooser(context: Context, subject: String, diagnosisText: String, jsonFile: File?) {
+    try {
+        openShareChooser(context, subject, diagnosisText, jsonFile)
+    } catch (e: Exception) {
+        NextcloudTalkApplication.sharedApplication?.logger?.e(TAG, "Sharing the logs failed", e)
+        Toast.makeText(context, R.string.nc_common_error_sorry, Toast.LENGTH_LONG).show()
+    }
+}
+
+private fun openShareChooser(context: Context, subject: String, diagnosisText: String, jsonFile: File?) {
     val uris = ArrayList<Uri>()
     if (jsonFile != null) {
         uris.add(FileProvider.getUriForFile(context, BuildConfig.APPLICATION_ID, jsonFile))
@@ -102,9 +117,22 @@ fun saveLogsAsZip(context: Context, outputStream: OutputStream, diagnosisText: S
 private fun buildLogcatJsonFile(context: Context, logDir: File): File? {
     val entries = loadLogEntries(logDir)
     if (entries.isEmpty()) return null
-    return File(logDir, "nc_talk_log_export.json").also { file ->
-        file.writer(Charsets.UTF_8).buffered().use { writeLogcatJson(context.packageName, entries, it) }
+    return writeJsonAtomically(File(logDir, EXPORT_FILE_NAME)) { out ->
+        writeLogcatJson(context.packageName, entries, out)
     }
+}
+
+// Two builds at once (a double tap) write their own temporary files; the rename replaces the target in one step, so
+// a reader never sees a half written file.
+internal fun writeJsonAtomically(target: File, write: (Appendable) -> Unit): File {
+    val temp = File.createTempFile(EXPORT_TEMP_PREFIX, ".json", target.parentFile)
+    try {
+        temp.writer(Charsets.UTF_8).buffered().use { write(it) }
+        Files.move(temp.toPath(), target.toPath(), StandardCopyOption.REPLACE_EXISTING, StandardCopyOption.ATOMIC_MOVE)
+    } finally {
+        temp.delete()
+    }
+    return target
 }
 
 /** All entries of all log files in the order they were written. Lines are masked again: older files are unmasked. */

@@ -49,12 +49,14 @@ object LogMasker {
 
     private val IGNORE_CASE = RegexOption.IGNORE_CASE
 
-    // Possessive quantifiers: no backtracking and no recursion, so a value of 100 000 characters is safe.
-    private fun jsonField(keys: String) = Regex("(\"(?:$keys)\"\\s*:\\s*\")(?:[^\"\\\\]++|\\\\.)*+(\")", IGNORE_CASE)
+    // Possessive quantifiers: no backtracking and no recursion, so a value of 100 000 characters is safe. The closing
+    // quote is optional: logcat cuts a long entry, and the value of a cut line runs to the end of the line.
+    private fun jsonField(keys: String) =
+        Regex("(\"(?:$keys)\"\\s*:\\s*\")(?:[^\"\\\\]++|\\\\.)*+\\\\?(\")?", IGNORE_CASE)
 
     // The same JSON inside a JSON string: \"key\":\"value\"
     private fun escapedJsonField(keys: String) =
-        Regex("(\\\\\"(?:$keys)\\\\\"\\s*:\\s*\\\\\")(?:[^\"\\\\]++|\\\\(?!\"))*+(\\\\\")", IGNORE_CASE)
+        Regex("(\\\\\"(?:$keys)\\\\\"\\s*:\\s*\\\\\")(?:[^\"\\\\]++|\\\\(?!\"))*+(\\\\\")?", IGNORE_CASE)
 
     private fun keyValue(keys: String) = Regex("(?i)(?<![A-Za-z0-9_])($keys)(\\s*[:=]\\s*)(?!\\*\\*\\*)[^\\s\"&]+")
 
@@ -70,7 +72,7 @@ object LogMasker {
     private const val LONG_TOKEN_MIN = 32
     private val BARE_TOKEN =
         Regex("(?<![A-Za-z0-9_])(token)(=)(?!\\*\\*\\*)[^\\s\"&]{" + LONG_TOKEN_MIN + ",}+", IGNORE_CASE)
-    private val JSON_LONG_TOKEN = Regex("(\"token\"\\s*:\\s*\")[^\"\\\\]{" + LONG_TOKEN_MIN + ",}+(\")")
+    private val JSON_LONG_TOKEN = Regex("(\"token\"\\s*:\\s*\")[^\"\\\\]{" + LONG_TOKEN_MIN + ",}+(\")?")
     private val FLOW_URL_TOKEN = Regex("(/login/v2/flow/)(?!\\*\\*\\*)[A-Za-z0-9]{" + LONG_TOKEN_MIN + ",}+")
     private val RESUME_ID_WORD = Regex("(?i)(resume[_-]?id\\s+)(?!\\*\\*\\*)[A-Za-z0-9_+/=-]{8,}")
 
