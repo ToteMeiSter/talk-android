@@ -10,6 +10,7 @@ package com.nextcloud.talk.webrtc
 import android.content.Context
 import android.text.TextUtils
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import autodagger.AutoInjector
 import com.bluelinelabs.logansquare.LoganSquare
 import com.nextcloud.talk.application.NextcloudTalkApplication
@@ -48,8 +49,18 @@ import javax.inject.Inject
 
 @AutoInjector(NextcloudTalkApplication::class)
 @Suppress("TooManyFunctions")
-class WebSocketInstance internal constructor(conversationUser: User, connectionUrl: String, webSocketTicket: String) :
-    WebSocketListener() {
+class WebSocketInstance
+@JvmOverloads
+@VisibleForTesting
+internal constructor(
+    conversationUser: User,
+    connectionUrl: String,
+    webSocketTicket: String,
+    // Test seam: when the client and the bus are given, dependency injection via the application component is skipped.
+    testOkHttpClient: OkHttpClient? = null,
+    testEventBus: EventBus? = null,
+    testConnectionHelper: WebSocketConnectionHelper? = null
+) : WebSocketListener() {
     @JvmField
     @Inject
     var okHttpClient: OkHttpClient? = null
@@ -75,6 +86,9 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
     private val connectionUrl: String
     private var currentRoomToken: String? = null
     private var currentNormalBackendSession: String? = null
+
+    // The room of the last join message which the server did not answer yet.
+    private var pendingJoinRoomToken: String? = null
     private var currentFederation: FederationSettingsDto? = null
     private var reconnecting = false
     private val usersHashMap: HashMap<String?, ParticipantDto>
@@ -84,11 +98,19 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
     private val signalingHttpClient: OkHttpClient by lazy { createSignalingHttpClient(okHttpClient!!) }
 
     init {
-        sharedApplication!!.componentApplication.inject(this)
+        require((testOkHttpClient == null) == (testEventBus == null)) {
+            "testOkHttpClient and testEventBus must be given together"
+        }
+        if (testOkHttpClient != null && testEventBus != null) {
+            okHttpClient = testOkHttpClient
+            eventBus = testEventBus
+        } else {
+            sharedApplication!!.componentApplication.inject(this)
+        }
         this.connectionUrl = connectionUrl
         this.conversationUser = conversationUser
         this.webSocketTicket = webSocketTicket
-        webSocketConnectionHelper = WebSocketConnectionHelper()
+        webSocketConnectionHelper = testConnectionHelper ?: WebSocketConnectionHelper()
         usersHashMap = HashMap()
         isConnected = false
         eventBus!!.register(this)
@@ -300,6 +322,7 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
         if (roomWebSocketMessage != null) {
             val alreadyInRoom = roomWebSocketMessage.roomId == currentRoomToken
             currentRoomToken = roomWebSocketMessage.roomId
+            pendingJoinRoomToken = null
             if (roomWebSocketMessage.roomPropertiesWebSocketMessage != null && !TextUtils.isEmpty(currentRoomToken)) {
                 if (alreadyInRoom) {
                     sendRoomUpdatedEvent()
@@ -323,14 +346,32 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
                 restartWebSocket()
             } else if ("hello_expected" == message.code) {
                 restartWebSocket()
+            } else if ("already_joined" == message.code) {
+                processAlreadyJoinedMessage()
             } else if ("no_such_room" == message.code) {
                 // The room session is stale (e.g. reaped by the server). Clear the cached join state so a retry
                 // actually sends, and let the call UI fetch a fresh room session via the joinRoom API.
                 Log.d(TAG, "Joining the room was rejected, the room session needs to be refreshed")
                 currentRoomToken = ""
                 currentNormalBackendSession = ""
+                pendingJoinRoomToken = null
                 eventBus!!.post(WebSocketCommunicationEvent("roomJoinFailed", HashMap()))
             }
+        }
+    }
+
+    /**
+     * The server answers a join of a room which its signaling session is in already (e.g. the chat joined it, then
+     * the call joins it with the room session of the call) with an error instead of a "room" message. It has taken the
+     * room session of the request over by then, so the join worked. The waiting call would never be told otherwise.
+     */
+    private fun processAlreadyJoinedMessage() {
+        val roomToken = pendingJoinRoomToken
+        pendingJoinRoomToken = null
+        Log.d(TAG, "Room $roomToken was joined already by this signaling session, the room session was updated")
+        if (!TextUtils.isEmpty(roomToken)) {
+            currentRoomToken = roomToken
+            sendRoomJoinedEvent()
         }
     }
 
@@ -367,6 +408,7 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
         } else {
             currentRoomToken = ""
             currentNormalBackendSession = ""
+            pendingJoinRoomToken = null
         }
         if (!TextUtils.isEmpty(currentRoomToken)) {
             helloHashMap[Globals.ROOM_TOKEN] = currentRoomToken
@@ -425,6 +467,7 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
                 Log.d(TAG, "sending 'leave room' via websocket")
                 currentNormalBackendSession = ""
                 currentFederation = null
+                pendingJoinRoomToken = null
                 sendMessage(message)
             } else if (
                 roomToken == currentRoomToken &&
@@ -438,6 +481,7 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
                 Log.d(TAG, "Sending join room message via websocket")
                 currentNormalBackendSession = normalBackendSession
                 currentFederation = federation
+                pendingJoinRoomToken = roomToken
                 sendMessage(message)
             }
         } catch (e: IOException) {

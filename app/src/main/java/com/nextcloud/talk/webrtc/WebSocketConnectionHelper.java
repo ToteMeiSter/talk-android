@@ -48,6 +48,13 @@ public class WebSocketConnectionHelper {
         NextcloudTalkApplication.Companion.getSharedApplication().getComponentApplication().inject(this);
     }
 
+    /**
+     * Test seam: skips the dependency injection via the application component.
+     */
+    WebSocketConnectionHelper(OkHttpClient okHttpClient) {
+        this.okHttpClient = okHttpClient;
+    }
+
     @SuppressLint("LongLogTag")
     public static synchronized WebSocketInstance getWebSocketInstanceForUser(User user) {
         WebSocketInstance webSocketInstance = webSocketInstanceMap.get(user.getId());
