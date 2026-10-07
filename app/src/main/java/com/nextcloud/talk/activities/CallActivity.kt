@@ -3357,6 +3357,10 @@ class CallActivity : CallBaseActivity() {
     // it did not survive.
     private fun onCallInterruptionChanged(interrupted: Boolean) {
         Log.w(TAG, "Call interruption (audio focus) changed: interrupted=$interrupted, status=$currentCallStatus")
+        if (!hasMCU || webSocketClient == null) {
+            Log.d(TAG, "No publisher connection to the MCU, nothing to recheck after the interruption")
+            return
+        }
         if (!interrupted && !isDestroyed) {
             startPublisherRecheck()
         }
@@ -3369,6 +3373,10 @@ class CallActivity : CallBaseActivity() {
     }
 
     private fun recheckPublisherConnection() {
+        if (!hasMCU || webSocketClient == null) {
+            Log.d(TAG, "Publisher recheck skipped, no MCU connection")
+            return
+        }
         val inCall = currentCallStatus === CallStatus.IN_CONVERSATION || currentCallStatus === CallStatus.JOINED
         if (isDestroyed || !inCall) {
             Log.d(TAG, "Publisher recheck skipped in call status $currentCallStatus")
