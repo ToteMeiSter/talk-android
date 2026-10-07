@@ -8,15 +8,18 @@
 package com.nextcloud.talk.webrtc
 
 import android.app.ActivityManager
+import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.os.Build
 import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
 import android.text.TextUtils
 import android.util.Log
 import androidx.annotation.VisibleForTesting
+import androidx.lifecycle.ProcessLifecycleOwner
 import autodagger.AutoInjector
 import com.bluelinelabs.logansquare.LoganSquare
 import com.nextcloud.talk.application.NextcloudTalkApplication
@@ -195,6 +198,7 @@ internal constructor(
                 Log.d(TAG, "closeWebSocket: keeping ${messagesQueue.size} queued messages for the resumed session")
             }
         }
+        Log.w(TAG, "Reconnecting webSocket in 1 s after: $reason")
         sleep(ONE_SECOND)
         synchronized(connectionLock) {
             // A message sent during the pause opens a new socket (see sendMessage). A restart now would cancel that
@@ -243,7 +247,7 @@ internal constructor(
             .drop(CALLER_STACK_SKIP)
             .take(CALLER_STACK_DEPTH)
             .joinToString(" <- ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
-        Log.d(
+        Log.w(
             TAG,
             "Closing webSocket ${webSocket.hashCode()}: $reason " +
                 "(isCurrent=${webSocket === internalWebSocket}, isConnected=$isConnected, " +
@@ -562,22 +566,24 @@ internal constructor(
 
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
         // A closing which the app did not start (no "Closing webSocket" line before) comes from the server or a proxy.
-        Log.d(
+        Log.w(
             TAG,
             "onClosing : WebSocket ${webSocket.hashCode()} $code / $reason " +
-                "(isCurrent=${webSocket === internalWebSocket})"
+                "(isCurrent=${webSocket === internalWebSocket}, ${describeTimes()})"
         )
     }
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-        Log.d(
+        val isCurrent = webSocket === internalWebSocket
+        Log.w(
             TAG,
             "onClosed : WebSocket ${webSocket.hashCode()} $code / $reason " +
-                "(isCurrent=${webSocket === internalWebSocket})"
+                "(isCurrent=$isCurrent, hasResumeId=${!TextUtils.isEmpty(resumeId)}, ${describeTimes()})"
         )
         // A replaced socket is closed gracefully (see restartWebSocketWithNewSession) and reports here late. It must
         // not mark the current connection as closed.
-        if (webSocket === internalWebSocket) {
+        if (isCurrent) {
+            Log.w(TAG, "The current webSocket was closed, nothing reconnects until the next message is sent")
             isConnected = false
         }
     }
@@ -624,10 +630,40 @@ internal constructor(
             ActivityManager.getMyMemoryState(processInfo)
             "network=${network?.networkHandle} $transport validated=$validated, " +
                 "interactive=${powerManager?.isInteractive}, idle=${powerManager?.isDeviceIdleMode}, " +
-                "importance=${processInfo.importance}"
+                "importance=${processInfo.importance}, ${describeBackgroundLimits(appContext, connectivityManager)}"
         } catch (e: RuntimeException) {
             "environment unknown: ${e.javaClass.simpleName}"
         }
+    }
+
+    /**
+     * What the system lets the app do in the background. A phone which cuts the network of an app that has left the
+     * screen closes its sockets without a close frame (the server sees "unexpected EOF"): this tells whether it did.
+     * appState is the state of the app process (RESUMED/STARTED: on screen, CREATED: in the background).
+     */
+    private fun describeBackgroundLimits(appContext: Context, connectivityManager: ConnectivityManager?): String {
+        // Both calls exist since API 28 (minSdk is 26): on older versions they throw NoSuchMethodError, which is an
+        // Error and not caught by the caller.
+        val hasApi28 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+        val backgroundRestricted = if (hasApi28) {
+            appContext.getSystemService(ActivityManager::class.java)?.isBackgroundRestricted.toString()
+        } else {
+            NOT_AVAILABLE
+        }
+        val standbyBucket = if (hasApi28) {
+            appContext.getSystemService(UsageStatsManager::class.java)?.appStandbyBucket.toString()
+        } else {
+            NOT_AVAILABLE
+        }
+        val appState = try {
+            ProcessLifecycleOwner.get().lifecycle.currentState
+        } catch (e: IllegalStateException) {
+            Log.d(TAG, "No process lifecycle: ${e.message}")
+            null
+        }
+        return "appState=$appState, backgroundRestricted=$backgroundRestricted, " +
+            "dataSaver=${connectivityManager?.restrictBackgroundStatus}, standbyBucket=$standbyBucket, " +
+            "sdk=${Build.VERSION.SDK_INT}"
     }
 
     fun hasMCU(): Boolean = hasMCU
@@ -774,6 +810,7 @@ internal constructor(
         private const val TAG = "WebSocketInstance"
         private const val NORMAL_CLOSURE = 1000
         private const val ONE_SECOND: Long = 1000
+        private const val NOT_AVAILABLE = "n/a"
         private const val CALLER_STACK_SKIP = 2
         private const val CALLER_STACK_DEPTH = 6
         private const val PING_INTERVAL_SECONDS: Long = 30
