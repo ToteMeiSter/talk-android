@@ -8,6 +8,8 @@
 package com.nextcloud.talk.webrtc
 
 import android.content.Context
+import android.os.Process
+import android.os.SystemClock
 import android.text.TextUtils
 import android.util.Log
 import androidx.annotation.VisibleForTesting
@@ -109,8 +111,13 @@ internal constructor(
         webSocketConnectionHelper = testConnectionHelper ?: WebSocketConnectionHelper()
         usersHashMap = HashMap()
         isConnected = false
-        restartWebSocket()
+        // A new instance right after the end of a call means the process was killed, as only the process start creates
+        // one (WebsocketConnectionsWorker): the age of the process tells it.
+        Log.d(TAG, "Created for user ${conversationUser.id}, process age ${processAgeMillis()} ms")
+        restartWebSocket("created")
     }
+
+    private fun processAgeMillis(): Long = SystemClock.elapsedRealtime() - Process.getStartElapsedRealtime()
 
     private fun sendHello() {
         try {
@@ -144,8 +151,9 @@ internal constructor(
         sendHello()
     }
 
-    private fun closeWebSocket(webSocket: WebSocket) {
-        Log.d(TAG, "closeWebSocket ${webSocket.hashCode()}")
+    private fun closeWebSocket(webSocket: WebSocket, reason: String) {
+        logClosing(webSocket, reason)
+        // The socket has failed already, so there is nobody to receive a close frame: cancel it at once.
         webSocket.close(NORMAL_CLOSURE, null)
         webSocket.cancel()
         if (webSocket !== internalWebSocket) {
@@ -154,17 +162,49 @@ internal constructor(
         isConnected = false
         messagesQueue = ArrayList()
         sleep(ONE_SECOND)
-        restartWebSocket()
+        restartWebSocket("reconnect after: $reason")
     }
 
     fun clearResumeId() {
         resumeId = ""
     }
 
-    fun restartWebSocket() {
+    /**
+     * @param reason who wants the restart and why. It only goes to the log, to tell later which code path ended a
+     * connection.
+     */
+    @JvmOverloads
+    fun restartWebSocket(reason: String = "unspecified") {
+        val wasConnected = isConnected
         val previousWebSocket = openNewWebSocket()
-        previousWebSocket?.close(NORMAL_CLOSURE, null)
-        previousWebSocket?.cancel()
+        if (previousWebSocket != null) {
+            logClosing(previousWebSocket, "restartWebSocket: $reason")
+            previousWebSocket.close(NORMAL_CLOSURE, null)
+            // A connection which said hello is healthy as far as the client knows: let the close frame leave the
+            // device. cancel() drops the send queue, so the server would see the connection vanish without any
+            // closing. OkHttp cancels a close which the server does not answer by itself after 60 seconds.
+            // A connection which did not get as far as a hello is probably dead already.
+            if (!wasConnected) {
+                previousWebSocket.cancel()
+            }
+        }
+    }
+
+    /**
+     * Logs which code path ends [webSocket] and in which state, to be able to tell from the log of a field test who
+     * closed a connection and why. The stack shows the caller, as several parts of the app can end a connection.
+     */
+    private fun logClosing(webSocket: WebSocket, reason: String) {
+        val caller = Throwable().stackTrace
+            .drop(CALLER_STACK_SKIP)
+            .take(CALLER_STACK_DEPTH)
+            .joinToString(" <- ") { "${it.className.substringAfterLast('.')}.${it.methodName}:${it.lineNumber}" }
+        Log.d(
+            TAG,
+            "Closing webSocket ${webSocket.hashCode()}: $reason " +
+                "(isCurrent=${webSocket === internalWebSocket}, isConnected=$isConnected, " +
+                "reconnecting=$reconnecting, hasResumeId=${!TextUtils.isEmpty(resumeId)}) caller: $caller"
+        )
     }
 
     /**
@@ -178,7 +218,7 @@ internal constructor(
      * the old one are never taken for the current one.
      */
     fun restartWebSocketWithNewSession() {
-        Log.d(TAG, "restartWebSocketWithNewSession: $connectionUrl")
+        Log.d(TAG, "restartWebSocketWithNewSession: $connectionUrl, isConnected=$isConnected")
         val wasConnected = isConnected
         resumeId = ""
         val previousWebSocket = openNewWebSocket()
@@ -215,6 +255,8 @@ internal constructor(
                         "event" -> processEventMessage(text)
                         "message" -> processMessage(text)
                         "bye" -> {
+                            // Nothing reconnects after this until the next message is sent.
+                            Log.d(TAG, "Server ended the signaling session with a bye: $text")
                             isConnected = false
                             resumeId = ""
                         }
@@ -367,9 +409,9 @@ internal constructor(
                 resumeId = ""
                 currentRoomToken = ""
                 currentNormalBackendSession = ""
-                restartWebSocket()
+                restartWebSocket("error no_such_session")
             } else if ("hello_expected" == message.code) {
-                restartWebSocket()
+                restartWebSocket("error hello_expected")
             } else if ("no_such_room" == message.code) {
                 // The room session is stale (e.g. reaped by the server). Clear the cached join state so a retry
                 // actually sends, and let the call UI fetch a fresh room session via the joinRoom API.
@@ -438,11 +480,20 @@ internal constructor(
     }
 
     override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
-        Log.d(TAG, "onClosing : WebSocket ${webSocket.hashCode()} $code / $reason")
+        // A closing which the app did not start (no "Closing webSocket" line before) comes from the server or a proxy.
+        Log.d(
+            TAG,
+            "onClosing : WebSocket ${webSocket.hashCode()} $code / $reason " +
+                "(isCurrent=${webSocket === internalWebSocket})"
+        )
     }
 
     override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
-        Log.d(TAG, "onClosed : WebSocket ${webSocket.hashCode()} $code / $reason")
+        Log.d(
+            TAG,
+            "onClosed : WebSocket ${webSocket.hashCode()} $code / $reason " +
+                "(isCurrent=${webSocket === internalWebSocket})"
+        )
         // A replaced socket is closed gracefully (see restartWebSocketWithNewSession) and reports here late. It must
         // not mark the current connection as closed.
         if (webSocket === internalWebSocket) {
@@ -452,8 +503,13 @@ internal constructor(
 
     override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
         val isCurrent = webSocket === internalWebSocket
-        Log.e(TAG, "Error : WebSocket ${webSocket.hashCode()} (isCurrentInternalWebSocket=$isCurrent)", t)
-        closeWebSocket(webSocket)
+        Log.e(
+            TAG,
+            "Error : WebSocket ${webSocket.hashCode()} (isCurrentInternalWebSocket=$isCurrent, " +
+                "httpCode=${response?.code})",
+            t
+        )
+        closeWebSocket(webSocket, "onFailure ${t.javaClass.simpleName}: ${t.message}")
     }
 
     fun hasMCU(): Boolean = hasMCU
@@ -512,12 +568,12 @@ internal constructor(
             messagesQueue.add(message)
 
             if (!reconnecting) {
-                restartWebSocket()
+                restartWebSocket("message sent while not connected")
             }
         } else {
             if (!internalWebSocket!!.send(message)) {
                 messagesQueue.add(message)
-                restartWebSocket()
+                restartWebSocket("send() refused the message")
             }
         }
     }
@@ -594,6 +650,8 @@ internal constructor(
         private const val TAG = "WebSocketInstance"
         private const val NORMAL_CLOSURE = 1000
         private const val ONE_SECOND: Long = 1000
+        private const val CALLER_STACK_SKIP = 2
+        private const val CALLER_STACK_DEPTH = 6
         private const val PING_INTERVAL_SECONDS: Long = 30
 
         // Dedicated client with pings, so half-open WebSocket connections

@@ -114,6 +114,18 @@ class WebSocketInstanceSessionReplaceTest {
     }
 
     @Test
+    fun restartOfConnectedSocketSendsCloseFrameAndResumesTheSession() {
+        val instance = createConnectedInstance()
+
+        instance.restartWebSocket("test")
+
+        waitUntil("hello of the second connection") { serverLog.any { it.startsWith("c2:hello") } }
+        waitUntil("close frame of the first connection") { serverLog.contains("c1:closing $NORMAL_CLOSURE") }
+        val newHello = serverLog.first { it.startsWith("c2:hello") }
+        assertTrue("the new connection must resume the session: $serverLog", newHello.contains("resume-c1"))
+    }
+
+    @Test
     fun onClosedOfReplacedSocketKeepsCurrentConnection() {
         val instance = createConnectedInstance()
         val replacedSocket = mock<WebSocket>()
@@ -181,6 +193,7 @@ class WebSocketInstanceSessionReplaceTest {
         }
 
         override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+            serverLog.add("$name:closing $code")
             webSocket.close(NORMAL_CLOSURE, null)
         }
 
