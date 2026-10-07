@@ -8,6 +8,7 @@ package com.nextcloud.talk.webrtc
 
 import android.app.Application
 import com.nextcloud.talk.data.user.model.User
+import com.nextcloud.talk.events.WebSocketCommunicationEvent
 import com.nextcloud.talk.models.json.capabilities.CapabilitiesDto
 import com.nextcloud.talk.models.json.capabilities.SpreedCapabilityDto
 import okhttp3.OkHttpClient
@@ -19,6 +20,8 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okhttp3.mockwebserver.RecordedRequest
 import org.greenrobot.eventbus.EventBus
+import org.greenrobot.eventbus.Subscribe
+import org.greenrobot.eventbus.ThreadMode
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -48,6 +51,8 @@ class WebSocketInstanceSessionReplaceTest {
     private val connectionCount = AtomicInteger()
     private val eventBus = EventBus.builder().build()
     private var instance: WebSocketInstance? = null
+    private val roomJoinedEvents = AtomicInteger()
+    private val roomJoinedSubscriber = RoomJoinedCounter(roomJoinedEvents)
 
     // A failed instance keeps reconnecting after the test. A path of its own keeps it away from the connections
     // of other tests, even if a later MockWebServer gets the same port.
@@ -73,11 +78,13 @@ class WebSocketInstanceSessionReplaceTest {
             }
         }
         server.start()
+        eventBus.register(roomJoinedSubscriber)
     }
 
     @After
     fun tearDown() {
         instance?.let { eventBus.unregister(it) }
+        eventBus.unregister(roomJoinedSubscriber)
         server.shutdown()
     }
 
@@ -111,6 +118,20 @@ class WebSocketInstanceSessionReplaceTest {
         Thread.sleep(SETTLE_MILLIS)
         assertTrue("closing the old socket must not mark the new one as closed", instance.isConnected)
         assertEquals(2, connectionCount.get())
+    }
+
+    @Test
+    fun joinOfTheSameRoomAfterReplacingTheSessionIsSentToTheNewSession() {
+        val instance = createConnectedInstance()
+        instance.joinRoomWithRoomTokenAndSession(ROOM, ROOM_SESSION)
+        waitUntil("room join on the first session") { serverLog.contains("c1:room") }
+        waitUntil("room join answered") { roomJoinedEvents.get() == 1 }
+
+        instance.restartWebSocketWithNewSession()
+        instance.joinRoomWithRoomTokenAndSession(ROOM, ROOM_SESSION)
+
+        waitUntil("room join on the new session") { serverLog.contains("c2:room") }
+        waitUntil("room join answered by the new session") { roomJoinedEvents.get() == 2 }
     }
 
     @Test
@@ -182,6 +203,11 @@ class WebSocketInstanceSessionReplaceTest {
             when {
                 text.contains("\"type\":\"bye\"") -> serverLog.add("$name:bye")
 
+                text.contains("\"type\":\"room\"") -> {
+                    serverLog.add("$name:room")
+                    webSocket.send("{\"type\":\"room\",\"room\":{\"roomid\":\"$ROOM\",\"properties\":{}}}")
+                }
+
                 text.contains("\"type\":\"hello\"") -> {
                     serverLog.add("$name:hello $text")
                     webSocket.send(
@@ -204,10 +230,21 @@ class WebSocketInstanceSessionReplaceTest {
 
     companion object {
         private const val NORMAL_CLOSURE = 1000
+        private const val ROOM = "room-token"
+        private const val ROOM_SESSION = "room-session"
         private const val HTTP_NOT_FOUND = 404
         private const val BYE_WAIT_MILLIS = 2_000L
         private const val TIMEOUT_MILLIS = 10_000L
         private const val POLL_MILLIS = 20L
         private const val SETTLE_MILLIS = 500L
+    }
+}
+
+class RoomJoinedCounter(private val count: AtomicInteger) {
+    @Subscribe(threadMode = ThreadMode.POSTING)
+    fun onEvent(event: WebSocketCommunicationEvent) {
+        if (event.type == "roomJoined") {
+            count.incrementAndGet()
+        }
     }
 }

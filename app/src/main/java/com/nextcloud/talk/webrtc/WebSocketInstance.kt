@@ -266,6 +266,12 @@ internal constructor(
             Log.d(TAG, "restartWebSocketWithNewSession: $connectionUrl, isConnected=$isConnected")
             val wasConnected = isConnected
             resumeId = ""
+            // The "bye" removes the room session at the server. A join of the same room and session would be taken
+            // for done ("unchanged, joining locally") and the call API would be used with the removed session.
+            currentRoomToken = ""
+            currentNormalBackendSession = ""
+            currentFederation = null
+            pendingJoinRoomToken = null
             val previousWebSocket = openNewWebSocket()
             val byeSent = wasConnected && previousWebSocket != null && sendBye(previousWebSocket)
             previousWebSocket?.close(NORMAL_CLOSURE, null)

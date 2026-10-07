@@ -199,6 +199,7 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import retrofit2.HttpException
 import java.io.IOException
 import java.util.Objects
 import java.util.concurrent.CopyOnWriteArrayList
@@ -1939,6 +1940,13 @@ class CallActivity : CallBaseActivity() {
 
                 override fun onError(e: Throwable) {
                     logger.e(TAG, "Failed to join call", e)
+                    if (shouldRetryRejoin(currentCallStatus, e)) {
+                        // A rejoin that fails on a bad network must not end the call: the user would find the call
+                        // screen gone and join again by hand.
+                        Log.w(TAG, "Joining the call failed during a rejoin, rejoining again", e)
+                        rejoinCallWithNewSession(publisherRejoinPolicy.onPublisherFailed())
+                        return
+                    }
                     Snackbar.make(binding!!.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
                     hangup(true, false)
                 }
@@ -2089,6 +2097,10 @@ class CallActivity : CallBaseActivity() {
         } else {
             if (webSocketClient!!.isConnected && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
                 webSocketClient!!.restartWebSocketWithNewSession()
+                // The "bye" of the old signaling session removes its room session at the server. The call joins
+                // with a fresh one (participants/active) and POST /call follows only after the room join answer.
+                Log.w(TAG, "Signaling session replaced, dropping the room session for the rejoin")
+                ApplicationWideCurrentRoomHolder.getInstance().session = ""
             }
         }
         joinRoomAndCall()
@@ -2134,6 +2146,9 @@ class CallActivity : CallBaseActivity() {
                     if (!webSocketCommunicationEvent.getHashMap()!!.containsKey("oldResumeId")) {
                         if (currentCallStatus === CallStatus.RECONNECTING) {
                             hangup(false, false)
+                        } else if (currentCallStatus === CallStatus.PUBLISHER_FAILED) {
+                            // The rejoin opened this session itself and joins the room and the call on it.
+                            Log.d(TAG, "hello with a new session while rejoining, the rejoin is under way")
                         } else {
                             // New signaling session: the connections of the old one are gone at the MCU. Kept, they
                             // would be taken for the participants of the new join and no offer would be requested.
@@ -3709,6 +3724,26 @@ class CallActivity : CallBaseActivity() {
 
         internal fun shouldRefreshRoomSession(callStatus: CallStatus?, refreshesDone: Int): Boolean =
             callStatus !== CallStatus.IN_CONVERSATION && refreshesDone < MAX_ROOM_JOIN_REFRESHES
+
+        private const val HTTP_NOT_FOUND = 404
+        private const val HTTP_REQUEST_TIMEOUT = 408
+        private const val HTTP_TOO_MANY_REQUESTS = 429
+        private const val HTTP_CLIENT_ERROR_MIN = 400
+        private const val HTTP_CLIENT_ERROR_MAX = 499
+
+        /**
+         * Whether a failed join of the call is tried again with a new session instead of ending the call: only
+         * while the call is rejoined, and not for a refusal of the server (403 and the like), which a new session
+         * would not change. 404 means the session is gone, which a new session does fix.
+         */
+        internal fun shouldRetryRejoin(callStatus: CallStatus?, error: Throwable): Boolean {
+            if (callStatus !== CallStatus.PUBLISHER_FAILED && callStatus !== CallStatus.RECONNECTING) {
+                return false
+            }
+            val code = (error as? HttpException)?.code() ?: return true
+            val retryable = setOf(HTTP_NOT_FOUND, HTTP_REQUEST_TIMEOUT, HTTP_TOO_MANY_REQUESTS)
+            return code !in HTTP_CLIENT_ERROR_MIN..HTTP_CLIENT_ERROR_MAX || code in retryable
+        }
 
         private const val DELAY_ON_ERROR_STOP_THRESHOLD: Int = 16
 
