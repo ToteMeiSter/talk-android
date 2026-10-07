@@ -9,6 +9,7 @@ package com.nextcloud.talk.webrtc
 import okhttp3.OkHttpClient
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotSame
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.util.concurrent.TimeUnit
 
@@ -49,7 +50,31 @@ class WebSocketInstanceSignalingClientTest {
             0,
             baseClient.pingIntervalMillis
         )
-        assertEquals(baseClient.connectTimeoutMillis, signalingClient.connectTimeoutMillis)
-        assertEquals(baseClient.readTimeoutMillis, signalingClient.readTimeoutMillis)
+        assertEquals(
+            "base client (shared with regular HTTP calls) must keep its timeouts",
+            45_000,
+            baseClient.connectTimeoutMillis
+        )
+        assertEquals(45_000, baseClient.readTimeoutMillis)
+    }
+
+    @Test
+    fun signalingClientGivesUpAConnectionAttemptWithinTheResumeWindowOfTheServer() {
+        val baseClient = OkHttpClient.Builder()
+            .connectTimeout(45, TimeUnit.SECONDS)
+            .readTimeout(45, TimeUnit.SECONDS)
+            .build()
+
+        val signalingClient = WebSocketInstance.createSignalingHttpClient(baseClient)
+
+        // The server keeps a session 30 seconds for a resume: several attempts must fit in, not one hanging attempt.
+        assertTrue(
+            "connect timeout ${signalingClient.connectTimeoutMillis} ms must leave room for retries within 30 s",
+            signalingClient.connectTimeoutMillis in 1..10_000
+        )
+        assertTrue(
+            "read timeout ${signalingClient.readTimeoutMillis} ms (the answer of the upgrade) must leave room too",
+            signalingClient.readTimeoutMillis in 1..10_000
+        )
     }
 }
