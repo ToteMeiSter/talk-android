@@ -3707,6 +3707,7 @@ class ChatActivity :
 
     fun leaveRoom(functionToCallAfterLeave: (() -> Unit)?) {
         logConversationInfos("leaveRoom")
+        Log.i(TAG, "leaveRoom called from ${Throwable().stackTrace.getOrNull(1)?.methodName}")
         isLeavingRoom = true
 
         // Send the HPB "leave room" immediately, before waiting for the backend DELETE to
@@ -3716,6 +3717,14 @@ class ChatActivity :
             webSocketInstance?.joinRoomWithRoomTokenAndSession("", sessionIdAfterRoomJoined)
         }
         sessionIdAfterRoomJoined = "0"
+        // The room session dies with the DELETE below, but the holder is cleared only when that answers. A chat which
+        // opens meanwhile would take the dead session from the holder and join the signaling room with it, which
+        // the backend answers with no_such_room.
+        if (isNotInCall() &&
+            ApplicationWideCurrentRoomHolder.getInstance().isCurrentRoom(roomToken, conversationUser.id)
+        ) {
+            ApplicationWideCurrentRoomHolder.getInstance().session = ""
+        }
 
         // FIXME Fix API checking with guests?
         val apiVersion = ApiUtils.getConversationApiVersion(conversationUser, intArrayOf(ApiUtils.API_V4, 1))
