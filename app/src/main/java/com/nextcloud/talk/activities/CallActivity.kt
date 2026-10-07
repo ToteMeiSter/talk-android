@@ -155,6 +155,7 @@ import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingConfirmStop
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingErrorState
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartedState
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartingState
+import com.nextcloud.talk.webrtc.CallRecoveryPolicy
 import com.nextcloud.talk.webrtc.IceServersFactory
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper.PeerConnectionObserver
@@ -346,6 +347,13 @@ class CallActivity : CallBaseActivity() {
     private val rejoinHandler = Handler(Looper.getMainLooper())
     private val publisherRejoinPolicy = PublisherRejoinPolicy()
     private var isRejoinPaused = false
+
+    // Last ICE state of the own publisher connection, to tell whether it survived a change of the network handle or a
+    // phone call. Null while there is no connection (yet).
+    @Volatile
+    private var publisherIceState: IceConnectionState? = null
+    private var publisherRechecks = 0
+    private val publisherRecheckRunnable = Runnable { recheckPublisherConnection() }
     private val rejoinRunnable = Runnable {
         isRejoinPaused = false
         if (!isDestroyed && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
@@ -1044,6 +1052,7 @@ class CallActivity : CallBaseActivity() {
         // Store existing audio settings and change audio mode to
         // MODE_IN_COMMUNICATION for best possible VoIP performance.
         Log.d(TAG, "Starting the audio manager...")
+        audioManager!!.setInterruptionListener { interrupted -> onCallInterruptionChanged(interrupted) }
         audioManager!!.start { currentDevice: AudioDevice, availableDevices: Set<AudioDevice> ->
             onAudioManagerDevicesChanged(
                 currentDevice,
@@ -3299,6 +3308,9 @@ class CallActivity : CallBaseActivity() {
 
     // Same recovery as the web client for a failed connection to the MCU: join the call again with a new session.
     private fun rejoinCallWithNewSession(rejoinDelayMillis: Long = 0L) {
+        Log.w(TAG, "Leaving the call to join it again with a new session, pause=$rejoinDelayMillis ms")
+        rejoinHandler.removeCallbacks(publisherRecheckRunnable)
+        publisherIceState = null
         setCallState(CallStatus.PUBLISHER_FAILED)
         webSocketClient!!.clearResumeId()
         hangup(false, false, rejoinDelayMillis)
@@ -3322,14 +3334,59 @@ class CallActivity : CallBaseActivity() {
             return
         }
         if (hasMCU && webSocketClient != null) {
-            Log.d(TAG, "Network switched, joining the call again with a new session")
-            rejoinCallWithNewSession()
+            val interrupted = isCallInterrupted()
+            val action = CallRecoveryPolicy.onNetworkSwitched(interrupted, publisherIceState)
+            Log.w(TAG, "Network switched: publisher ICE state $publisherIceState, interrupted=$interrupted -> $action")
+            when (action) {
+                CallRecoveryPolicy.Action.REJOIN -> rejoinCallWithNewSession()
+                CallRecoveryPolicy.Action.RECHECK -> startPublisherRecheck()
+                else -> Unit
+            }
             return
         }
         Log.d(TAG, "Network switched, reconnecting signaling and restarting ICE")
         webSocketClient?.restartWebSocket("network switched during the call")
         val wrappers = synchronized(remoteAudioPlayoutLock) { ArrayList(peerConnectionWrapperList) }
         wrappers.forEach { it.restartIce() }
+    }
+
+    private fun isCallInterrupted(): Boolean = audioManager?.isInterrupted == true
+
+    // A phone call took the audio focus. The signaling session and the connections stay as they are, the system
+    // silences the microphone. When the call is over, the publisher connection is looked at and replaced only if
+    // it did not survive.
+    private fun onCallInterruptionChanged(interrupted: Boolean) {
+        Log.w(TAG, "Call interruption (audio focus) changed: interrupted=$interrupted, status=$currentCallStatus")
+        if (!interrupted && !isDestroyed) {
+            startPublisherRecheck()
+        }
+    }
+
+    private fun startPublisherRecheck() {
+        publisherRechecks = 0
+        rejoinHandler.removeCallbacks(publisherRecheckRunnable)
+        rejoinHandler.postDelayed(publisherRecheckRunnable, CallRecoveryPolicy.RECHECK_DELAY_MILLIS)
+    }
+
+    private fun recheckPublisherConnection() {
+        val inCall = currentCallStatus === CallStatus.IN_CONVERSATION || currentCallStatus === CallStatus.JOINED
+        if (isDestroyed || !inCall) {
+            Log.d(TAG, "Publisher recheck skipped in call status $currentCallStatus")
+            return
+        }
+        val state = publisherIceState
+        val action = CallRecoveryPolicy.onRecheck(isCallInterrupted(), state, publisherRechecks)
+        Log.w(TAG, "Publisher recheck ${publisherRechecks + 1}: ICE state $state -> $action")
+        when (action) {
+            CallRecoveryPolicy.Action.REJOIN -> rejoinCallWithNewSession()
+
+            CallRecoveryPolicy.Action.RECHECK -> {
+                publisherRechecks++
+                rejoinHandler.postDelayed(publisherRecheckRunnable, CallRecoveryPolicy.RECHECK_DELAY_MILLIS)
+            }
+
+            else -> Unit
+        }
     }
 
     private inner class CallActivitySelfPeerConnectionObserver : PeerConnectionObserver {
@@ -3343,6 +3400,8 @@ class CallActivity : CallBaseActivity() {
 
         override fun onIceConnectionStateChanged(iceConnectionState: IceConnectionState) {
             runOnUiThread {
+                Log.d(TAG, "Publisher ICE state: $iceConnectionState")
+                publisherIceState = iceConnectionState
                 if (iceConnectionState == IceConnectionState.FAILED) {
                     // Don't hang up if the activity is just backgrounded (e.g., task switching).
                     // The ICE failure is likely transient due to the activity being stopped.
@@ -3353,7 +3412,12 @@ class CallActivity : CallBaseActivity() {
                     }
                     // Only this ICE handler counts failures and sets a pause. Other callers of the same
                     // rejoin path rejoin at once.
-                    rejoinCallWithNewSession(publisherRejoinPolicy.onPublisherFailed())
+                    val interrupted = isCallInterrupted()
+                    val action = CallRecoveryPolicy.onIceFailed(interrupted)
+                    Log.w(TAG, "Publisher ICE FAILED: interrupted=$interrupted, status=$currentCallStatus -> $action")
+                    if (action == CallRecoveryPolicy.Action.REJOIN) {
+                        rejoinCallWithNewSession(publisherRejoinPolicy.onPublisherFailed())
+                    }
                 } else if (iceConnectionState == IceConnectionState.CONNECTED ||
                     iceConnectionState == IceConnectionState.COMPLETED
                 ) {
