@@ -2122,6 +2122,13 @@ class CallActivity : CallBaseActivity() {
                         if (currentCallStatus === CallStatus.RECONNECTING) {
                             hangup(false, false)
                         } else {
+                            // New signaling session: the connections of the old one are gone at the MCU. Kept, they
+                            // would be taken for the participants of the new join and no offer would be requested.
+                            Log.d(
+                                TAG,
+                                "hello with a new session, ending ${peerConnectionWrapperList.size} peer connections"
+                            )
+                            endAllPeerConnectionsAndParticipants()
                             setCallState(CallStatus.RECONNECTING)
                             runOnUiThread { initiateCall() }
                         }
@@ -2232,6 +2239,20 @@ class CallActivity : CallBaseActivity() {
             terminateAudioVideo()
         }
 
+        endAllPeerConnectionsAndParticipants()
+        ApplicationWideCurrentRoomHolder.getInstance().isInCall = false
+        ApplicationWideCurrentRoomHolder.getInstance().isDialing = false
+        ApplicationWideCurrentRoomHolder.getInstance().callStartTime = null
+
+        if (shutDownView) {
+            Log.d(TAG, "Stopping foreground service from hangup()")
+            CallForegroundService.stop(applicationContext)
+        }
+
+        hangupNetworkCalls(shutDownView, endCallForAll, rejoinDelayMillis)
+    }
+
+    private fun endAllPeerConnectionsAndParticipants() {
         val peerConnectionIdsToEnd: MutableList<String> = ArrayList(peerConnectionWrapperList.size)
         for (wrapper in peerConnectionWrapperList) {
             peerConnectionIdsToEnd.add(wrapper.sessionId)
@@ -2249,16 +2270,6 @@ class CallActivity : CallBaseActivity() {
         for (sessionId in callParticipantIdsToEnd) {
             removeCallParticipant(sessionId)
         }
-        ApplicationWideCurrentRoomHolder.getInstance().isInCall = false
-        ApplicationWideCurrentRoomHolder.getInstance().isDialing = false
-        ApplicationWideCurrentRoomHolder.getInstance().callStartTime = null
-
-        if (shutDownView) {
-            Log.d(TAG, "Stopping foreground service from hangup()")
-            CallForegroundService.stop(applicationContext)
-        }
-
-        hangupNetworkCalls(shutDownView, endCallForAll, rejoinDelayMillis)
     }
 
     private fun terminateAudioVideo() {
