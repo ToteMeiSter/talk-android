@@ -41,18 +41,18 @@ class LogExportTest {
     }
 
     @Test
-    fun `entries are sorted by time and secrets of old unmasked files are masked`() {
+    fun `entries keep the order of the files and secrets of old unmasked files are masked`() {
         val dir = logDir()
         File(dir, "nc_talk_log.txt").writeText(
             listOf(
                 line("D", "HTTP", "password=hunter2&x=1", time = "10-07 12:00:02.000"),
-                line("D", "CallActivity", "earlier line", time = "10-07 12:00:01.000"),
+                line("D", "CallActivity", "written later, earlier time", time = "10-07 12:00:01.000"),
                 "--------- beginning of main",
                 line("F", "libc", "Fatal signal 11", time = "10-07 12:00:03.000")
             ).joinToString("\n") + "\n"
         )
         val entries = loadLogEntries(dir)
-        assertEquals(listOf("CallActivity", "HTTP", "libc"), entries.map { it.tag })
+        assertEquals(listOf("HTTP", "CallActivity", "libc"), entries.map { it.tag })
         val json = buildLogcatJson("pkg", entries)
         assertFalse(json.contains("hunter2"))
         assertTrue(json.contains("password=***"))

@@ -222,7 +222,7 @@ How to translate with transifex:
     <string name="nc_settings_diagnosis_title">Diagnosis</string>
     <string name="nc_settings_diagnosis_logs_section_title">Diagnosis &amp; Logs</string>
     <string name="nc_settings_diagnosis_subtitle">Open diagnosis screen to check settings</string>
-    <string name="nc_settings_logs_calls_need_advanced">Logging enabled. Call diagnostics are recorded only with advanced logging.</string>
+    <string name="nc_settings_logs_calls_need_advanced">Logging enabled. The system log of calls and signaling is recorded only with advanced logging.</string>
     <string name="nc_settings_logs_title">Logs</string>
     <string name="nc_settings_logs_subtitle">View local log files</string>
     <string name="nc_settings_share_report_title">Share diagnosis report</string>

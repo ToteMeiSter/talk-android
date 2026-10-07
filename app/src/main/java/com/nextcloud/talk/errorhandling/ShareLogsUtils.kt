@@ -24,6 +24,10 @@ import java.io.OutputStream
 import java.io.OutputStreamWriter
 import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val TAG = ShowErrorActivity::class.java.simpleName
 
@@ -32,10 +36,16 @@ private const val NANOS_PER_MILLI = 1_000_000L
 private const val CONTROL_CHARS_END = 0x20
 private const val ESCAPE_HEADROOM_DIVISOR = 8
 
+// The log files are read, masked and written as JSON on an IO thread, the chooser starts on the main thread.
 fun shareLogsAndDiagnosis(context: Context, subject: String, diagnosisText: String) {
     val logDir = File(context.filesDir, UtilsModule.LOG_DIR_NAME)
-    val jsonFile = buildLogcatJsonFile(context, logDir)
+    CoroutineScope(Dispatchers.IO).launch {
+        val jsonFile = runCatching { buildLogcatJsonFile(context, logDir) }.getOrNull()
+        withContext(Dispatchers.Main) { startShareChooser(context, subject, diagnosisText, jsonFile) }
+    }
+}
 
+private fun startShareChooser(context: Context, subject: String, diagnosisText: String, jsonFile: File?) {
     val uris = ArrayList<Uri>()
     if (jsonFile != null) {
         uris.add(FileProvider.getUriForFile(context, BuildConfig.APPLICATION_ID, jsonFile))
@@ -97,11 +107,11 @@ private fun buildLogcatJsonFile(context: Context, logDir: File): File? {
     }
 }
 
-/** All entries of all log files, oldest first. Lines are masked again: older versions wrote them unmasked. */
+/** All entries of all log files in the order they were written. Lines are masked again: older files are unmasked. */
 internal fun loadLogEntries(logDir: File): List<LogEntry> = entriesFromLines(loadAllLogLines(logDir))
 
 internal fun entriesFromLines(lines: List<String>): List<LogEntry> =
-    LogEntry.parseLines(lines.map { LogMasker.mask(it) }).sortedBy { it.timestamp }
+    LogEntry.parseLines(lines.map { LogMasker.mask(it) })
 
 // The current file and the rotated ones (`nc_talk_log.txt.0` ... `.N`), oldest file first.
 internal fun loadAllLogLines(logDir: File): List<String> {
