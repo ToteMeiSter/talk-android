@@ -2594,13 +2594,22 @@ class CallActivity : CallBaseActivity() {
                         "(hasAudioOrVideo=$participantHasAudioOrVideo, " +
                         "sessionIdCompare=${sessionId < currentSessionId})"
                 )
-                callViewModel.getParticipant(sessionId)?.setPeerConnection(null)
+                clearPeerConnectionUnlessSetUp(sessionId)
             }
         }
         othersInCall = if (selfJoined) {
             joined.size > 1
         } else {
             joined.isNotEmpty()
+        }
+    }
+
+    private fun clearPeerConnectionUnlessSetUp(sessionId: String) {
+        val hasConnection = getPeerConnectionWrapperForSessionIdAndType(sessionId, VIDEO_STREAM_TYPE_VIDEO) != null
+        if (shouldUnbindPeerConnection(hasConnection)) {
+            callViewModel.getParticipant(sessionId)?.setPeerConnection(null)
+        } else {
+            Log.d(TAG, "   → Keeping the connection of $sessionId which an offer set up already")
         }
     }
 
@@ -2759,6 +2768,11 @@ class CallActivity : CallBaseActivity() {
     }
 
     private fun addCallParticipant(sessionId: String?) {
+        if (callViewModel.doesParticipantExist(sessionId) && callParticipantMessageListeners.containsKey(sessionId)) {
+            // An offer can set the participant up before the update which reports it as joined.
+            Log.d(TAG, "Call participant $sessionId exists already, keeping it")
+            return
+        }
         val callParticipantMessageListener: CallParticipantMessageListener =
             CallActivityCallParticipantMessageListener(sessionId)
         callParticipantMessageListeners[sessionId] = callParticipantMessageListener
@@ -3619,6 +3633,14 @@ class CallActivity : CallBaseActivity() {
 
         internal fun isPushToTalkRelease(action: Int): Boolean =
             action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
+
+        /**
+         * Whether a participant for which no connection is to be created gets its connection cleared. A connection
+         * which exists already (an offer of the MCU can arrive before the update which reports the participant, or
+         * after the one of an earlier session with the same ID) is kept: clearing it detaches the stream from the
+         * participant and nothing attaches it again.
+         */
+        internal fun shouldUnbindPeerConnection(hasConnection: Boolean): Boolean = !hasConnection
 
         private const val MAX_ROOM_JOIN_REFRESHES: Int = 2
 

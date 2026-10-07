@@ -9,6 +9,7 @@ package com.nextcloud.talk.call.components
 
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.key
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import org.webrtc.EglBase
@@ -17,6 +18,15 @@ import org.webrtc.SurfaceViewRenderer
 
 @Composable
 fun WebRTCVideoView(mediaStream: MediaStream, eglBase: EglBase?) {
+    // The sink is bound to the track when the view is created, so a new stream (a participant who came back with
+    // the same session) needs a new view; otherwise the old, closed track stays attached and the tile stays empty.
+    key(mediaStream) {
+        WebRTCVideoViewForStream(mediaStream, eglBase)
+    }
+}
+
+@Composable
+private fun WebRTCVideoViewForStream(mediaStream: MediaStream, eglBase: EglBase?) {
     AndroidView(
         factory = { context ->
             SurfaceViewRenderer(context).apply {
