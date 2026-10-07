@@ -642,15 +642,26 @@ internal constructor(
      * appState is the state of the app process (RESUMED/STARTED: on screen, CREATED: in the background).
      */
     private fun describeBackgroundLimits(appContext: Context, connectivityManager: ConnectivityManager?): String {
-        val activityManager = appContext.getSystemService(ActivityManager::class.java)
-        val standbyBucket = appContext.getSystemService(UsageStatsManager::class.java)?.appStandbyBucket
+        // Both calls exist since API 28 (minSdk is 26): on older versions they throw NoSuchMethodError, which is an
+        // Error and not caught by the caller.
+        val hasApi28 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+        val backgroundRestricted = if (hasApi28) {
+            appContext.getSystemService(ActivityManager::class.java)?.isBackgroundRestricted.toString()
+        } else {
+            NOT_AVAILABLE
+        }
+        val standbyBucket = if (hasApi28) {
+            appContext.getSystemService(UsageStatsManager::class.java)?.appStandbyBucket.toString()
+        } else {
+            NOT_AVAILABLE
+        }
         val appState = try {
             ProcessLifecycleOwner.get().lifecycle.currentState
         } catch (e: IllegalStateException) {
             Log.d(TAG, "No process lifecycle: ${e.message}")
             null
         }
-        return "appState=$appState, backgroundRestricted=${activityManager?.isBackgroundRestricted}, " +
+        return "appState=$appState, backgroundRestricted=$backgroundRestricted, " +
             "dataSaver=${connectivityManager?.restrictBackgroundStatus}, standbyBucket=$standbyBucket, " +
             "sdk=${Build.VERSION.SDK_INT}"
     }
@@ -799,6 +810,7 @@ internal constructor(
         private const val TAG = "WebSocketInstance"
         private const val NORMAL_CLOSURE = 1000
         private const val ONE_SECOND: Long = 1000
+        private const val NOT_AVAILABLE = "n/a"
         private const val CALLER_STACK_SKIP = 2
         private const val CALLER_STACK_DEPTH = 6
         private const val PING_INTERVAL_SECONDS: Long = 30
