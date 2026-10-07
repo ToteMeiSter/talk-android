@@ -316,6 +316,12 @@ class CallActivity : CallBaseActivity() {
         )
     }
     private val offerMessageListener = OfferMessageListener { sessionId, roomType, sdp, nick, sid ->
+        Log.d(
+            TAG,
+            "Offer from $sessionId ($roomType) sid=$sid, wrapper exists=" +
+                (getPeerConnectionWrapperForSessionIdAndType(sessionId, roomType) != null) +
+                ", participant exists=${callViewModel.doesParticipantExist(sessionId)}"
+        )
         // An offer with another "sid" starts a new connection; the web client and iOS drop the old one then.
         if (getPeerConnectionWrapperForSessionIdAndType(sessionId, roomType)?.isReplacedByOffer(sid) == true) {
             Log.d(TAG, "Offer with new sid $sid from $sessionId ($roomType), replacing the peer connection")
@@ -2639,13 +2645,22 @@ class CallActivity : CallBaseActivity() {
                         "(hasAudioOrVideo=$participantHasAudioOrVideo, " +
                         "sessionIdCompare=${sessionId < currentSessionId})"
                 )
-                callViewModel.getParticipant(sessionId)?.setPeerConnection(null)
+                clearPeerConnectionUnlessSetUp(sessionId)
             }
         }
         othersInCall = if (selfJoined) {
             joined.size > 1
         } else {
             joined.isNotEmpty()
+        }
+    }
+
+    private fun clearPeerConnectionUnlessSetUp(sessionId: String) {
+        val hasConnection = getPeerConnectionWrapperForSessionIdAndType(sessionId, VIDEO_STREAM_TYPE_VIDEO) != null
+        if (shouldUnbindPeerConnection(hasConnection)) {
+            callViewModel.getParticipant(sessionId)?.setPeerConnection(null)
+        } else {
+            Log.d(TAG, "   → Keeping the connection of $sessionId which an offer set up already")
         }
     }
 
@@ -2703,8 +2718,19 @@ class CallActivity : CallBaseActivity() {
             synchronized(remoteAudioPlayoutLock) {
                 peerConnectionWrapperList.add(peerConnectionWrapper)
                 peerConnectionWrapper.setRemoteAudioPlayoutEnabled(remoteAudioPlayoutEnabled)
+                Log.d(
+                    TAG,
+                    "Remote audio of new wrapper $sessionId $type: playoutEnabled=$remoteAudioPlayoutEnabled, " +
+                        "callStatus=$currentCallStatus, audioRouteReady=$audioRouteReady, " +
+                        "audioRouteReadyTimedOut=$audioRouteReadyTimedOut"
+                )
             }
             if (!publisher) {
+                Log.d(
+                    TAG,
+                    "Created $type connection for $sessionId (fromOffer=$createdFromOffer), " +
+                        "participant exists=${callViewModel.doesParticipantExist(sessionId)}"
+                )
                 if (!callViewModel.doesParticipantExist(sessionId)) {
                     addCallParticipant(sessionId)
                 }
@@ -2808,6 +2834,12 @@ class CallActivity : CallBaseActivity() {
     }
 
     private fun addCallParticipant(sessionId: String?) {
+        if (callViewModel.doesParticipantExist(sessionId) && callParticipantMessageListeners.containsKey(sessionId)) {
+            // An offer can set the participant up before the update which reports it as joined.
+            Log.d(TAG, "Call participant $sessionId exists already, keeping it")
+            return
+        }
+        Log.d(TAG, "Adding call participant $sessionId")
         val callParticipantMessageListener: CallParticipantMessageListener =
             CallActivityCallParticipantMessageListener(sessionId)
         callParticipantMessageListeners[sessionId] = callParticipantMessageListener
@@ -3150,6 +3182,12 @@ class CallActivity : CallBaseActivity() {
             val enabled = isRemoteAudioPlayoutAllowed()
             remoteAudioPlayoutEnabled = enabled
             peerConnectionWrapperList.forEach { it.setRemoteAudioPlayoutEnabled(enabled) }
+            Log.d(
+                TAG,
+                "updateRemoteAudioPlayout: playoutEnabled=$enabled, callStatus=$currentCallStatus, " +
+                    "audioRouteReady=$audioRouteReady, audioRouteReadyTimedOut=$audioRouteReadyTimedOut, " +
+                    "wrappers=${peerConnectionWrapperList.size}"
+            )
         }
     }
 
@@ -3692,6 +3730,14 @@ class CallActivity : CallBaseActivity() {
 
         internal fun isPushToTalkRelease(action: Int): Boolean =
             action == MotionEvent.ACTION_UP || action == MotionEvent.ACTION_CANCEL
+
+        /**
+         * Whether a participant for which no connection is to be created gets its connection cleared. A connection
+         * which exists already (an offer of the MCU can arrive before the update which reports the participant, or
+         * after the one of an earlier session with the same ID) is kept: clearing it detaches the stream from the
+         * participant and nothing attaches it again.
+         */
+        internal fun shouldUnbindPeerConnection(hasConnection: Boolean): Boolean = !hasConnection
 
         /**
          * The participants a connection is to be set up for: the ones which just joined, plus the ones in the call

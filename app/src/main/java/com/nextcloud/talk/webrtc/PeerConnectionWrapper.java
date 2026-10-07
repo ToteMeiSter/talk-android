@@ -475,6 +475,7 @@ public class PeerConnectionWrapper {
         try {
             String trackId = audioTrack.id();
             audioTrack.setVolume(volume);
+            Log.d(TAG, "Remote audio volume " + volume + " for track " + trackId + " over " + sessionId);
             remoteAudioTracks.put(trackId, audioTrack);
         } catch (IllegalStateException exception) {
             Log.w(TAG, "Remote audio track was already disposed", exception);
@@ -901,6 +902,8 @@ public class PeerConnectionWrapper {
 
         @Override
         public void onAddStream(MediaStream mediaStream) {
+            Log.d(TAG, "onAddStream audio=" + mediaStream.audioTracks.size() + " video=" + mediaStream.videoTracks.size()
+                + " over " + sessionId + " " + videoStreamType);
             synchronized (PeerConnectionWrapper.this) {
                 stream = mediaStream;
                 applyRemoteAudioVolume(mediaStream);
@@ -976,6 +979,8 @@ public class PeerConnectionWrapper {
         @Override
         public void onAddTrack(RtpReceiver rtpReceiver, MediaStream[] mediaStreams) {
             MediaStreamTrack track = rtpReceiver.track();
+            Log.d(TAG, "onAddTrack " + (track == null ? null : track.kind()) + " streams=" + mediaStreams.length
+                + " over " + sessionId + " " + videoStreamType);
             synchronized (PeerConnectionWrapper.this) {
                 if (track instanceof AudioTrack) {
                     AudioTrack audioTrack = (AudioTrack) track;
