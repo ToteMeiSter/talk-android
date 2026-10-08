@@ -155,6 +155,7 @@ import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingConfirmStop
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingErrorState
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartedState
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartingState
+import com.nextcloud.talk.webrtc.CallHoldState
 import com.nextcloud.talk.webrtc.CallRecoveryPolicy
 import com.nextcloud.talk.webrtc.IceServersFactory
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper
@@ -203,6 +204,7 @@ import org.webrtc.VideoTrack
 import retrofit2.HttpException
 import java.io.IOException
 import java.util.Objects
+import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
@@ -263,6 +265,7 @@ class CallActivity : CallBaseActivity() {
     private val peerConnectionWrapperList: MutableList<PeerConnectionWrapper> = CopyOnWriteArrayList()
     private var videoOn = false
     private var microphoneOn = false
+    private val callHoldState = CallHoldState()
     var isVoiceOnlyCall = false
     private var isCallWithoutNotification = false
     private var isIncomingCallFromNotification = false
@@ -1060,7 +1063,11 @@ class CallActivity : CallBaseActivity() {
         // Store existing audio settings and change audio mode to
         // MODE_IN_COMMUNICATION for best possible VoIP performance.
         Log.d(TAG, "Starting the audio manager...")
-        audioManager!!.setInterruptionListener { interrupted -> onCallInterruptionChanged(interrupted) }
+        audioManager!!.setInterruptionListener(object : WebRtcAudioManager.InterruptionListener {
+            override fun onInterruptionChanged(interrupted: Boolean) = onCallInterruptionChanged(interrupted)
+
+            override fun onPhoneCallAcceptedChanged(accepted: Boolean) = setCallOnHold(accepted)
+        })
         audioManager!!.start { currentDevice: AudioDevice, availableDevices: Set<AudioDevice> ->
             onAudioManagerDevicesChanged(
                 currentDevice,
@@ -3174,7 +3181,8 @@ class CallActivity : CallBaseActivity() {
 
     private fun isRemoteAudioPlayoutAllowed(): Boolean =
         (currentCallStatus === CallStatus.JOINED || currentCallStatus === CallStatus.IN_CONVERSATION) &&
-            (audioRouteReady || audioRouteReadyTimedOut)
+            (audioRouteReady || audioRouteReadyTimedOut) &&
+            !callHoldState.isOnHold
 
     private fun updateAudioRouteReadyTimeout() {
         if (audioRouteReady) {
@@ -3422,13 +3430,64 @@ class CallActivity : CallBaseActivity() {
     // silences the microphone. When the call is over, the publisher connection is looked at and replaced only if
     // it did not survive.
     private fun onCallInterruptionChanged(interrupted: Boolean) {
-        Log.w(TAG, "Call interruption (audio focus) changed: interrupted=$interrupted, status=$currentCallStatus")
+        Log.w(
+            TAG,
+            "Call interruption (phone call or audio focus) changed: interrupted=$interrupted," +
+                " status=$currentCallStatus"
+        )
         if (!hasMCU || webSocketClient == null) {
             Log.d(TAG, "No publisher connection to the MCU, nothing to recheck after the interruption")
             return
         }
         if (!interrupted && !isDestroyed) {
             startPublisherRecheck()
+        }
+    }
+
+    // The call is put on hold while an accepted phone call is going on: the microphone and the camera are switched
+    // off, the voices of the others are not played, the others see the muted state (and a message in the chat).
+    // After the phone call everything is back, the microphone and the camera only if they were on before.
+    private fun setCallOnHold(onHold: Boolean) {
+        Log.w(TAG, "Phone call accepted=$onHold, hold=${callHoldState.isOnHold}, status=$currentCallStatus")
+        if (isDestroyed || binding == null || localStream == null) {
+            Log.d(TAG, "Call hold not applied, no call screen: destroyed=$isDestroyed")
+            return
+        }
+        if (onHold) {
+            val media = callHoldState.enter(microphoneOn, videoOn) ?: return
+            Log.w(TAG, "Call on hold: microphone=${media.microphoneOn}, video=${media.videoOn}")
+            if (media.microphoneOn) toggleMedia(false, false)
+            if (media.videoOn) toggleMedia(false, true)
+            binding!!.callOnHoldTextView.visibility = View.VISIBLE
+            sendHoldMessage(R.string.nc_call_on_hold_message)
+        } else {
+            val media = callHoldState.exit() ?: return
+            Log.w(TAG, "Call back from hold: microphone=${media.microphoneOn}, video=${media.videoOn}")
+            if (media.microphoneOn) toggleMedia(true, false)
+            if (media.videoOn) toggleMedia(true, true)
+            binding!!.callOnHoldTextView.visibility = View.GONE
+            sendHoldMessage(R.string.nc_call_back_from_hold_message)
+        }
+        updateRemoteAudioPlayout()
+    }
+
+    @Suppress("TooGenericExceptionCaught")
+    private fun sendHoldMessage(messageRes: Int) {
+        try {
+            val apiVersion = ApiUtils.getConversationApiVersion(conversationUser, intArrayOf(ApiUtils.API_V1))
+            ncApi!!.sendChatMessage(
+                credentials,
+                ApiUtils.getUrlForChat(apiVersion, conversationUser.baseUrl, roomToken!!),
+                getString(messageRes, conversationUser.displayName),
+                conversationUser.displayName,
+                null,
+                true,
+                UUID.randomUUID().toString()
+            )
+                .subscribeOn(Schedulers.io())
+                .subscribe({ Log.d(TAG, "Hold message sent") }, { Log.w(TAG, "Hold message failed", it) })
+        } catch (e: Exception) {
+            Log.w(TAG, "Hold message not sent", e)
         }
     }
 

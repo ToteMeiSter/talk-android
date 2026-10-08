@@ -448,6 +448,9 @@ How to translate with transifex:
     <!-- Notification channels -->
     <string name="nc_notification_channel">%1$s on %2$s notification channel</string>
     <string name="nc_notification_channel_calls">Calls</string>
+    <string name="nc_call_on_hold">Call on hold</string>
+    <string name="nc_call_on_hold_message">%1$s put the call on hold</string>
+    <string name="nc_call_back_from_hold_message">%1$s is back in the call</string>
     <string name="nc_notification_channel_calls_ongoing">Ongoing call</string>
     <string name="nc_notification_channel_messages">Messages</string>
     <string name="nc_notification_channel_uploads">Uploads</string>
