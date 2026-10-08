@@ -19,6 +19,7 @@ import com.nextcloud.talk.application.NextcloudTalkApplication.Companion.sharedA
 import com.nextcloud.talk.jobs.NotificationWorker
 import com.nextcloud.talk.jobs.PushRegistrationWorker
 import com.nextcloud.talk.logger.AppLog as Log
+import com.nextcloud.talk.logger.Logger
 import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.preferences.AppPreferences
@@ -31,17 +32,24 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
     @Inject
     lateinit var appPreferences: AppPreferences
 
+    // creating the logger installs AppLog: the lines of this service after the injection reach the log of the settings
+    @Suppress("unused")
+    @Inject
+    lateinit var logger: Logger
+
     override fun onCreate() {
-        Log.d(TAG, "onCreate")
         super.onCreate()
         sharedApplication!!.componentApplication.inject(this)
+        // after the injection: only then AppLog reaches the log of the settings
+        Log.d(TAG, "onCreate")
     }
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
         Log.d(TAG, "onMessageReceived")
         PushDiag.i(
-            "onMessageReceived: dataKeys=${remoteMessage.data.size} priority=${remoteMessage.priority} " +
-                "originalPriority=${remoteMessage.originalPriority}"
+            "onMessageReceived: messageId=${remoteMessage.messageId} dataKeys=${remoteMessage.data.size} " +
+                "priority=${remoteMessage.priority} originalPriority=${remoteMessage.originalPriority} " +
+                "sentTime=${remoteMessage.sentTime} ${PushDiag.describeNetworkAndProcess(applicationContext)}"
         )
         sharedApplication!!.componentApplication.inject(this)
 
@@ -56,6 +64,7 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
             val messageData = Data.Builder()
                 .putString(BundleKeys.KEY_NOTIFICATION_SUBJECT, subject)
                 .putString(BundleKeys.KEY_NOTIFICATION_SIGNATURE, signature)
+                .putLong(BundleKeys.KEY_NOTIFICATION_PUSH_SENT_TIME, remoteMessage.sentTime)
                 .build()
             val notificationWork =
                 OneTimeWorkRequest.Builder(NotificationWorker::class.java).setInputData(messageData)
@@ -73,7 +82,6 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.d(TAG, "onNewToken. token = $token")
         PushDiag.i("onNewToken: present=${token.isNotEmpty()} length=${token.length}")
 
         appPreferences.pushToken = token

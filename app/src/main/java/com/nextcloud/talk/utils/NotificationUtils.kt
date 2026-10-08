@@ -421,7 +421,12 @@ object NotificationUtils {
         return bitmap?.let { IconCompat.createWithBitmap(it) }
     }
 
-    fun loadAvatarBitmapSync(avatarUrl: String, context: Context, credentials: String? = null): Bitmap? {
+    fun loadAvatarBitmapSync(
+        avatarUrl: String,
+        context: Context,
+        credentials: String? = null,
+        timeoutMs: Long? = null
+    ): Bitmap? {
         var avatarBitmap: Bitmap? = null
 
         val requestBuilder = ImageRequest.Builder(context)
@@ -448,7 +453,13 @@ object NotificationUtils {
             requestBuilder.addHeader("Authorization", credentials)
         }
 
-        context.imageLoader.executeBlocking(requestBuilder.build())
+        val request = requestBuilder.build()
+        if (timeoutMs == null) {
+            context.imageLoader.executeBlocking(request)
+        } else {
+            // the request is cancelled at the limit, the target keeps no bitmap
+            BoundedLoad.within(timeoutMs) { context.imageLoader.execute(request) }
+        }
 
         return avatarBitmap
     }
@@ -457,10 +468,11 @@ object NotificationUtils {
         baseUrl: String?,
         roomToken: String,
         credentials: String?,
-        context: Context
+        context: Context,
+        timeoutMs: Long? = null
     ): Bitmap? {
         val avatarUrl = ApiUtils.getUrlForConversationAvatar(ApiUtils.API_V1, baseUrl, roomToken)
-        return loadAvatarBitmapSync(avatarUrl, context, credentials)
+        return loadAvatarBitmapSync(avatarUrl, context, credentials, timeoutMs)
     }
 
     fun saveBitmapToCache(context: Context, bitmap: Bitmap, fileName: String): Uri? {
