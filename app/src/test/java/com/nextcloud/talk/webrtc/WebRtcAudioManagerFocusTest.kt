@@ -93,4 +93,67 @@ class WebRtcAudioManagerFocusTest {
         assertFalse(state.hasTransientLoss())
         assertFalse(state.handle(AudioManager.AUDIOFOCUS_GAIN))
     }
+
+    @Test
+    fun `phone call mode interrupts the call without audio focus loss`() {
+        val state = WebRtcAudioManager.AudioFocusState()
+
+        assertFalse(state.handleMode(AudioManager.MODE_RINGTONE))
+        assertTrue(state.isInterrupted())
+        assertFalse(state.handleMode(AudioManager.MODE_IN_CALL))
+        assertTrue(state.isInterrupted())
+        assertTrue(state.handleMode(AudioManager.MODE_NORMAL))
+        assertFalse(state.isInterrupted())
+    }
+
+    @Test
+    fun `own communication mode is not a phone call`() {
+        val state = WebRtcAudioManager.AudioFocusState()
+
+        assertFalse(state.handleMode(AudioManager.MODE_IN_COMMUNICATION))
+        assertFalse(state.isInterrupted())
+        assertFalse(state.handleMode(AudioManager.MODE_NORMAL))
+    }
+
+    @Test
+    fun `interruption lasts while either focus loss or phone call lasts`() {
+        val state = WebRtcAudioManager.AudioFocusState()
+
+        state.handle(AudioManager.AUDIOFOCUS_LOSS_TRANSIENT)
+        state.handleMode(AudioManager.MODE_IN_CALL)
+        state.handle(AudioManager.AUDIOFOCUS_GAIN)
+        assertTrue(state.isInterrupted())
+        state.handleMode(AudioManager.MODE_NORMAL)
+        assertFalse(state.isInterrupted())
+    }
+
+    @Test
+    fun `ringing phone interrupts the call but does not hold it`() {
+        val state = WebRtcAudioManager.AudioFocusState()
+
+        state.handleMode(AudioManager.MODE_RINGTONE)
+        assertTrue(state.isInterrupted())
+        assertFalse(state.isCallAccepted())
+    }
+
+    @Test
+    fun `accepted phone call holds the call until it is over`() {
+        val state = WebRtcAudioManager.AudioFocusState()
+
+        state.handleMode(AudioManager.MODE_RINGTONE)
+        state.handleMode(AudioManager.MODE_IN_CALL)
+        assertTrue(state.isCallAccepted())
+        state.handleMode(AudioManager.MODE_NORMAL)
+        assertFalse(state.isCallAccepted())
+        assertFalse(state.isInterrupted())
+    }
+
+    @Test
+    fun `declined phone call never holds the call`() {
+        val state = WebRtcAudioManager.AudioFocusState()
+
+        state.handleMode(AudioManager.MODE_RINGTONE)
+        assertTrue(state.handleMode(AudioManager.MODE_NORMAL))
+        assertFalse(state.isCallAccepted())
+    }
 }
