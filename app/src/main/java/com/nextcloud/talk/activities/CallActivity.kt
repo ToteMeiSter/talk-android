@@ -548,6 +548,7 @@ class CallActivity : CallBaseActivity() {
         )
 
         isCallSetUp = true
+        callInProgress = true
 
         if (!conversationUser.current) {
             // Taking part in a call uses its account, so it becomes the last used one.
@@ -1565,6 +1566,7 @@ class CallActivity : CallBaseActivity() {
 
     public override fun onDestroy() {
         Log.d(TAG, "onDestroy: currentCallStatus=$currentCallStatus")
+        callInProgress = false
 
         if (isCallSetUp) {
             // The call cannot survive the activity being destroyed (WebRTC connections, local stream and
@@ -3564,6 +3566,13 @@ class CallActivity : CallBaseActivity() {
 
     companion object {
         var active = false
+
+        /**
+         * A call is set up in this process, also while its screen is in the background (unlike [active]).
+         * Incoming calls are then announced by a heads-up notification, not by a full screen takeover.
+         */
+        @Volatile
+        var callInProgress = false
 
         const val VIDEO_STREAM_TYPE_VIDEO = "video"
         private val TAG = CallActivity::class.java.simpleName

@@ -338,7 +338,11 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             )
 
             val soundUri = getCallRingtoneUri(applicationContext, appPreferences)
-            val notificationChannelId = NotificationUtils.NotificationChannels.NOTIFICATION_CHANNEL_CALLS_V5.name
+            // During a call the incoming call must not take the screen over and must not ring in a loop over the
+            // voices of the call: a heads-up with Answer / Decline and one short sound and vibration
+            val duringCall = CallActivity.callInProgress
+            logger.d(TAG, "incoming call notification, duringCall=$duringCall")
+            val notificationChannelId = NotificationUtils.incomingCallChannel(duringCall).name
             val uri = user.baseUrl!!.toUri()
             val baseUrl = uri.host
 
@@ -356,7 +360,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             }
             val callerPerson = callerPersonBuilder.build()
 
-            val notification =
+            val notificationBuilder =
                 NotificationCompat.Builder(applicationContext, notificationChannelId)
                     .setPriority(NotificationCompat.PRIORITY_HIGH)
                     .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -370,6 +374,23 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                     .setAutoCancel(false)
                     .setOngoing(true)
                     .setContentIntent(fullScreenPendingIntent)
+            if (duringCall) {
+                notificationBuilder
+                    .setContentText(callerPerson.name)
+                    .setVibrate(longArrayOf(0, VIBRATION_ON_MS, VIBRATION_PAUSE_MS, VIBRATION_ON_MS))
+                    .setTimeoutAfter(HEADS_UP_TIMEOUT_MS)
+                    .addAction(
+                        R.drawable.ic_call_end_white_24px,
+                        applicationContext.getString(R.string.nc_call_notification_decline),
+                        declinePendingIntent
+                    )
+                    .addAction(
+                        R.drawable.ic_call_black_24dp,
+                        applicationContext.getString(R.string.nc_call_notification_answer),
+                        primaryAnswerIntent
+                    )
+            } else {
+                notificationBuilder
                     .setFullScreenIntent(fullScreenPendingIntent, true)
                     .setSound(soundUri)
                     .setStyle(
@@ -377,8 +398,11 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                             .forIncomingCall(callerPerson, declinePendingIntent, primaryAnswerIntent)
                             .setIsVideo(isVideoCall)
                     )
-                    .build()
-            notification.flags = notification.flags or Notification.FLAG_INSISTENT
+            }
+            val notification = notificationBuilder.build()
+            if (!duringCall) {
+                notification.flags = notification.flags or Notification.FLAG_INSISTENT
+            }
 
             sendNotification(pushMessage.timestamp.toInt(), notification)
 
@@ -1345,6 +1369,9 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
     companion object {
         val TAG: String = NotificationWorker::class.java.simpleName
+        private const val VIBRATION_ON_MS = 400L
+        private const val VIBRATION_PAUSE_MS = 200L
+        private const val HEADS_UP_TIMEOUT_MS = 90_000L
         private const val TYPE_CHAT = "chat"
         private const val TYPE_ROOM = "room"
         private const val TYPE_CALL = "call"
