@@ -33,6 +33,81 @@ object PushNotificationDecision {
             else -> Alert.SKIP
         }
 
-    /** The subject is shown after a failed request only when nothing was shown for this push yet. */
-    fun showFromSubjectAfterFailure(alreadyNotified: Boolean): Boolean = !alreadyNotified
+    const val TYPE_CHAT = "chat"
+    const val TYPE_ROOM = "room"
+    const val TYPE_CALL = "call"
+    const val TYPE_RECORDING = "recording"
+    const val TYPE_REMOTE_TALK_SHARE = "remote_talk_share"
+    const val TYPE_REMINDER = "reminder"
+
+    /**
+     * A push without chat history: the notification of the same server notification that is already in the status
+     * bar is written again without sound (stage 2 started again after the system stopped it).
+     */
+    fun decideNonChat(activeServerNotificationId: Long?, pushNotificationId: Long?): Alert =
+        if (pushNotificationId != null && activeServerNotificationId == pushNotificationId) {
+            Alert.SILENT
+        } else {
+            Alert.ALERT
+        }
+
+    /** What stage 1 of a Talk push does, see [stage1Route]. */
+    enum class Stage1Route {
+        /** Show the notification from the push subject, then hand the server data to stage 2. */
+        SUBJECT_THEN_SERVER,
+
+        /** Nothing to show without the server: hand everything to stage 2. */
+        SERVER,
+
+        /** A type nobody handles. */
+        NONE
+    }
+
+    /** Stage 1 needs no network. Only a chat message has a text in the push subject that can be shown at once. */
+    fun stage1Route(type: String?): Stage1Route =
+        when (type) {
+            TYPE_CHAT -> Stage1Route.SUBJECT_THEN_SERVER
+            TYPE_ROOM, TYPE_RECORDING, TYPE_REMINDER, TYPE_REMOTE_TALK_SHARE, TYPE_CALL -> Stage1Route.SERVER
+            else -> Stage1Route.NONE
+        }
+
+    /** What stage 2 runs for a type. Every type that stage 1 hands over has one. */
+    enum class Stage2Handler { NOTIFICATION, REMOTE_TALK_SHARE, CALL, NONE }
+
+    fun stage2Handler(type: String?): Stage2Handler =
+        when (type) {
+            TYPE_CHAT, TYPE_ROOM, TYPE_RECORDING, TYPE_REMINDER -> Stage2Handler.NOTIFICATION
+            TYPE_REMOTE_TALK_SHARE -> Stage2Handler.REMOTE_TALK_SHARE
+            TYPE_CALL -> Stage2Handler.CALL
+            else -> Stage2Handler.NONE
+        }
+
+    /** What stage 2 does when the request for the server notification failed. */
+    enum class Stage2Failure {
+        /** The system stopped the stage: it runs again, nothing is written now. */
+        RERUN,
+
+        /** Nothing is shown, the room is only caught up (the server dropped the notification, or it is shown). */
+        NO_SHOW,
+
+        /** Show the notification from the push subject. */
+        SUBJECT_FALLBACK
+    }
+
+    /**
+     * @param stopped the system stopped the stage
+     * @param alreadyNotified a notification was written for the push (a chat push in stage 1)
+     * @param httpCode HTTP code of the answer, null for an error without one
+     */
+    fun onStage2Failure(stopped: Boolean, alreadyNotified: Boolean, httpCode: Int?): Stage2Failure =
+        when {
+            stopped -> Stage2Failure.RERUN
+            httpCode == HTTP_NOT_FOUND || alreadyNotified -> Stage2Failure.NO_SHOW
+            else -> Stage2Failure.SUBJECT_FALLBACK
+        }
+
+    /** Time of the notification: the one stage 1 took, so that every run of stage 2 writes the same notification. */
+    fun pushTimestamp(stage1Time: Long, now: Long): Long = if (stage1Time > 0L) stage1Time else now
+
+    private const val HTTP_NOT_FOUND = 404
 }

@@ -88,6 +88,14 @@ object CallPushRetryPolicy {
     fun shouldRingAfterRoomFetch(hasCall: Boolean, elapsedMs: Long): Boolean =
         hasCall && elapsedMs < ROOM_FETCH_WINDOW_MS
 
+    /**
+     * Whether the call rings for the room the lookup returned. The room of a call that has ended never rings, also
+     * on the first answer: stage 2 of a push can start long after the push, and the server knows if the call runs.
+     * After a retry the window of the lookup must also be left.
+     */
+    fun shouldRingForRoom(hasCall: Boolean, retried: Boolean, elapsedMs: Long): Boolean =
+        hasCall && (!retried || shouldRingAfterRoomFetch(hasCall, elapsedMs))
+
     /** Outcome of the participants poll that ended with an error. */
     enum class PollFailureOutcome {
         /** Keep the notification and poll again. */
@@ -114,7 +122,7 @@ object CallPushRetryPolicy {
      * Loads the room of a call push, retrying transient failures inside [ROOM_FETCH_WINDOW_MS]. Every attempt is
      * limited to [ATTEMPT_TIMEOUT_MS]; an attempt timeout is a transient failure while window is left.
      * Returns null when the call must not be shown (permanent error, window used up, worker stopped, or the room
-     * has no running call after a delayed lookup).
+     * has no running call).
      */
     @Suppress("TooGenericExceptionCaught", "ReturnCount")
     suspend fun <T : Any> fetchRoomWithRetry(
@@ -129,7 +137,7 @@ object CallPushRetryPolicy {
             if (remaining <= 0) return null
             try {
                 val room = withTimeout(minOf(remaining, ATTEMPT_TIMEOUT_MS)) { fetch() }
-                return if (room != null && retried && !shouldRingAfterRoomFetch(hasCall(room), elapsedMs())) {
+                return if (room != null && !shouldRingForRoom(hasCall(room), retried, elapsedMs())) {
                     null
                 } else {
                     room

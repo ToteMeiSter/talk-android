@@ -51,6 +51,7 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
                 "priority=${remoteMessage.priority} originalPriority=${remoteMessage.originalPriority} " +
                 "sentTime=${remoteMessage.sentTime} ${PushDiag.describeNetworkAndProcess(applicationContext)}"
         )
+        logFcmExtras(remoteMessage)
         sharedApplication!!.componentApplication.inject(this)
 
         Log.d(TAG, "remoteMessage.priority: " + remoteMessage.priority)
@@ -77,6 +78,17 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
                 "onMessageReceived: dropped, subject present=${!subject.isNullOrEmpty()}, " +
                     "signature present=${!signature.isNullOrEmpty()}"
             )
+        }
+    }
+
+    /** Priority and lifetime the app gets from FCM, see [PushDiag.describeFcmExtras]. Never the data of the push. */
+    @Suppress("TooGenericExceptionCaught", "DEPRECATION")
+    private fun logFcmExtras(remoteMessage: RemoteMessage) {
+        try {
+            val extras = remoteMessage.toIntent().extras ?: return
+            PushDiag.i("fcm extras: ${PushDiag.describeFcmExtras(extras.keySet()) { extras.get(it) }}")
+        } catch (e: RuntimeException) {
+            PushDiag.w("fcm extras unavailable", e)
         }
     }
 
