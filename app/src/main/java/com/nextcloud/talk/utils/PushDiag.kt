@@ -37,10 +37,11 @@ object PushDiag {
     /**
      * State of the network and of the app at the moment of the push: whether the system lets the app use the
      * network (active network, VALIDATED, blocked state, background data restriction), power state and the
-     * importance of the process. No tokens, no addresses.
+     * importance of the process, with [withPower] also what [describePowerRestrictions] reads (several binder calls:
+     * once per stage). No tokens, no addresses.
      */
     @Suppress("TooGenericExceptionCaught", "DEPRECATION")
-    fun describeNetworkAndProcess(context: Context): String =
+    fun describeNetworkAndProcess(context: Context, withPower: Boolean = false): String =
         try {
             val cm = context.getSystemService(ConnectivityManager::class.java)
             val network = cm?.activeNetwork
@@ -55,7 +56,8 @@ object PushDiag {
                 "networkInfoState=${info?.detailedState} " +
                 "restrictBackground=${cm?.restrictBackgroundStatus} " +
                 "deviceIdle=${pm?.isDeviceIdleMode} interactive=${pm?.isInteractive} " +
-                "processImportance=${process.importance} ${describePowerRestrictions(context)}"
+                "processImportance=${process.importance}" +
+                if (withPower) " ${describePowerRestrictions(context)}" else ""
         } catch (e: RuntimeException) {
             "network state unavailable: ${describe(e)}"
         }

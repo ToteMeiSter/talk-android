@@ -39,6 +39,7 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.core.net.toUri
 import androidx.work.Constraints
 import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
 import androidx.work.NetworkType
 import androidx.work.OneTimeWorkRequest
 import androidx.work.WorkManager
@@ -115,6 +116,7 @@ import io.reactivex.schedulers.Schedulers
 import kotlinx.coroutines.runBlocking
 import okhttp3.JavaNetCookieJar
 import okhttp3.OkHttpClient
+import retrofit2.HttpException
 import retrofit2.Retrofit
 import java.net.CookieManager
 import java.security.InvalidKeyException
@@ -185,7 +187,11 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
         notificationManager = NotificationManagerCompat.from(context!!)
 
-        pushMessage.timestamp = System.currentTimeMillis()
+        // stage 2 keeps the time of stage 1: every run of it writes the same notification, also for a call
+        pushMessage.timestamp = PushNotificationDecision.pushTimestamp(
+            inputData.getLong(BundleKeys.KEY_NOTIFICATION_STAGE1_TIME, 0L),
+            System.currentTimeMillis()
+        )
 
         logger.d(TAG, pushMessage.toString())
         logger.d(TAG, "pushMessage.id (=KEY_ROOM_TOKEN): " + pushMessage.id)
@@ -209,11 +215,15 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     private fun runLocalStage() {
         if (pushMessage.delete) {
             cancelNotification(context, user, pushMessage.notificationId)
+            cancelNetworkStage(pushMessage.notificationId)
         } else if (pushMessage.deleteAll) {
             cancelAllNotificationsForAccount(context, user)
+            WorkManager.getInstance(applicationContext).cancelAllWorkByTag(networkStageTag(user.id))
+            PushDiag.i("stage 2 cancelled for the account: tag=${networkStageTag(user.id)}")
         } else if (pushMessage.deleteMultiple) {
             for (notificationId in pushMessage.notificationIds!!) {
                 cancelNotification(context, user, notificationId)
+                cancelNetworkStage(notificationId)
             }
         } else if (isTalkNotification()) {
             logger.d(TAG, "pushMessage.type: " + pushMessage.type)
@@ -248,18 +258,28 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         if (pushMessage.type == TYPE_CHAT) {
             firstTitle = pushMessage.subject.substringBefore(LINEBREAK)
         }
-        when (pushMessage.type) {
-            TYPE_CHAT, TYPE_ROOM, TYPE_RECORDING, TYPE_REMINDER -> handleNonCallPushMessage()
-            TYPE_REMOTE_TALK_SHARE -> handleRemoteTalkSharePushMessage()
-            TYPE_CALL -> handleCallPushMessage()
-            else -> Log.e(TAG, pushMessage.type + " is not handled")
+        when (PushNotificationDecision.stage2Handler(pushMessage.type)) {
+            PushNotificationDecision.Stage2Handler.NOTIFICATION -> handleNonCallPushMessage()
+            PushNotificationDecision.Stage2Handler.REMOTE_TALK_SHARE -> handleRemoteTalkSharePushMessage()
+            PushNotificationDecision.Stage2Handler.CALL -> handleCallPushMessage()
+            PushNotificationDecision.Stage2Handler.NONE -> Log.e(TAG, pushMessage.type + " is not handled")
         }
     }
 
     private fun enqueueNetworkStage() {
-        val request = networkStageRequest(inputData, subjectShown)
-        WorkManager.getInstance(applicationContext).enqueue(request)
-        PushDiag.i("stage 2 enqueued: workId=${request.id} type=${pushMessage.type} subjectShown=$subjectShown")
+        val request = networkStageRequest(inputData, subjectShown, user.id, pushMessage.timestamp)
+        val name = networkStageName(user.id, pushMessage.notificationId, pushMessage.timestamp)
+        WorkManager.getInstance(applicationContext)
+            .enqueueUniqueWork(name, ExistingWorkPolicy.KEEP, request)
+        PushDiag.i(
+            "stage 2 enqueued: workId=${request.id} name=$name type=${pushMessage.type} subjectShown=$subjectShown"
+        )
+    }
+
+    private fun cancelNetworkStage(notificationId: Long?) {
+        val name = networkStageName(user.id, notificationId, 0L)
+        WorkManager.getInstance(applicationContext).cancelUniqueWork(name)
+        PushDiag.i("stage 2 cancelled: name=$name")
     }
 
     private fun stageNumber(networkStage: Boolean) = if (networkStage) STAGE_NETWORK else STAGE_LOCAL
@@ -273,7 +293,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     private fun logPushDiagnostics(networkStage: Boolean) {
         PushDiag.i(
             "doWork: stage=${stageNumber(networkStage)} sinceSent=${sinceSentText()} runAttempt=$runAttemptCount " +
-                PushDiag.describeNetworkAndProcess(applicationContext)
+                PushDiag.describeNetworkAndProcess(applicationContext, withPower = true)
         )
     }
 
@@ -449,6 +469,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                     // CallNotificationActivity is active
                     .setAutoCancel(false)
                     .setOngoing(true)
+                    // stage 2 that runs again writes the same notification (same id) without a second ring
+                    .setOnlyAlertOnce(true)
                     .setContentIntent(fullScreenPendingIntent)
             if (duringCall) {
                 notificationBuilder
@@ -646,14 +668,22 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     }
 
     private fun onNcNotificationFailed(intent: Intent, e: Throwable) {
-        if (isStopped) {
-            // the system took the network away: it starts stage 2 again when the network is back
-            Log.w(TAG, "Stage 2 stopped by the system, the request will run again", e)
-            return
-        }
-        // a chat push was shown from its subject in stage 1: only a push that shows nothing yet falls back to it
-        if (PushNotificationDecision.showFromSubjectAfterFailure(notified)) {
-            showSubjectFallback(intent)
+        val failure = PushNotificationDecision.onStage2Failure(
+            stopped = isStopped,
+            alreadyNotified = notified,
+            httpCode = (e as? HttpException)?.code()
+        )
+        when (failure) {
+            PushNotificationDecision.Stage2Failure.RERUN -> {
+                // the system took the network away: it starts stage 2 again when the network is back
+                Log.w(TAG, "Stage 2 stopped by the system, the request will run again", e)
+                return
+            }
+
+            PushNotificationDecision.Stage2Failure.SUBJECT_FALLBACK -> showSubjectFallback(intent)
+
+            PushNotificationDecision.Stage2Failure.NO_SHOW ->
+                PushDiag.i("stage 2: nothing shown after the failed request, notified=$notified")
         }
 
         // without the server notification the thread id is unknown — still catch up
@@ -940,7 +970,10 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 pushNotificationId = pushMessage.notificationId
             )
         } else {
-            PushNotificationDecision.Alert.ALERT
+            PushNotificationDecision.decideNonChat(
+                activeStatusBarNotification?.notification?.extras?.getLong(KEY_NOTIFICATION_ID),
+                pushMessage.notificationId
+            )
         }
         if (alert == PushNotificationDecision.Alert.SKIP) {
             Log.d(TAG, "The message of this push is no longer in the notification, nothing written")
@@ -1635,28 +1668,42 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
          * encrypted input of stage 1 again (decrypted text is never written to the work database) and whether stage 1
          * showed the subject.
          */
-        fun networkStageRequest(stage1Input: Data, subjectShown: Boolean): OneTimeWorkRequest =
+        fun networkStageRequest(
+            stage1Input: Data,
+            subjectShown: Boolean,
+            userId: Long?,
+            stage1Time: Long
+        ): OneTimeWorkRequest =
             OneTimeWorkRequest.Builder(NotificationWorker::class.java)
                 .setInputData(
                     Data.Builder()
                         .putAll(stage1Input)
                         .putBoolean(BundleKeys.KEY_NOTIFICATION_NETWORK_STAGE, true)
                         .putBoolean(BundleKeys.KEY_NOTIFICATION_SUBJECT_SHOWN, subjectShown)
+                        .putLong(BundleKeys.KEY_NOTIFICATION_STAGE1_TIME, stage1Time)
                         .build()
                 )
                 .setConstraints(Constraints.Builder().setRequiredNetworkType(NetworkType.CONNECTED).build())
+                .addTag(networkStageTag(userId))
                 .setExpeditedIfSupported()
                 .build()
+
+        /** One stage 2 per push: a second run of stage 1 does not enqueue another. A delete push cancels it. */
+        fun networkStageName(userId: Long?, notificationId: Long?, stage1Time: Long): String =
+            "push-stage2-$userId-${notificationId ?: stage1Time}"
+
+        /** All stages 2 of an account, for the delete-all push. */
+        fun networkStageTag(userId: Long?): String = "push-stage2-$userId"
         private const val STAGE_LOCAL = 1
         private const val STAGE_NETWORK = 2
         private const val VIBRATION_ON_MS = 400L
         private const val VIBRATION_PAUSE_MS = 200L
-        internal const val TYPE_CHAT = "chat"
-        internal const val TYPE_ROOM = "room"
-        internal const val TYPE_CALL = "call"
-        internal const val TYPE_RECORDING = "recording"
-        internal const val TYPE_REMOTE_TALK_SHARE = "remote_talk_share"
-        internal const val TYPE_REMINDER = "reminder"
+        private const val TYPE_CHAT = PushNotificationDecision.TYPE_CHAT
+        private const val TYPE_ROOM = PushNotificationDecision.TYPE_ROOM
+        private const val TYPE_CALL = PushNotificationDecision.TYPE_CALL
+        private const val TYPE_RECORDING = PushNotificationDecision.TYPE_RECORDING
+        private const val TYPE_REMOTE_TALK_SHARE = PushNotificationDecision.TYPE_REMOTE_TALK_SHARE
+        private const val TYPE_REMINDER = PushNotificationDecision.TYPE_REMINDER
         private const val TYPE_ADMIN_NOTIFICATIONS = "admin_notifications"
         private const val SPREED_APP = "spreed"
         private const val INTERNAL = "internal"
