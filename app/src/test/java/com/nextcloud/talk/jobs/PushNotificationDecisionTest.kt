@@ -10,6 +10,7 @@ import android.app.Application
 import androidx.core.app.NotificationCompat.MessagingStyle.Message
 import androidx.core.app.Person
 import com.nextcloud.talk.jobs.PushNotificationDecision.Alert
+import com.nextcloud.talk.jobs.PushNotificationDecision.Stage1Route
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -59,6 +60,33 @@ class PushNotificationDecisionTest {
     @Test
     fun failedRequestShowsFromTheSubjectOnlyWhenNothingWasShown() {
         assertFalse(PushNotificationDecision.showFromSubjectAfterFailure(alreadyNotified = true))
+        assertTrue(PushNotificationDecision.showFromSubjectAfterFailure(alreadyNotified = false))
+    }
+
+    @Test
+    fun chatPushIsShownFromTheSubjectAndThenGoesToTheServer() {
+        assertEquals(Stage1Route.SUBJECT_THEN_SERVER, PushNotificationDecision.stage1Route("chat"))
+    }
+
+    @Test
+    fun otherTalkPushesThatNeedTheServerWaitForStageTwo() {
+        listOf("room", "recording", "reminder", "remote_talk_share", "call").forEach {
+            assertEquals(it, Stage1Route.SERVER, PushNotificationDecision.stage1Route(it))
+        }
+    }
+
+    @Test
+    fun unknownTypeGoesNowhere() {
+        assertEquals(Stage1Route.NONE, PushNotificationDecision.stage1Route("something_new"))
+        assertEquals(Stage1Route.NONE, PushNotificationDecision.stage1Route(null))
+    }
+
+    @Test
+    fun failedRequestOfStageTwoKeepsTheChatShownInStageOneAndFallsBackForTheRest() {
+        // stage 2 starts with notified = subjectShown of stage 1, which is true for a chat only
+        val chatShownInStageOne = PushNotificationDecision.stage1Route("chat") ==
+            Stage1Route.SUBJECT_THEN_SERVER
+        assertFalse(PushNotificationDecision.showFromSubjectAfterFailure(chatShownInStageOne))
         assertTrue(PushNotificationDecision.showFromSubjectAfterFailure(alreadyNotified = false))
     }
 }
