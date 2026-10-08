@@ -70,4 +70,60 @@ class PushNotificationFetchPolicyTest {
         assertEquals(1, observer.errorCount())
         assertFalse(observer.errors().single() is TimeoutException)
     }
+
+    private class Calls {
+        val events = mutableListOf<String>()
+    }
+
+    private fun run(fetch: Observable<String>, calls: Calls) {
+        PushNotificationFetchPolicy.showFirstThenEnrich(
+            showFirst = { calls.events.add("first") },
+            fetch = fetch.doOnSubscribe { calls.events.add("subscribed") },
+            onFetched = { calls.events.add("enriched:$it") },
+            onFetchFailed = { calls.events.add("failed:${it.javaClass.simpleName}") },
+            timeoutMs = 100L
+        )
+    }
+
+    @Test
+    fun hangingRequestShowsOnceBeforeTheRequestAndNeverEnriches() {
+        val calls = Calls()
+
+        run(Observable.never(), calls)
+
+        assertEquals(listOf("first", "subscribed", "failed:TimeoutException"), calls.events)
+    }
+
+    @Test
+    fun answerInTimeShowsFirstAndThenEnriches() {
+        val calls = Calls()
+
+        run(Observable.just("server"), calls)
+
+        assertEquals(listOf("first", "subscribed", "enriched:server"), calls.events)
+    }
+
+    @Test
+    fun failedRequestKeepsTheFirstShowAndShowsNothingMore() {
+        val calls = Calls()
+
+        run(Observable.error(IOException("Failed to connect")), calls)
+
+        assertEquals(listOf("first", "subscribed", "failed:IOException"), calls.events)
+    }
+
+    @Test
+    fun failureInTheEnrichmentGoesToTheFailureHandlerOnly() {
+        val events = mutableListOf<String>()
+
+        PushNotificationFetchPolicy.showFirstThenEnrich(
+            showFirst = { events.add("first") },
+            fetch = Observable.just("server"),
+            onFetched = { throw IllegalStateException("broken") },
+            onFetchFailed = { events.add("failed:${it.javaClass.simpleName}") },
+            timeoutMs = 100L
+        )
+
+        assertEquals(listOf("first", "failed:IllegalStateException"), events)
+    }
 }
