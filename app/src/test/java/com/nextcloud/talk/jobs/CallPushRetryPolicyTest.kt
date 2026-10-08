@@ -187,15 +187,35 @@ class CallPushRetryPolicyTest {
         }
 
     @Test
-    fun firstTryRoomWithoutCallIsStillReturned() =
+    fun firstTryRoomWithoutCallIsDropped() =
         runTest {
             val room = CallPushRetryPolicy.fetchRoomWithRetry<FakeRoom>(
                 elapsedMs = { currentTime },
                 isStopped = { false },
                 hasCall = { it.hasCall }
             ) { FakeRoom(hasCall = false) }
+            assertNull(room)
+        }
+
+    @Test
+    fun firstTryRoomWithCallIsReturned() =
+        runTest {
+            val room = CallPushRetryPolicy.fetchRoomWithRetry<FakeRoom>(
+                elapsedMs = { currentTime },
+                isStopped = { false },
+                hasCall = { it.hasCall }
+            ) { FakeRoom(hasCall = true) }
             assertTrue(room != null)
         }
+
+    @Test
+    fun ringingNeedsARunningCallOnEveryAnswer() {
+        assertTrue(CallPushRetryPolicy.shouldRingForRoom(hasCall = true, retried = false, elapsedMs = 3_600_000))
+        assertFalse(CallPushRetryPolicy.shouldRingForRoom(hasCall = false, retried = false, elapsedMs = 0))
+        assertTrue(CallPushRetryPolicy.shouldRingForRoom(hasCall = true, retried = true, elapsedMs = 20_000))
+        assertFalse(CallPushRetryPolicy.shouldRingForRoom(hasCall = true, retried = true, elapsedMs = 45_000))
+        assertFalse(CallPushRetryPolicy.shouldRingForRoom(hasCall = false, retried = true, elapsedMs = 1_000))
+    }
 
     @Test
     fun stoppedWorkerStopsTheLoop() =
