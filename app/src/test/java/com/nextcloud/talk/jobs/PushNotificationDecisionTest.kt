@@ -10,14 +10,15 @@ import android.app.Application
 import androidx.core.app.NotificationCompat.MessagingStyle.Message
 import androidx.core.app.Person
 import com.nextcloud.talk.jobs.PushNotificationDecision.Alert
+import com.nextcloud.talk.jobs.PushNotificationDecision.Stage1Route
+import com.nextcloud.talk.jobs.PushNotificationDecision.Stage2Failure
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
-import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
+@Suppress("TooManyFunctions")
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [33])
 class PushNotificationDecisionTest {
@@ -57,8 +58,83 @@ class PushNotificationDecisionTest {
     }
 
     @Test
-    fun failedRequestShowsFromTheSubjectOnlyWhenNothingWasShown() {
-        assertFalse(PushNotificationDecision.showFromSubjectAfterFailure(alreadyNotified = true))
-        assertTrue(PushNotificationDecision.showFromSubjectAfterFailure(alreadyNotified = false))
+    fun chatPushIsShownFromTheSubjectAndThenGoesToTheServer() {
+        assertEquals(Stage1Route.SUBJECT_THEN_SERVER, PushNotificationDecision.stage1Route("chat"))
+    }
+
+    @Test
+    fun otherTalkPushesThatNeedTheServerWaitForStageTwo() {
+        listOf("room", "recording", "reminder", "remote_talk_share", "call").forEach {
+            assertEquals(it, Stage1Route.SERVER, PushNotificationDecision.stage1Route(it))
+        }
+    }
+
+    @Test
+    fun unknownTypeGoesNowhere() {
+        assertEquals(Stage1Route.NONE, PushNotificationDecision.stage1Route("something_new"))
+        assertEquals(Stage1Route.NONE, PushNotificationDecision.stage1Route(null))
+    }
+
+    @Test
+    fun everyTypeThatStageOneHandsOverHasAStageTwoHandler() {
+        listOf("chat", "room", "recording", "reminder", "remote_talk_share", "call", "something_new", null).forEach {
+            val handedOver = PushNotificationDecision.stage1Route(it) != Stage1Route.NONE
+            val handled = PushNotificationDecision.stage2Handler(it) != PushNotificationDecision.Stage2Handler.NONE
+            assertEquals("$it", handedOver, handled)
+        }
+    }
+
+    @Test
+    fun stoppedStageRunsAgainWhateverTheError() {
+        listOf(false, true).forEach { notified ->
+            listOf(null, 404, 500).forEach { code ->
+                val failure = PushNotificationDecision.onStage2Failure(
+                    stopped = true,
+                    alreadyNotified = notified,
+                    httpCode = code
+                )
+                assertEquals(Stage2Failure.RERUN, failure)
+            }
+        }
+    }
+
+    @Test
+    fun notFoundMeansTheServerDroppedTheNotification() {
+        assertEquals(
+            Stage2Failure.NO_SHOW,
+            PushNotificationDecision.onStage2Failure(stopped = false, alreadyNotified = false, httpCode = 404)
+        )
+    }
+
+    @Test
+    fun failedRequestKeepsTheChatShownInStageOne() {
+        assertEquals(
+            Stage2Failure.NO_SHOW,
+            PushNotificationDecision.onStage2Failure(stopped = false, alreadyNotified = true, httpCode = null)
+        )
+    }
+
+    @Test
+    fun failedRequestOfAPushThatShowedNothingFallsBackToTheSubject() {
+        listOf(null, 403, 500).forEach { code ->
+            assertEquals(
+                Stage2Failure.SUBJECT_FALLBACK,
+                PushNotificationDecision.onStage2Failure(stopped = false, alreadyNotified = false, httpCode = code)
+            )
+        }
+    }
+
+    @Test
+    fun serverNotificationThatIsAlreadyShownIsWrittenAgainWithoutSound() {
+        assertEquals(Alert.SILENT, PushNotificationDecision.decideNonChat(619L, 619L))
+        assertEquals(Alert.ALERT, PushNotificationDecision.decideNonChat(618L, 619L))
+        assertEquals(Alert.ALERT, PushNotificationDecision.decideNonChat(null, 619L))
+        assertEquals(Alert.ALERT, PushNotificationDecision.decideNonChat(null, null))
+    }
+
+    @Test
+    fun stageTwoKeepsTheTimeOfStageOne() {
+        assertEquals(1_000L, PushNotificationDecision.pushTimestamp(stage1Time = 1_000L, now = 9_000L))
+        assertEquals(9_000L, PushNotificationDecision.pushTimestamp(stage1Time = 0L, now = 9_000L))
     }
 }
