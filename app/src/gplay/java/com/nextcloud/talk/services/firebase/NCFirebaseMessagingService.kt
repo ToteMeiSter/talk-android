@@ -19,6 +19,7 @@ import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.application.NextcloudTalkApplication.Companion.sharedApplication
 import com.nextcloud.talk.jobs.NotificationWorker
 import com.nextcloud.talk.jobs.PushRegistrationWorker
+import com.nextcloud.talk.utils.PushLogUtils
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.preferences.AppPreferences
 import com.nextcloud.talk.utils.setExpeditedIfSupported
@@ -40,6 +41,7 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
         Log.d(TAG, "onMessageReceived")
         sharedApplication!!.componentApplication.inject(this)
 
+        logFcmExtras(remoteMessage)
         Log.d(TAG, "remoteMessage.priority: " + remoteMessage.priority)
         Log.d(TAG, "remoteMessage.originalPriority: " + remoteMessage.originalPriority)
 
@@ -57,6 +59,17 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
                     .setExpeditedIfSupported()
                     .build()
             WorkManager.getInstance().enqueue(notificationWork)
+        }
+    }
+
+    /** Priority and lifetime the app gets from FCM. Never the data of the push. */
+    @Suppress("TooGenericExceptionCaught", "DEPRECATION")
+    private fun logFcmExtras(remoteMessage: RemoteMessage) {
+        try {
+            val extras = remoteMessage.toIntent().extras ?: return
+            Log.d(TAG, "fcm extras: ${PushLogUtils.describeFcmExtras(extras.keySet()) { extras.get(it) }}")
+        } catch (e: RuntimeException) {
+            Log.w(TAG, "fcm extras unavailable", e)
         }
     }
 
