@@ -153,6 +153,7 @@ fun buildDiagnosisElements(
     addEntry(context.getString(R.string.nc_diagnosis_app_version_title), "v${BuildConfig.VERSION_NAME}")
     addEntry(context.getString(R.string.nc_diagnosis_flavor), BuildConfig.FLAVOR)
     addEntry(context.getString(R.string.nc_diagnosis_log_level), logsRepository.minimumLevel.toString())
+    addEntry(context.getString(R.string.nc_diagnosis_log_capture), logsRepository.captureStatus)
     addEntry(context.getString(R.string.nc_diagnosis_offer_unifiedpush), boolStr(offerUnifiedPush))
     addEntry(context.getString(R.string.nc_diagnosis_use_unifiedpush), boolStr(useUnifiedPush))
 

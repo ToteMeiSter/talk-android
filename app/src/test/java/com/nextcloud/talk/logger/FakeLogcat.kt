@@ -33,6 +33,10 @@ class FakeLogcat : LogcatLauncher {
     @Volatile
     var dropDebug = false
 
+    /** A device that delivers only the priorities from this one up to logcat (EMUI: 5 = warnings and above). */
+    @Volatile
+    var minPriority = 0
+
     /** Time of the check line; null is now, as on a device. */
     @Volatile
     var markerTime: String? = null
@@ -96,8 +100,9 @@ class FakeLogcat : LogcatLauncher {
     /** What `Log.println` does on a device: the line shows up in the stream. */
     val markerEmitter = MarkerEmitter { priority, tag, message ->
         val text = markerLine(priority, tag, message)
-        if (!(dropDebug && priority == PRIORITY_DEBUG)) emitted.add(text)
-        if (echoMarker && !(dropDebug && priority == PRIORITY_DEBUG)) streams.lastOrNull()?.emit(text)
+        val delivered = !(dropDebug && priority == PRIORITY_DEBUG) && priority >= minPriority
+        if (delivered) emitted.add(text)
+        if (echoMarker && delivered) streams.lastOrNull()?.emit(text)
     }
 
     /** Lets the lines that were held back (echoMarker = false) reach the current stream now. */
