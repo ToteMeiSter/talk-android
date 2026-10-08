@@ -81,6 +81,10 @@ public class WebRtcAudioManager {
     private boolean wiredRouteRefreshPending;
     private AudioManager.OnAudioFocusChangeListener audioFocusChangeListener;
     private AudioFocusRequest audioFocusRequest;
+    // API 31+: the system audio mode is watched too, the phone call (ring, dialling, talk) is seen without the
+    // READ_PHONE_STATE permission and even if the device does not take the audio focus away for it.
+    @Nullable
+    private AudioManager.OnModeChangedListener modeChangedListener;
     private final AudioFocusState audioFocusState = new AudioFocusState();
 
     private final PowerManagerUtils powerManagerUtils;
@@ -196,6 +200,8 @@ public class WebRtcAudioManager {
             Log.e(TAG, "Audio focus request failed");
         }
 
+        registerModeListener();
+
         // Start by setting MODE_IN_COMMUNICATION as default audio mode. It is
         // required to be in this mode when playout and/or recording starts for
         // best possible VoIP performance.
@@ -237,12 +243,52 @@ public class WebRtcAudioManager {
      * when focus returns after a transient loss, see {@link AudioFocusState}.
      */
     void onAudioFocusChange(int focusChange) {
-        boolean wasInterrupted = audioFocusState.hasTransientLoss();
+        boolean wasInterrupted = audioFocusState.isInterrupted();
+        boolean wasOnHold = audioFocusState.isCallAccepted();
         boolean restore = audioFocusState.handle(focusChange);
-        boolean interrupted = audioFocusState.hasTransientLoss();
-        Log.d(TAG, "onAudioFocusChange: " + focusChange + ", interrupted=" + interrupted);
+        boolean interrupted = audioFocusState.isInterrupted();
+        Log.d(TAG, "onAudioFocusChange: " + focusChange + ", interrupted=" + interrupted
+            + ", audioMode=" + audioManager.getMode());
+        applyInterruption(wasInterrupted, interrupted, wasOnHold, audioFocusState.isCallAccepted(), restore);
+    }
+
+    /**
+     * Handles a change of the global audio mode (API 31+). The phone app sets MODE_RINGTONE for an incoming call and
+     * MODE_IN_CALL for a call in progress.
+     */
+    void onAudioModeChanged(int mode) {
+        boolean wasInterrupted = audioFocusState.isInterrupted();
+        boolean wasOnHold = audioFocusState.isCallAccepted();
+        boolean restore = audioFocusState.handleMode(mode);
+        boolean interrupted = audioFocusState.isInterrupted();
+        Log.d(TAG, "onAudioModeChanged: " + mode + ", interrupted=" + interrupted
+            + ", phoneCallAccepted=" + audioFocusState.isCallAccepted());
+        applyInterruption(wasInterrupted, interrupted, wasOnHold, audioFocusState.isCallAccepted(), restore);
+    }
+
+    private void registerModeListener() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S || modeChangedListener != null) {
+            return;
+        }
+        modeChangedListener = this::onAudioModeChanged;
+        audioManager.addOnModeChangedListener(context.getMainExecutor(), modeChangedListener);
+        Log.d(TAG, "Watching the audio mode for phone calls, mode=" + audioManager.getMode());
+    }
+
+    private void unregisterModeListener() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && modeChangedListener != null) {
+            audioManager.removeOnModeChangedListener(modeChangedListener);
+        }
+        modeChangedListener = null;
+    }
+
+    private void applyInterruption(boolean wasInterrupted, boolean interrupted, boolean wasOnHold, boolean onHold,
+                                   boolean restore) {
         if (interrupted != wasInterrupted && interruptionListener != null) {
             interruptionListener.onInterruptionChanged(interrupted);
+        }
+        if (onHold != wasOnHold && interruptionListener != null) {
+            interruptionListener.onPhoneCallAcceptedChanged(onHold);
         }
         if (restore && amState == AudioManagerState.RUNNING) {
             audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
@@ -261,7 +307,7 @@ public class WebRtcAudioManager {
      * then, not over.
      */
     public boolean isInterrupted() {
-        return audioFocusState.hasTransientLoss();
+        return audioFocusState.isInterrupted();
     }
 
     public void setInterruptionListener(@Nullable InterruptionListener listener) {
@@ -290,6 +336,34 @@ public class WebRtcAudioManager {
      */
     static class AudioFocusState {
         private boolean transientLoss = false;
+        private boolean phoneCallMode = false;
+        private boolean callAccepted = false;
+
+        /**
+         * The phone call is accepted (MODE_IN_CALL), not only ringing: the call of the app is put on hold.
+         */
+        boolean isCallAccepted() {
+            return callAccepted;
+        }
+
+        /**
+         * @return true when the phone call is over and the communication mode must be re-asserted
+         */
+        boolean handleMode(int mode) {
+            boolean phone = mode == AudioManager.MODE_RINGTONE
+                || mode == AudioManager.MODE_IN_CALL
+                || mode == AudioManager.MODE_CALL_SCREENING;
+            // MODE_IN_COMMUNICATION is the own mode of the call, NORMAL is the mode after the phone call: neither is
+            // a phone call, but only the end of a phone call needs a restore.
+            boolean wasPhone = phoneCallMode;
+            phoneCallMode = phone;
+            callAccepted = mode == AudioManager.MODE_IN_CALL;
+            return wasPhone && !phone && mode != AudioManager.MODE_IN_COMMUNICATION;
+        }
+
+        boolean isInterrupted() {
+            return transientLoss || phoneCallMode;
+        }
 
         boolean handle(int focusChange) {
             switch (focusChange) {
@@ -313,6 +387,8 @@ public class WebRtcAudioManager {
 
         void reset() {
             transientLoss = false;
+            phoneCallMode = false;
+            callAccepted = false;
         }
     }
 
@@ -326,6 +402,7 @@ public class WebRtcAudioManager {
         }
         amState = AudioManagerState.UNINITIALIZED;
 
+        unregisterModeListener();
         unregisterReceiver(wiredHeadsetReceiver);
         audioManager.unregisterAudioDeviceCallback(wiredAudioDeviceCallback);
 
@@ -946,6 +1023,9 @@ public class WebRtcAudioManager {
     public interface InterruptionListener {
         // Called on the main thread when the audio focus is lost for a short time or comes back.
         void onInterruptionChanged(boolean interrupted);
+
+        // Called on the main thread when a phone call is accepted (true) or over (false). Not called while it rings.
+        void onPhoneCallAcceptedChanged(boolean accepted);
     }
 
     public static interface AudioManagerListener {
