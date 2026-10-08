@@ -35,7 +35,11 @@ abstract class LoggerImplTestBase {
         logger?.stopLogcatCapture()
     }
 
-    protected fun newLogger(withLogcat: Boolean = true, verifyTimeoutMs: Long = 2000): LoggerImpl =
+    protected fun newLogger(
+        withLogcat: Boolean = true,
+        verifyTimeoutMs: Long = 2000,
+        stallAfterMs: Long = 5000
+    ): LoggerImpl =
         LoggerImpl(
             handler,
             logcatSetup = if (withLogcat) {
@@ -46,7 +50,8 @@ abstract class LoggerImplTestBase {
                     timing = LogcatTiming(
                         verifyTimeoutMs = verifyTimeoutMs,
                         respawnDelayMs = 10,
-                        drainTimeoutMs = DRAIN_MS
+                        drainTimeoutMs = DRAIN_MS,
+                        stallAfterMs = stallAfterMs
                     )
                 )
             } else {

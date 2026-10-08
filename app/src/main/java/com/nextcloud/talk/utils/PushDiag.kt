@@ -6,7 +6,7 @@
  */
 package com.nextcloud.talk.utils
 
-import android.util.Log
+import com.nextcloud.talk.logger.AppLog as Log
 import retrofit2.HttpException
 
 /**

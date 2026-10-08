@@ -56,7 +56,9 @@ data class LogcatTiming(
     /** A logcat run that lasted this long counts as stable: the restart counter starts again. */
     val steadyAfterMs: Long = 60_000L,
     /** How long a stopping capture waits for the stop line, so that lines in transit are not lost. */
-    val drainTimeoutMs: Long = 1000L
+    val drainTimeoutMs: Long = 1000L,
+    /** The logger treats an active capture as dead when no logcat line comes this long after a line it left to it. */
+    val stallAfterMs: Long = 5000L
 )
 
 /**
@@ -198,10 +200,11 @@ class LogcatCapture(
         var reported = false
             private set
 
-        // The level of the logcat filter and of the check line. Starts as the requested level; one step down to
-        // INFO if the device does not deliver the check line of a debug level.
+        // The level of the logcat filter and of the check line. Starts as the requested level; steps down (D, I, W)
+        // while the device does not deliver the check line of that level.
         @Volatile
         private var captureLevel = level
+        private val triedLevels = mutableListOf<Level>()
 
         @Volatile
         private var stream: LogcatStream? = null
@@ -267,8 +270,7 @@ class LogcatCapture(
                 val startedAt = System.nanoTime()
                 val outcome = runOnce(since)
                 failure = (outcome as? Outcome.Failed)?.reason
-                if (outcome is Outcome.Failed && outcome.checkLineMissing && captureLevel < Level.INFO) {
-                    captureLevel = Level.INFO
+                if (outcome is Outcome.Failed && outcome.checkLineMissing && stepDown()) {
                     failure = null
                 } else if (outcome is Outcome.Ended && !closed) {
                     if ((System.nanoTime() - startedAt) / NANOS_PER_MILLI >= timing.steadyAfterMs) respawns = 0
@@ -328,7 +330,7 @@ class LogcatCapture(
             if (!verified && !closed) {
                 val reason = if (timedOut) {
                     "the ${captureLevel.tag} check line did not come through logcat in " +
-                        "${timing.verifyTimeoutMs} ms${reader.junkText()}"
+                        "${timing.verifyTimeoutMs} ms${triedText()}${reader.junkText()}"
                 } else {
                     "logcat ended before the check line came${reader.junkText()}"
                 }
@@ -336,6 +338,17 @@ class LogcatCapture(
             }
             return Outcome.Ended(readError ?: reader.junkText().ifEmpty { "end of output" })
         }
+
+        // The device did not deliver the check line of this level: try the next one up. False after W.
+        private fun stepDown(): Boolean {
+            if (captureLevel >= Level.WARNING) return false
+            triedLevels.add(captureLevel)
+            captureLevel = if (captureLevel < Level.INFO) Level.INFO else Level.WARNING
+            return true
+        }
+
+        private fun triedText() =
+            if (triedLevels.isEmpty()) "" else " (also tried ${triedLevels.joinToString(", ") { it.tag }})"
 
         private fun startWatchdog(opened: LogcatStream) {
             Thread {

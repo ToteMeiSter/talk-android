@@ -85,7 +85,7 @@ class LoggerImplCaptureTest : LoggerImplTestBase() {
         val text = fileText()
 
         assertEquals(text, 1, Regex("logcat capture unavailable: ").findAll(text).count())
-        assertTrue(text.contains(" W LogcatCapture: logcat capture unavailable: the I check line did not come"))
+        assertTrue(text.contains(" W LogcatCapture: logcat capture unavailable: the W check line did not come"))
         assertEquals(text, 1, Regex("line while pending").findAll(text).count())
         assertEquals(text, 1, Regex("line after the failure").findAll(text).count())
         assertFalse(impl.isLogcatCaptureActive)

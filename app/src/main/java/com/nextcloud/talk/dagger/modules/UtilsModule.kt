@@ -8,6 +8,7 @@
 package com.nextcloud.talk.dagger.modules
 
 import android.content.Context
+import com.nextcloud.talk.logger.AppLog
 import com.nextcloud.talk.logger.FileLogHandler
 import com.nextcloud.talk.logger.Level
 import com.nextcloud.talk.logger.LogcatSetup
@@ -54,6 +55,8 @@ class UtilsModule {
         impl.minimumLevel = savedLevelName?.let { name -> Level.entries.find { it.name == name } }
             ?: LoggerImpl.DEFAULT_LEVEL
         impl.start()
+        // classes without injection (WebSocketInstance, PeerConnectionWrapper, ...) log through the same logger
+        AppLog.install(impl)
         return impl
     }
 

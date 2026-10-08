@@ -6,7 +6,7 @@
  */
 package com.nextcloud.talk.webrtc
 
-import android.util.Log
+import com.nextcloud.talk.logger.AppLog as Log
 import org.webrtc.SSLCertificateVerifier
 import java.io.ByteArrayInputStream
 import java.security.KeyStore

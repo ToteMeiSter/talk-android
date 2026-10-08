@@ -30,9 +30,9 @@ import android.media.AudioDeviceInfo;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
 import android.os.Build;
-import android.util.Log;
 
 import com.nextcloud.talk.events.ProximitySensorEvent;
+import com.nextcloud.talk.logger.AppLog;
 import com.nextcloud.talk.utils.ContextExtensionsKt;
 import com.nextcloud.talk.utils.ReceiverFlag;
 import com.nextcloud.talk.utils.power.PowerManagerUtils;
@@ -86,7 +86,7 @@ public class WebRtcAudioManager {
     private final PowerManagerUtils powerManagerUtils;
 
     private WebRtcAudioManager(Context context, boolean useProximitySensor) {
-        Log.d(TAG, "ctor");
+        AppLog.d(TAG, "ctor");
         ThreadUtils.checkIsOnMainThread();
         this.context = context;
         audioManager = ((AudioManager) context.getSystemService(Context.AUDIO_SERVICE));
@@ -153,12 +153,12 @@ public class WebRtcAudioManager {
             // device callback for this very switch, keep the earpiece while the phone is held to the ear.
             updateAudioDeviceState();
             if (proximitySensor.sensorReportsNearState()) {
-                Log.d(TAG, "switched to EARPIECE because userSelectedAudioDevice was SPEAKER_PHONE and proximity=near");
+                AppLog.d(TAG, "switched to EARPIECE because userSelectedAudioDevice was SPEAKER_PHONE and proximity=near");
 
                 EventBus.getDefault().post(new ProximitySensorEvent(ProximitySensorEvent.ProximitySensorEventType.SENSOR_NEAR));
 
             } else {
-                Log.d(TAG, "switched to SPEAKER_PHONE because userSelectedAudioDevice was SPEAKER_PHONE and proximity=far");
+                AppLog.d(TAG, "switched to SPEAKER_PHONE because userSelectedAudioDevice was SPEAKER_PHONE and proximity=far");
 
                 EventBus.getDefault().post(new ProximitySensorEvent(ProximitySensorEvent.ProximitySensorEventType.SENSOR_FAR));
             }
@@ -167,15 +167,15 @@ public class WebRtcAudioManager {
 
     @SuppressLint("WrongConstant")
     public void start(AudioManagerListener audioManagerListener) {
-        Log.d(TAG, "start");
+        AppLog.d(TAG, "start");
         ThreadUtils.checkIsOnMainThread();
         if (amState == AudioManagerState.RUNNING) {
-            Log.e(TAG, "AudioManager is already active");
+            AppLog.e(TAG, "AudioManager is already active");
             return;
         }
         // TODO(henrika): perhaps call new method called preInitAudio() here if UNINITIALIZED.
 
-        Log.d(TAG, "AudioManager starts...");
+        AppLog.d(TAG, "AudioManager starts...");
         this.audioManagerListener = audioManagerListener;
         amState = AudioManagerState.RUNNING;
 
@@ -191,9 +191,9 @@ public class WebRtcAudioManager {
         audioFocusRequest = buildCallAudioFocusRequest(audioFocusChangeListener);
         int result = audioManager.requestAudioFocus(audioFocusRequest);
         if (result == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
-            Log.d(TAG, "Audio focus request granted for VOICE_CALL streams");
+            AppLog.d(TAG, "Audio focus request granted for VOICE_CALL streams");
         } else {
-            Log.e(TAG, "Audio focus request failed");
+            AppLog.e(TAG, "Audio focus request failed");
         }
 
         // Start by setting MODE_IN_COMMUNICATION as default audio mode. It is
@@ -229,7 +229,7 @@ public class WebRtcAudioManager {
         // Register receiver for broadcast intents related to adding/removing a
         // wired headset.
         registerReceiver(wiredHeadsetReceiver, new IntentFilter(Intent.ACTION_HEADSET_PLUG));
-        Log.d(TAG, "AudioManager started");
+        AppLog.d(TAG, "AudioManager started");
     }
 
     /**
@@ -240,7 +240,7 @@ public class WebRtcAudioManager {
         boolean wasInterrupted = audioFocusState.hasTransientLoss();
         boolean restore = audioFocusState.handle(focusChange);
         boolean interrupted = audioFocusState.hasTransientLoss();
-        Log.d(TAG, "onAudioFocusChange: " + focusChange + ", interrupted=" + interrupted);
+        AppLog.d(TAG, "onAudioFocusChange: " + focusChange + ", interrupted=" + interrupted);
         if (interrupted != wasInterrupted && interruptionListener != null) {
             interruptionListener.onInterruptionChanged(interrupted);
         }
@@ -318,10 +318,10 @@ public class WebRtcAudioManager {
 
     @SuppressLint("WrongConstant")
     public void stop() {
-        Log.d(TAG, "stop");
+        AppLog.d(TAG, "stop");
         ThreadUtils.checkIsOnMainThread();
         if (amState != AudioManagerState.RUNNING) {
-            Log.e(TAG, "Trying to stop AudioManager in incorrect state: " + amState);
+            AppLog.e(TAG, "Trying to stop AudioManager in incorrect state: " + amState);
             return;
         }
         amState = AudioManagerState.UNINITIALIZED;
@@ -349,7 +349,7 @@ public class WebRtcAudioManager {
             audioFocusRequest = null;
         }
         audioFocusChangeListener = null;
-        Log.d(TAG, "Abandoned audio focus for VOICE_CALL streams");
+        AppLog.d(TAG, "Abandoned audio focus for VOICE_CALL streams");
 
         if (proximitySensor != null) {
             proximitySensor.stop();
@@ -360,7 +360,7 @@ public class WebRtcAudioManager {
 
         audioManagerListener = null;
         interruptionListener = null;
-        Log.d(TAG, "AudioManager stopped");
+        AppLog.d(TAG, "AudioManager stopped");
     }
 
     ;
@@ -369,7 +369,7 @@ public class WebRtcAudioManager {
      * Changes selection of the currently active audio device.
      */
     private boolean setAudioDeviceInternal(AudioDevice audioDevice) {
-        Log.d(TAG, "setAudioDeviceInternal(device=" + audioDevice + ")");
+        AppLog.d(TAG, "setAudioDeviceInternal(device=" + audioDevice + ")");
 
         if (audioDevice == AudioDevice.NONE) {
             currentAudioDevice = AudioDevice.NONE;
@@ -382,7 +382,7 @@ public class WebRtcAudioManager {
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
             if (!setCommunicationDevice(audioDevice)) {
-                Log.e(TAG, "Unable to select communication device " + audioDevice);
+                AppLog.e(TAG, "Unable to select communication device " + audioDevice);
                 return false;
             }
         } else {
@@ -396,7 +396,7 @@ public class WebRtcAudioManager {
                     setSpeakerphoneOn(false);
                     break;
                 default:
-                    Log.e(TAG, "Invalid audio device selection");
+                    AppLog.e(TAG, "Invalid audio device selection");
                     return false;
             }
         }
@@ -411,7 +411,7 @@ public class WebRtcAudioManager {
     public void setDefaultAudioDevice(AudioDevice device) {
         ThreadUtils.checkIsOnMainThread();
         if (!audioDevices.contains(device)) {
-            Log.e(TAG, "Can not select default " + device + " from available " + audioDevices);
+            AppLog.e(TAG, "Can not select default " + device + " from available " + audioDevices);
         }
         defaultAudioDevice = device;
         updateAudioDeviceState();
@@ -429,7 +429,7 @@ public class WebRtcAudioManager {
             AudioDevice previousUserSelectedAudioDevice = userSelectedAudioDevice;
             boolean wasBluetoothPreferredForCall = bluetoothPreferredForCall;
             if (!bluetoothManager.requestBluetoothAudioSelection()) {
-                Log.e(TAG, "Bluetooth is not available for communication audio");
+                AppLog.e(TAG, "Bluetooth is not available for communication audio");
                 updateAudioDeviceState();
                 return false;
             }
@@ -445,7 +445,7 @@ public class WebRtcAudioManager {
             return false;
         }
         if (!audioDevices.contains(device)) {
-            Log.e(TAG, "Can not select " + device + " from available " + audioDevices);
+            AppLog.e(TAG, "Can not select " + device + " from available " + audioDevices);
             return false;
         }
         AudioDevice previousUserSelectedAudioDevice = userSelectedAudioDevice;
@@ -556,7 +556,7 @@ public class WebRtcAudioManager {
             return true;
         }
         if (audioDevice == AudioDevice.BLUETOOTH && !bluetoothManager.hasBluetoothConnectPermission()) {
-            Log.w(TAG, "setCommunicationDevice: BLUETOOTH_CONNECT is not granted, not selecting a Bluetooth route");
+            AppLog.w(TAG, "setCommunicationDevice: BLUETOOTH_CONNECT is not granted, not selecting a Bluetooth route");
             return false;
         }
         try {
@@ -587,12 +587,12 @@ public class WebRtcAudioManager {
             if (selectedDevice != null) {
                 boolean selected = audioManager.setCommunicationDevice(selectedDevice);
                 if (!selected) {
-                    Log.w(TAG, "Failed to select communication device " + selectedDevice.getType());
+                    AppLog.w(TAG, "Failed to select communication device " + selectedDevice.getType());
                 }
                 return selected;
             }
         } catch (SecurityException | IllegalArgumentException exception) {
-            Log.e(TAG, "Communication device disappeared while it was being selected", exception);
+            AppLog.e(TAG, "Communication device disappeared while it was being selected", exception);
         }
         return false;
     }
@@ -627,7 +627,7 @@ public class WebRtcAudioManager {
         try {
             return audioManager.getCommunicationDevice();
         } catch (SecurityException exception) {
-            Log.e(TAG, "Permission was revoked while reading the communication device", exception);
+            AppLog.e(TAG, "Permission was revoked while reading the communication device", exception);
             return null;
         }
     }
@@ -637,7 +637,7 @@ public class WebRtcAudioManager {
         try {
             audioManager.clearCommunicationDevice();
         } catch (SecurityException exception) {
-            Log.e(TAG, "Permission was revoked while clearing the communication device", exception);
+            AppLog.e(TAG, "Permission was revoked while clearing the communication device", exception);
         }
     }
 
@@ -668,7 +668,7 @@ public class WebRtcAudioManager {
             : Arrays.asList(audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS));
         for (AudioDeviceInfo device : devices) {
             if (AudioRoutePolicy.isWiredCommunicationOutput(device.getType(), device.isSink())) {
-                Log.d(TAG, "hasWiredHeadset: found wired or USB audio device");
+                AppLog.d(TAG, "hasWiredHeadset: found wired or USB audio device");
                 return true;
             }
         }
@@ -714,7 +714,7 @@ public class WebRtcAudioManager {
                     }
                 }
             } catch (SecurityException exception) {
-                Log.e(TAG, "Bluetooth permission was revoked while enumerating communication devices", exception);
+                AppLog.e(TAG, "Bluetooth permission was revoked while enumerating communication devices", exception);
             }
             return false;
         }
@@ -742,10 +742,10 @@ public class WebRtcAudioManager {
 
     public final void updateAudioDeviceState() {
         ThreadUtils.checkIsOnMainThread();
-        Log.d(TAG, "--- updateAudioDeviceState: "
+        AppLog.d(TAG, "--- updateAudioDeviceState: "
             + "wired headset=" + hasWiredHeadset + ", "
             + "BT state=" + bluetoothManager.getState());
-        Log.d(TAG, "Device status: "
+        AppLog.d(TAG, "Device status: "
             + "internally available=" + internalAudioDevices + ", "
             + "externally available=" + audioDevices + ", "
             + "default=" + defaultAudioDevice + ", "
@@ -822,7 +822,7 @@ public class WebRtcAudioManager {
         if (bluetoothManager.getState() == WebRtcBluetoothManager.State.HEADSET_AVAILABLE
             || bluetoothManager.getState() == WebRtcBluetoothManager.State.SCO_CONNECTING
             || bluetoothManager.getState() == WebRtcBluetoothManager.State.SCO_CONNECTED) {
-            Log.d(TAG, "Need BT audio: start=" + needBluetoothScoStart + ", "
+            AppLog.d(TAG, "Need BT audio: start=" + needBluetoothScoStart + ", "
                 + "stop=" + needBluetoothScoStop + ", "
                 + "BT state=" + bluetoothManager.getState());
         }
@@ -878,7 +878,7 @@ public class WebRtcAudioManager {
             if (!bluetoothSelectionPending) {
                 routeSelectionSucceeded = setAudioDeviceInternal(newCurrentAudioDevice);
             }
-            Log.d(TAG, "New device status: "
+            AppLog.d(TAG, "New device status: "
                 + "internally available=" + internalAudioDevices + ", "
                 + "externally available=" + audioDevices + ", "
                 + "current(new)=" + currentAudioDevice);
@@ -907,7 +907,7 @@ public class WebRtcAudioManager {
 
         boolean audioDeviceChanged = previousCurrentAudioDevice != currentAudioDevice || audioDeviceSetUpdated;
         notifyAudioRouteStateIfChanged(audioDeviceChanged);
-        Log.d(TAG, "--- updateAudioDeviceState done");
+        AppLog.d(TAG, "--- updateAudioDeviceState done");
     }
 
     private void notifyAudioRouteStateIfChanged(boolean audioDeviceChanged) {

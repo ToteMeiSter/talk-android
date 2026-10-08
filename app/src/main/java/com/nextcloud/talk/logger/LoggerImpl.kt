@@ -11,6 +11,8 @@ import android.os.Looper
 import android.os.Process
 import android.util.Log
 import java.util.Date
+import java.util.Timer
+import java.util.TimerTask
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
@@ -62,6 +64,8 @@ class LoggerImpl(
         private const val LIMITED_MESSAGE =
             "logcat capture limited to %s and above: this device does not deliver the lower levels to logcat. " +
                 "The logger writes its own lines of the lower levels."
+        private const val STATUS_ACTIVE = "logcat capture active from %s: the log has every line of the app process"
+        private const val MAX_DROPPED_FOR_STALL = 200
         const val PREFS_NAME = "logger_prefs"
         const val PREF_LOG_LEVEL = "log_level"
         val DEFAULT_LEVEL = Level.WARNING
@@ -126,6 +130,19 @@ class LoggerImpl(
     // The lowest level that logcat delivers while the capture is verified; own entries below it are still written.
     private var captureFloor = Level.NONE
 
+    // Why the capture is off after a failure; null if it was never started or was stopped on purpose.
+    private var unavailableReason: String? = null
+
+    // Own entries that were not written because logcat should carry them, until a logcat line shows that logcat is
+    // alive. If logcat stays silent (a frozen process), the entries are written after all.
+    private class Dropped(val at: Long, val serial: Long, val entry: LogEntry)
+
+    private val droppedForCapture = ArrayDeque<Dropped>()
+    private val linesSeen = AtomicLong()
+    private val stallAfterMs = logcatSetup?.timing?.stallAfterMs ?: LogcatTiming().stallAfterMs
+    private var stallRecheckMs = 0L
+    private val stallTimer by lazy { Timer("NcTalkLogcatStall", true) }
+
     private val capture: LogcatCapture? = logcatSetup?.let { setup ->
         LogcatCapture(
             launcher = setup.launcher,
@@ -146,6 +163,50 @@ class LoggerImpl(
     /** True while the logcat capture works and writes the lines of the whole process. */
     val isLogcatCaptureActive: Boolean get() = capture?.isActive == true
 
+    /**
+     * State of the logcat capture for the diagnosis report: `active from D`, `limited to I and above`, `starting`,
+     * `unavailable: <reason>` or `off`.
+     */
+    override val captureStatus: String get() = synchronized(captureLock) { statusText() }
+
+    // Must be called with captureLock held.
+    private fun statusText(): String =
+        when {
+            capture == null || minimumLevel == Level.NONE -> "off"
+            minimumLevel > Level.DEBUG -> "off (Advanced logging is off)"
+            else -> when (captureMode) {
+                CaptureMode.PENDING -> "starting"
+                CaptureMode.ACTIVE -> if (captureFloor > minimumLevel) {
+                    "limited to ${captureFloor.tag} and above"
+                } else {
+                    "active from ${captureFloor.tag}"
+                }
+                CaptureMode.OFF -> unavailableReason?.let { "unavailable: $it" } ?: "off"
+            }
+        }
+
+    // The line that tells the state of the capture; null when there is nothing to tell (logging is off, or the
+    // capture is off at the normal level, which is the default).
+    private fun statusEntry(): LogEntry? =
+        synchronized(captureLock) {
+            val idleAtNormalLevel =
+                minimumLevel > Level.INFO && captureMode == CaptureMode.OFF && unavailableReason == null
+            val quiet = capture == null || minimumLevel == Level.NONE || idleAtNormalLevel
+            if (quiet) return null
+            val bad = unavailableReason != null || (captureMode == CaptureMode.ACTIVE && captureFloor > minimumLevel)
+            statusLogEntry(if (bad) Level.WARNING else Level.INFO, "logcat capture " + statusText())
+        }
+
+    private fun statusLogEntry(level: Level, message: String) =
+        LogEntry(
+            timestamp = Date(),
+            level = level,
+            tag = CAPTURE_TAG,
+            message = message,
+            pid = Process.myPid(),
+            tid = Process.myTid()
+        )
+
     fun start() {
         thread.start()
         started = true
@@ -161,6 +222,8 @@ class LoggerImpl(
             val release = if (captureMode == CaptureMode.PENDING) takeHeld { it.level >= minimumLevel } else emptyList()
             captureMode = CaptureMode.OFF
             captureFloor = Level.NONE
+            unavailableReason = null
+            droppedForCapture.clear()
             release
         }
         held.forEach { offerEntry(it) }
@@ -176,7 +239,12 @@ class LoggerImpl(
             return
         }
         val begin = synchronized(captureLock) {
-            (captureMode == CaptureMode.OFF).also { if (it) captureMode = CaptureMode.PENDING }
+            (captureMode == CaptureMode.OFF).also {
+                if (it) {
+                    captureMode = CaptureMode.PENDING
+                    unavailableReason = null
+                }
+            }
         }
         if (begin) capture.start(level, fromProcessStart)
     }
@@ -189,6 +257,7 @@ class LoggerImpl(
     }
 
     override fun onLine(line: String) {
+        linesSeen.incrementAndGet()
         if (line.contains(OWN_TAG_MARKER)) return
         try {
             if (!eventQueue.offer(RawLine(line), ENQUEUE_TIMEOUT_SECONDS, TimeUnit.SECONDS)) countMissed()
@@ -208,7 +277,13 @@ class LoggerImpl(
                 emptyList()
             }
             captureMode = CaptureMode.ACTIVE
-            if (effectiveLevel > minimumLevel) own + warningEntry(LIMITED_MESSAGE.format(effectiveLevel.tag)) else own
+            droppedForCapture.clear()
+            val status = if (effectiveLevel > minimumLevel) {
+                warningEntry(LIMITED_MESSAGE.format(effectiveLevel.tag))
+            } else {
+                statusLogEntry(Level.INFO, STATUS_ACTIVE.format(effectiveLevel.tag))
+            }
+            own + status
         }
         release.forEach { putEntry(it) }
     }
@@ -218,9 +293,73 @@ class LoggerImpl(
         val release = synchronized(captureLock) {
             captureMode = CaptureMode.OFF
             captureFloor = Level.NONE
+            unavailableReason = reason
+            droppedForCapture.clear()
             takeHeld { it.level >= minimumLevel } + warningEntry("logcat capture unavailable: $reason")
         }
         release.forEach { putEntry(it) }
+    }
+
+    // Logcat is silent although the logger sent lines through it: it does not work (for example a frozen process).
+    // The lines that were left to logcat are written now and the capture ends with a warning.
+    private fun checkStall() {
+        val release = synchronized(captureLock) { collectStalled() }
+        if (release == null) {
+            if (stallRecheckMs > 0) scheduleStallCheck(stallRecheckMs)
+            return
+        }
+        Log.w(CAPTURE_TAG, release.last().message)
+        capture?.stop()
+        release.forEach { putEntry(it) }
+    }
+
+    // Must be called with captureLock held. Null: no stall; [stallRecheckMs] tells when to look again.
+    private fun collectStalled(): List<LogEntry>? {
+        stallRecheckMs = 0L
+        val oldest = oldestUndelivered()
+        val age = if (oldest == null) 0L else System.currentTimeMillis() - oldest.at
+        return when {
+            oldest == null -> null
+            age < stallAfterMs -> {
+                stallRecheckMs = stallAfterMs - age
+                null
+            }
+            else -> {
+                val reason = "no line came from logcat for $age ms although the logger sent lines through it"
+                val own = droppedForCapture.map { it.entry }
+                droppedForCapture.clear()
+                captureMode = CaptureMode.OFF
+                captureFloor = Level.NONE
+                unavailableReason = reason
+                own + warningEntry("logcat capture unavailable: $reason")
+            }
+        }
+    }
+
+    // The oldest dropped entry that no later logcat line has confirmed; the confirmed ones are forgotten.
+    private fun oldestUndelivered(): Dropped? {
+        if (captureMode != CaptureMode.ACTIVE) {
+            droppedForCapture.clear()
+            return null
+        }
+        val seen = linesSeen.get()
+        while (droppedForCapture.isNotEmpty() && droppedForCapture.first().serial < seen) {
+            droppedForCapture.removeFirst()
+        }
+        return droppedForCapture.firstOrNull()
+    }
+
+    private fun scheduleStallCheck(delayMs: Long) {
+        runCatching {
+            stallTimer.schedule(
+                object : TimerTask() {
+                    override fun run() {
+                        runCatching { checkStall() }
+                    }
+                },
+                delayMs
+            )
+        }
     }
 
     private fun warningEntry(message: String) =
@@ -334,13 +473,23 @@ class LoggerImpl(
         synchronized(captureLock) {
             when (captureMode) {
                 CaptureMode.OFF -> true
-                CaptureMode.ACTIVE -> entry.level < captureFloor || truncatedByLogcat(entry)
+                CaptureMode.ACTIVE -> (entry.level < captureFloor || truncatedByLogcat(entry)).also { written ->
+                    if (!written) leaveToLogcat(entry)
+                }
                 CaptureMode.PENDING -> {
                     if (heldEntries.size < MAX_HELD_ENTRIES) heldEntries.add(entry) else countMissed()
                     false
                 }
             }
         }
+
+    // Must be called with captureLock held.
+    private fun leaveToLogcat(entry: LogEntry) {
+        val first = droppedForCapture.isEmpty()
+        if (droppedForCapture.size >= MAX_DROPPED_FOR_STALL) droppedForCapture.removeFirst()
+        droppedForCapture.addLast(Dropped(System.currentTimeMillis(), linesSeen.get(), entry))
+        if (first) scheduleStallCheck(stallAfterMs)
+    }
 
     private fun truncatedByLogcat(entry: LogEntry): Boolean {
         if (entry.message.length * MAX_UTF8_BYTES_PER_CHAR <= LOGCAT_PAYLOAD_LIMIT) return false
@@ -406,7 +555,10 @@ class LoggerImpl(
                         val entries = LogEntry.parseLines(raw.lines)
                         mainThreadHandler.post { event.onResult(entries, raw.logSize) }
                     }
-                    is Delete -> handler.deleteAll()
+                    is Delete -> {
+                        handler.deleteAll()
+                        writeStatusAfterDelete()
+                    }
                 }
             } catch (t: Throwable) {
                 logFailure("Cannot handle a log request: " + t)
@@ -414,6 +566,18 @@ class LoggerImpl(
             } finally {
                 if (event is Flush) event.latch.countDown()
             }
+        }
+    }
+
+    // "Delete all logs" must not erase the only trace of the capture state: the current state is the first line of
+    // the new file.
+    private fun writeStatusAfterDelete() {
+        val entry = statusEntry() ?: return
+        handler.open()
+        try {
+            handler.write(entry.toString() + "\n")
+        } finally {
+            handler.close()
         }
     }
 

@@ -60,4 +60,28 @@ object Log {
 
         return 1
     }
+
+    @JvmStatic
+    fun d(tag: String, msg: String, tr: Throwable): Int {
+        println("DEBUG: $tag: $msg: $tr")
+
+        return 1
+    }
+
+    @JvmStatic
+    fun w(tag: String, msg: String, tr: Throwable): Int {
+        println("WARN: $tag: $msg: $tr")
+
+        return 1
+    }
+
+    @JvmStatic
+    fun w(tag: String, tr: Throwable): Int {
+        println("WARN: $tag: $tr")
+
+        return 1
+    }
+
+    @JvmStatic
+    fun getStackTraceString(tr: Throwable?): String = tr?.toString().orEmpty()
 }
