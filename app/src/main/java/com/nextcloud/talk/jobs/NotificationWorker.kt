@@ -491,6 +491,13 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     private fun isAdminTalkNotification() = ADMIN_NOTIFICATION_TALK == pushMessage.app
 
     private fun getNcDataAndShowNotification(intent: Intent) {
+        // a chat message is shown from the push subject at once, the server data only improves it afterwards
+        val subjectFirst = pushMessage.type == TYPE_CHAT
+        if (subjectFirst) {
+            setContentsFromPushNotificationSubject()
+            showNotification(intent, null)
+        }
+
         // see https://github.com/nextcloud/notifications/blob/master/docs/ocs-endpoint-v2.md
         ncApi.getNcNotification(
             credentials,
@@ -506,7 +513,9 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
                 override fun onNext(notificationOverall: NotificationOverall) {
                     val ncNotification = notificationOverall.ocs!!.notification
-                    if (ncNotification != null) {
+                    // the user may have dismissed the notification meanwhile: do not bring it back
+                    val skipUpdate = subjectFirst && !isSubjectNotificationActive()
+                    if (ncNotification != null && !skipUpdate) {
                         enrichPushMessageByNcNotificationData(ncNotification)
 
                         val threadId = parseThreadId(ncNotification.objectId)
@@ -514,19 +523,16 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
                         showNotification(intent, ncNotification)
                         catchUpPushedRoom(threadId)
+                    } else if (ncNotification != null) {
+                        catchUpPushedRoom(parseThreadId(ncNotification.objectId))
                     }
                 }
 
                 override fun onError(e: Throwable) {
-                    fun setContentsFromPushNotificationSubject() {
-                        if (pushMessage.subject.contains(LINEBREAK)) {
-                            pushMessage.text = pushMessage.subject.substringAfter(LINEBREAK)
-                            pushMessage.subject = pushMessage.subject.substringBefore(LINEBREAK)
-                        }
+                    if (!subjectFirst) {
+                        setContentsFromPushNotificationSubject()
+                        showNotification(intent, null)
                     }
-
-                    setContentsFromPushNotificationSubject()
-                    showNotification(intent, null)
 
                     // without the server notification the thread id is unknown — still catch up
                     // the room itself so the pushed message is cached for the main chat
@@ -545,6 +551,17 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 }
             })
     }
+
+    private fun setContentsFromPushNotificationSubject() {
+        if (pushMessage.subject.contains(LINEBREAK)) {
+            pushMessage.text = pushMessage.subject.substringAfter(LINEBREAK)
+            pushMessage.subject = pushMessage.subject.substringBefore(LINEBREAK)
+        }
+    }
+
+    /** True while the notification that was shown from the subject of this push is still in the status bar. */
+    private fun isSubjectNotificationActive(): Boolean =
+        pushMessage.id?.let { findNotificationForRoom(context, user, it) } != null
 
     private fun enrichPushMessageByNcNotificationData(
         ncNotification: com.nextcloud.talk.models.json.notifications.NotificationDto
@@ -648,7 +665,9 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             else -> Log.e(TAG, "unknown pushMessage.type")
         }
 
-        if (pushMessage.type == TYPE_CHAT || pushMessage.type == TYPE_ROOM) {
+        // the shortcut loads an avatar from the server: not before the first notification of a chat push
+        val fromSubjectOnly = TYPE_CHAT == pushMessage.type && ncNotification == null
+        if (!fromSubjectOnly && (pushMessage.type == TYPE_CHAT || pushMessage.type == TYPE_ROOM)) {
             val token = pushMessage.id
             val displayName = pushMessage.subject
             if (token != null && displayName.isNotEmpty()) {
@@ -707,10 +726,15 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         val systemNotificationId: Int =
             activeStatusBarNotification?.id ?: calculateCRC32(System.currentTimeMillis().toString()).toInt()
 
-        if ((TYPE_CHAT == pushMessage.type || TYPE_REMINDER == pushMessage.type) &&
+        if (fromSubjectOnly) {
+            // no network here: no avatars, no image preview, no actions that need data of the server
+            notificationBuilder.setOnlyAlertOnce(false)
+            styleSubjectConversation(notificationBuilder, activeStatusBarNotification)
+        } else if ((TYPE_CHAT == pushMessage.type || TYPE_REMINDER == pushMessage.type) &&
             pushMessage.notificationUser != null
         ) {
-            notificationBuilder.setOnlyAlertOnce(false)
+            // the enriched version of a notification that is already on screen must stay silent
+            notificationBuilder.setOnlyAlertOnce(isUpdateOfSubjectMessage(activeStatusBarNotification))
             val senderAvatar = loadSenderAvatar(pushMessage.notificationUser)
             val conversationAvatar = if ("one2one" == conversationType) {
                 senderAvatar
@@ -872,15 +896,13 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         val newStyle = NotificationCompat.MessagingStyle(deviceUser)
         newStyle.conversationTitle = pushMessage.subject.ifEmpty { sender.name }
         newStyle.isGroupConversation = "one2one" != conversationType
-        style?.messages?.forEach { message ->
-            newStyle.addMessage(
-                NotificationCompat.MessagingStyle.Message(
-                    message.text,
-                    message.timestamp,
-                    message.person
-                )
-            )
-        }
+        val message = NotificationCompat.MessagingStyle.Message(
+            pushMessage.text,
+            pushMessage.timestamp,
+            sender
+        )
+        PushMessageHistory.merge(style?.messages.orEmpty(), pushMessage.notificationId, message)
+            .forEach { newStyle.addMessage(it) }
 
         if (imageUri != null) {
             val imageMessage = NotificationCompat.MessagingStyle.Message(
@@ -892,14 +914,44 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             newStyle.addMessage(imageMessage)
         }
 
+        notificationBuilder.setStyle(newStyle)
+    }
+
+    /**
+     * Style of the notification that is shown from the subject of the push alone. The message is marked with the
+     * id of the push, so that the enriched message replaces it instead of being added a second time.
+     */
+    private fun styleSubjectConversation(
+        notificationBuilder: NotificationCompat.Builder,
+        activeStatusBarNotification: StatusBarNotification?
+    ) {
+        val sender = Person.Builder()
+            .setKey(user.id.toString() + "@" + pushMessage.subject)
+            .setName(EmojiCompat.get().process(pushMessage.subject))
+            .build()
+        val deviceUser = Person.Builder()
+            .setKey(user.id.toString() + "@" + user.userId)
+            .setName(user.displayName ?: user.userId ?: "You")
+            .build()
+        val style = activeStatusBarNotification?.let {
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it.notification)
+        }
+        val newStyle = NotificationCompat.MessagingStyle(deviceUser)
+        newStyle.conversationTitle = pushMessage.subject
         val message = NotificationCompat.MessagingStyle.Message(
-            pushMessage.text,
+            pushMessage.text ?: pushMessage.subject,
             pushMessage.timestamp,
             sender
         )
-        newStyle.addMessage(message)
+        PushMessageHistory.merge(style?.messages.orEmpty(), pushMessage.notificationId, message)
+            .forEach { newStyle.addMessage(it) }
         notificationBuilder.setStyle(newStyle)
     }
+
+    private fun isUpdateOfSubjectMessage(activeStatusBarNotification: StatusBarNotification?): Boolean =
+        activeStatusBarNotification?.notification?.let {
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it)
+        }?.messages.orEmpty().any { PushMessageHistory.isMessageOfPush(it, pushMessage.notificationId) }
 
     private fun loadSenderAvatar(notificationUser: NotificationUserDto?): Bitmap? {
         val userType = notificationUser?.type ?: return null
