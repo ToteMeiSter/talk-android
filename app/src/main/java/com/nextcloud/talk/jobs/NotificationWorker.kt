@@ -513,6 +513,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 pushMessage.notificationId.toString()
             )
         )
+            // the push wakes the device for a few seconds only: do not wait for a blocked network, show the push text
+            .compose(PushNotificationFetchPolicy.deadline<NotificationOverall>())
             .blockingSubscribe(object : Observer<NotificationOverall> {
                 override fun onSubscribe(d: Disposable) {
                     // unused atm

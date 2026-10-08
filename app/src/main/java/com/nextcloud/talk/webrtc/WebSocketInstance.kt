@@ -100,6 +100,9 @@ internal constructor(
     private var currentFederation: FederationSettingsDto? = null
     private var reconnecting = false
 
+    // Failures of the socket in a row since the last hello: the pause before the next restart grows with it.
+    private var consecutiveFailures = 0
+
     // Guards the state of the connection (internalWebSocket, isConnected, reconnecting, messagesQueue): it is read and
     // changed by the callers of the app and by the threads of OkHttp. Never held while a message is dispatched to
     // listeners or while waiting.
@@ -179,6 +182,8 @@ internal constructor(
     }
 
     private fun closeWebSocket(webSocket: WebSocket, reason: String) {
+        var pauseMs = ONE_SECOND
+        var failures = 0
         synchronized(connectionLock) {
             logClosing(webSocket, reason)
             // The socket has failed already, so there is nobody to receive a close frame: cancel it at once.
@@ -188,6 +193,8 @@ internal constructor(
                 return
             }
             isConnected = false
+            failures = ++consecutiveFailures
+            pauseMs = WebSocketReconnectPolicy.delayMs(failures)
             if (TextUtils.isEmpty(resumeId)) {
                 Log.d(TAG, "closeWebSocket: dropping ${messagesQueue.size} queued messages, new session follows")
                 messagesQueue = ArrayList()
@@ -198,8 +205,8 @@ internal constructor(
                 Log.d(TAG, "closeWebSocket: keeping ${messagesQueue.size} queued messages for the resumed session")
             }
         }
-        Log.w(TAG, "Reconnecting webSocket in 1 s after: $reason")
-        sleep(ONE_SECOND)
+        Log.w(TAG, "Reconnecting webSocket in $pauseMs ms (failure $failures in a row) after: $reason")
+        sleep(pauseMs)
         synchronized(connectionLock) {
             // A message sent during the pause opens a new socket (see sendMessage). A restart now would cancel that
             // socket, which has not said hello yet, and open yet another one a few milliseconds later.
@@ -510,6 +517,7 @@ internal constructor(
             }
             isConnected = true
             reconnecting = false
+            consecutiveFailures = 0
         }
         val oldResumeId = resumeId
         val (_, helloResponseWebSocketMessage1) = LoganSquare.parse(
