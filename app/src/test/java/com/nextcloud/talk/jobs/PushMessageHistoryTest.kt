@@ -7,6 +7,7 @@
 package com.nextcloud.talk.jobs
 
 import android.app.Application
+import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationCompat.MessagingStyle.Message
 import androidx.core.app.Person
 import org.junit.Assert.assertEquals
@@ -70,5 +71,51 @@ class PushMessageHistoryTest {
         val merged = PushMessageHistory.merge(listOf(message("old", 1L)), null, message("new", 2L))
 
         assertEquals(listOf("old", "new"), texts(merged))
+    }
+
+    @Test
+    fun twoMessagesOfTheSamePushCollapseToOne() {
+        val twice = listOf(message("a", 1L), message("a again", 1L)).map {
+            it.also { m -> m.extras.putLong("push_notification_id", 619L) }
+        }
+
+        val merged = PushMessageHistory.merge(twice, 619L, message("a enriched", 1L))
+
+        assertEquals(listOf("a enriched"), texts(merged))
+    }
+
+    @Test
+    fun imageOfAnEarlierMessageSurvivesTheMerge() {
+        val image = message("", 1L).also { it.setData("image/png", android.net.Uri.parse("content://preview/1")) }
+
+        val merged = PushMessageHistory.merge(listOf(image), 619L, message("next", 2L))
+
+        assertEquals("image/png", merged.first().dataMimeType)
+        assertEquals("content://preview/1", merged.first().dataUri.toString())
+    }
+
+    @Test
+    fun markOfThePushSurvivesBuildAndExtraction() {
+        val context = org.robolectric.RuntimeEnvironment.getApplication()
+        val style = NotificationCompat.MessagingStyle(Person.Builder().setKey("me").setName("Me").build())
+        PushMessageHistory.merge(emptyList(), 618L, message("one", 1L)).forEach { style.addMessage(it) }
+        val withSecond = PushMessageHistory.merge(
+            style.messages,
+            619L,
+            message("two", 2L)
+        )
+        val newStyle = NotificationCompat.MessagingStyle(Person.Builder().setKey("me").setName("Me").build())
+        withSecond.forEach { newStyle.addMessage(it) }
+        val notification = NotificationCompat.Builder(context, "1")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setStyle(newStyle)
+            .build()
+
+        val extracted = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(notification)!!
+
+        assertEquals(listOf("one", "two"), texts(extracted.messages))
+        assertTrue(PushMessageHistory.isMessageOfPush(extracted.messages[0], 618L))
+        assertTrue(PushMessageHistory.isMessageOfPush(extracted.messages[1], 619L))
+        assertFalse(PushMessageHistory.isMessageOfPush(extracted.messages[1], 618L))
     }
 }
