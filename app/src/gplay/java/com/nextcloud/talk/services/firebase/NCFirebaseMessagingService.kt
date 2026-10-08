@@ -32,15 +32,16 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
     @Inject
     lateinit var appPreferences: AppPreferences
 
-    // creating the logger installs AppLog: the lines of this service reach the log of the settings
+    // creating the logger installs AppLog: the lines of this service after the injection reach the log of the settings
     @Suppress("unused")
     @Inject
     lateinit var logger: Logger
 
     override fun onCreate() {
-        Log.d(TAG, "onCreate")
         super.onCreate()
         sharedApplication!!.componentApplication.inject(this)
+        // after the injection: only then AppLog reaches the log of the settings
+        Log.d(TAG, "onCreate")
     }
 
     override fun onMessageReceived(remoteMessage: RemoteMessage) {
@@ -81,7 +82,6 @@ class NCFirebaseMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
         super.onNewToken(token)
-        Log.d(TAG, "onNewToken. token = $token")
         PushDiag.i("onNewToken: present=${token.isNotEmpty()} length=${token.length}")
 
         appPreferences.pushToken = token

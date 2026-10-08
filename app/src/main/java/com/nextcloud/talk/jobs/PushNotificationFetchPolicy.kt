@@ -23,7 +23,7 @@ object PushNotificationFetchPolicy {
     const val NC_NOTIFICATION_TIMEOUT_MS = 5_000L
 
     /**
-     * Fails the request with a [java.util.concurrent.TimeoutException] after [NC_NOTIFICATION_TIMEOUT_MS] and
+     * Fails the request with a [java.util.concurrent.TimeoutException] after the timeout and
      * cancels it. The error takes the same path as any other failure of the request.
      */
     fun <T : Any> deadline(
@@ -35,22 +35,39 @@ object PushNotificationFetchPolicy {
         }
 
     /**
-     * Runs [showFirst] before any network call, then waits for [fetch] for at most [timeoutMs].
-     * The answer goes to [onFetched], every failure (including the deadline) to [onFetchFailed].
-     * The result of the request never decides whether the first notification is shown, it only enriches it.
+     * The enrichment of a notification that is already shown: the answer of [fetch] and the work of [prepare]
+     * on it (avatars, preview) together must finish within [timeoutMs], else the result is a
+     * [java.util.concurrent.TimeoutException]. [prepare] runs on [workScheduler] and is cancelled at the deadline.
+     */
+    fun <T : Any, R : Any> enrichment(
+        fetch: Observable<T>,
+        prepare: (T) -> R,
+        timeoutMs: Long = NC_NOTIFICATION_TIMEOUT_MS,
+        scheduler: Scheduler = Schedulers.computation(),
+        workScheduler: Scheduler = Schedulers.io()
+    ): Observable<R> =
+        fetch
+            .flatMap { answer -> Observable.fromCallable { prepare(answer) }.subscribeOn(workScheduler) }
+            .compose(deadline<R>(scheduler, timeoutMs))
+
+    /**
+     * Runs [showFirst] before any network call, then waits for the [enrichment]. The result goes to
+     * [onPrepared], every failure (including the deadline) to [onFailed]. The request never decides whether the
+     * first notification is shown, it only enriches it.
      */
     @Suppress("LongParameterList")
-    fun <T : Any> showFirstThenEnrich(
+    fun <T : Any, R : Any> showFirstThenEnrich(
         showFirst: () -> Unit,
         fetch: Observable<T>,
-        onFetched: (T) -> Unit,
-        onFetchFailed: (Throwable) -> Unit,
+        prepare: (T) -> R,
+        onPrepared: (R) -> Unit,
+        onFailed: (Throwable) -> Unit,
         timeoutMs: Long = NC_NOTIFICATION_TIMEOUT_MS,
-        scheduler: Scheduler = Schedulers.computation()
+        scheduler: Scheduler = Schedulers.computation(),
+        workScheduler: Scheduler = Schedulers.io()
     ) {
         showFirst()
-        fetch
-            .compose(deadline<T>(scheduler, timeoutMs))
-            .blockingSubscribe(onFetched, onFetchFailed)
+        enrichment(fetch, prepare, timeoutMs, scheduler, workScheduler)
+            .blockingSubscribe(onPrepared, onFailed)
     }
 }

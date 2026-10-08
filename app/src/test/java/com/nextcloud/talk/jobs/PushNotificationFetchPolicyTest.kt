@@ -13,6 +13,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -75,13 +76,14 @@ class PushNotificationFetchPolicyTest {
         val events = mutableListOf<String>()
     }
 
-    private fun run(fetch: Observable<String>, calls: Calls) {
+    private fun run(fetch: Observable<String>, calls: Calls, prepare: (String) -> String = { "prepared:$it" }) {
         PushNotificationFetchPolicy.showFirstThenEnrich(
             showFirst = { calls.events.add("first") },
             fetch = fetch.doOnSubscribe { calls.events.add("subscribed") },
-            onFetched = { calls.events.add("enriched:$it") },
-            onFetchFailed = { calls.events.add("failed:${it.javaClass.simpleName}") },
-            timeoutMs = 100L
+            prepare = prepare,
+            onPrepared = { calls.events.add("enriched:$it") },
+            onFailed = { calls.events.add("failed:${it.javaClass.simpleName}") },
+            timeoutMs = 200L
         )
     }
 
@@ -100,7 +102,7 @@ class PushNotificationFetchPolicyTest {
 
         run(Observable.just("server"), calls)
 
-        assertEquals(listOf("first", "subscribed", "enriched:server"), calls.events)
+        assertEquals(listOf("first", "subscribed", "enriched:prepared:server"), calls.events)
     }
 
     @Test
@@ -114,16 +116,54 @@ class PushNotificationFetchPolicyTest {
 
     @Test
     fun failureInTheEnrichmentGoesToTheFailureHandlerOnly() {
-        val events = mutableListOf<String>()
+        val calls = Calls()
 
-        PushNotificationFetchPolicy.showFirstThenEnrich(
-            showFirst = { events.add("first") },
-            fetch = Observable.just("server"),
-            onFetched = { throw IllegalStateException("broken") },
-            onFetchFailed = { events.add("failed:${it.javaClass.simpleName}") },
-            timeoutMs = 100L
-        )
+        run(Observable.just("server"), calls) { throw IllegalStateException("broken") }
 
-        assertEquals(listOf("first", "failed:IllegalStateException"), events)
+        assertEquals(listOf("first", "subscribed", "failed:IllegalStateException"), calls.events)
+    }
+
+    @Test
+    fun slowPreparationAfterTheAnswerEndsAtTheDeadlineAndIsCancelled() {
+        val calls = Calls()
+        val interrupted = CountDownLatch(1)
+
+        run(Observable.just("server"), calls) {
+            try {
+                Thread.sleep(10_000L)
+            } catch (e: InterruptedException) {
+                interrupted.countDown()
+            }
+            "late"
+        }
+
+        assertEquals(listOf("first", "subscribed", "failed:TimeoutException"), calls.events)
+        assertTrue(interrupted.await(2, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun preparationThatNeverGetsToRunIsLimitedByTheSameDeadline() {
+        val workScheduler = TestScheduler()
+        val observer = PushNotificationFetchPolicy
+            .enrichment(Observable.just("server"), { it }, scheduler = scheduler, workScheduler = workScheduler)
+            .test()
+
+        scheduler.advanceTimeBy(PushNotificationFetchPolicy.NC_NOTIFICATION_TIMEOUT_MS - 1, TimeUnit.MILLISECONDS)
+        observer.assertNoErrors().assertNotTerminated()
+
+        scheduler.advanceTimeBy(1, TimeUnit.MILLISECONDS)
+        observer.assertError(TimeoutException::class.java)
+    }
+
+    @Test
+    fun preparedResultInTimePasses() {
+        val workScheduler = TestScheduler()
+        val observer = PushNotificationFetchPolicy
+            .enrichment(Observable.just("server"), { "p:$it" }, scheduler = scheduler, workScheduler = workScheduler)
+            .test()
+
+        workScheduler.triggerActions()
+
+        observer.assertValue("p:server").assertComplete()
     }
 }

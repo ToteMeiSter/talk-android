@@ -43,5 +43,8 @@ object PushMessageHistory {
     }
 
     private fun copyOf(message: Message): Message =
-        Message(message.text, message.timestamp, message.person).also { it.extras.putAll(message.extras) }
+        Message(message.text, message.timestamp, message.person).also { copy ->
+            copy.extras.putAll(message.extras)
+            message.dataMimeType?.let { copy.setData(it, message.dataUri) }
+        }
 }

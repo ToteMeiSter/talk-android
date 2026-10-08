@@ -34,7 +34,7 @@ object PushDiag {
     /**
      * State of the network and of the app at the moment of the push: whether the system lets the app use the
      * network (active network, VALIDATED, blocked state, background data restriction), power state and the
-     * importance of the process. No identifiers, no addresses.
+     * importance of the process. No tokens, no addresses.
      */
     @Suppress("TooGenericExceptionCaught", "DEPRECATION")
     fun describeNetworkAndProcess(context: Context): String =
