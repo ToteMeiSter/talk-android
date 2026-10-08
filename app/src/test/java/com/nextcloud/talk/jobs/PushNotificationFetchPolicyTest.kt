@@ -7,13 +7,17 @@
 package com.nextcloud.talk.jobs
 
 import io.reactivex.Observable
+import io.reactivex.plugins.RxJavaPlugins
 import io.reactivex.schedulers.TestScheduler
+import com.nextcloud.talk.utils.BoundedLoad
+import kotlinx.coroutines.delay
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import java.io.IOException
-import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 
@@ -76,12 +80,14 @@ class PushNotificationFetchPolicyTest {
         val events = mutableListOf<String>()
     }
 
-    private fun run(fetch: Observable<String>, calls: Calls, prepare: (String) -> String = { "prepared:$it" }) {
+    private fun run(fetch: Observable<String>, calls: Calls, onFetched: (String) -> Unit = {}) {
         PushNotificationFetchPolicy.showFirstThenEnrich(
             showFirst = { calls.events.add("first") },
             fetch = fetch.doOnSubscribe { calls.events.add("subscribed") },
-            prepare = prepare,
-            onPrepared = { calls.events.add("enriched:$it") },
+            onFetched = {
+                onFetched(it)
+                calls.events.add("enriched:$it")
+            },
             onFailed = { calls.events.add("failed:${it.javaClass.simpleName}") },
             timeoutMs = 200L
         )
@@ -102,7 +108,7 @@ class PushNotificationFetchPolicyTest {
 
         run(Observable.just("server"), calls)
 
-        assertEquals(listOf("first", "subscribed", "enriched:prepared:server"), calls.events)
+        assertEquals(listOf("first", "subscribed", "enriched:server"), calls.events)
     }
 
     @Test
@@ -124,46 +130,53 @@ class PushNotificationFetchPolicyTest {
     }
 
     @Test
-    fun slowPreparationAfterTheAnswerEndsAtTheDeadlineAndIsCancelled() {
-        val calls = Calls()
-        val interrupted = CountDownLatch(1)
+    fun slowPictureAfterTheAnswerDoesNotDropTheAnswerAndDoesNotInterruptTheThread() {
+        val errors = CopyOnWriteArrayList<Throwable>()
+        RxJavaPlugins.setErrorHandler { errors.add(it) }
+        try {
+            val calls = Calls()
+            var picture: String? = "not loaded"
+            var interrupted = true
 
-        run(Observable.just("server"), calls) {
-            try {
-                Thread.sleep(10_000L)
-            } catch (e: InterruptedException) {
-                interrupted.countDown()
+            // the load takes longer than the deadline of the request and runs into its own limit
+            run(Observable.just("server"), calls) {
+                picture = BoundedLoad.within(PICTURE_LIMIT_MS) {
+                    delay(10_000L)
+                    "picture"
+                }
+                interrupted = Thread.currentThread().isInterrupted
             }
-            "late"
-        }
 
-        assertEquals(listOf("first", "subscribed", "failed:TimeoutException"), calls.events)
-        assertTrue(interrupted.await(2, TimeUnit.SECONDS))
+            assertEquals(listOf("first", "subscribed", "enriched:server"), calls.events)
+            assertNull(picture)
+            assertFalse(interrupted)
+            // let a possible late error reach the handler
+            Thread.sleep(300L)
+            assertTrue("RxJava error handler got $errors", errors.isEmpty())
+        } finally {
+            RxJavaPlugins.setErrorHandler(null)
+        }
     }
 
     @Test
-    fun preparationThatNeverGetsToRunIsLimitedByTheSameDeadline() {
-        val workScheduler = TestScheduler()
-        val observer = PushNotificationFetchPolicy
-            .enrichment(Observable.just("server"), { it }, scheduler = scheduler, workScheduler = workScheduler)
-            .test()
+    fun answerIsAppliedEvenIfTheWorkOutlastsTheDeadline() {
+        val calls = Calls()
 
-        scheduler.advanceTimeBy(PushNotificationFetchPolicy.NC_NOTIFICATION_TIMEOUT_MS - 1, TimeUnit.MILLISECONDS)
-        observer.assertNoErrors().assertNotTerminated()
+        run(Observable.just("server"), calls) { Thread.sleep(400L) }
 
-        scheduler.advanceTimeBy(1, TimeUnit.MILLISECONDS)
+        assertEquals(listOf("first", "subscribed", "enriched:server"), calls.events)
+    }
+
+    @Test
+    fun deadlineLimitsTheRequestOnTestScheduler() {
+        val observer = Observable.never<String>().withDeadline()
+
+        scheduler.advanceTimeBy(PushNotificationFetchPolicy.NC_NOTIFICATION_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+
         observer.assertError(TimeoutException::class.java)
     }
 
-    @Test
-    fun preparedResultInTimePasses() {
-        val workScheduler = TestScheduler()
-        val observer = PushNotificationFetchPolicy
-            .enrichment(Observable.just("server"), { "p:$it" }, scheduler = scheduler, workScheduler = workScheduler)
-            .test()
-
-        workScheduler.triggerActions()
-
-        observer.assertValue("p:server").assertComplete()
+    private companion object {
+        const val PICTURE_LIMIT_MS = 100L
     }
 }

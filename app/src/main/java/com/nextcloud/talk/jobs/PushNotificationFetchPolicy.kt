@@ -35,39 +35,23 @@ object PushNotificationFetchPolicy {
         }
 
     /**
-     * The enrichment of a notification that is already shown: the answer of [fetch] and the work of [prepare]
-     * on it (avatars, preview) together must finish within [timeoutMs], else the result is a
-     * [java.util.concurrent.TimeoutException]. [prepare] runs on [workScheduler] and is cancelled at the deadline.
-     */
-    fun <T : Any, R : Any> enrichment(
-        fetch: Observable<T>,
-        prepare: (T) -> R,
-        timeoutMs: Long = NC_NOTIFICATION_TIMEOUT_MS,
-        scheduler: Scheduler = Schedulers.computation(),
-        workScheduler: Scheduler = Schedulers.io()
-    ): Observable<R> =
-        fetch
-            .flatMap { answer -> Observable.fromCallable { prepare(answer) }.subscribeOn(workScheduler) }
-            .compose(deadline<R>(scheduler, timeoutMs))
-
-    /**
-     * Runs [showFirst] before any network call, then waits for the [enrichment]. The result goes to
-     * [onPrepared], every failure (including the deadline) to [onFailed]. The request never decides whether the
-     * first notification is shown, it only enriches it.
+     * Runs [showFirst] before any network call, then waits for [fetch] for at most [timeoutMs]. The answer goes to
+     * [onFetched], every failure (including the deadline) to [onFailed]. The deadline limits the wait for the
+     * server only: [onFetched] runs on the calling thread, which is never interrupted, and an answer that came in
+     * time is always applied. The request never decides whether the first notification is shown, it only enriches it.
      */
     @Suppress("LongParameterList")
-    fun <T : Any, R : Any> showFirstThenEnrich(
+    fun <T : Any> showFirstThenEnrich(
         showFirst: () -> Unit,
         fetch: Observable<T>,
-        prepare: (T) -> R,
-        onPrepared: (R) -> Unit,
+        onFetched: (T) -> Unit,
         onFailed: (Throwable) -> Unit,
         timeoutMs: Long = NC_NOTIFICATION_TIMEOUT_MS,
-        scheduler: Scheduler = Schedulers.computation(),
-        workScheduler: Scheduler = Schedulers.io()
+        scheduler: Scheduler = Schedulers.computation()
     ) {
         showFirst()
-        enrichment(fetch, prepare, timeoutMs, scheduler, workScheduler)
-            .blockingSubscribe(onPrepared, onFailed)
+        fetch
+            .compose(deadline<T>(scheduler, timeoutMs))
+            .blockingSubscribe(onFetched, onFailed)
     }
 }

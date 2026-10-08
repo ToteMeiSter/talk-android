@@ -42,7 +42,6 @@ import androidx.work.Data
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import autodagger.AutoInjector
-import coil.executeBlocking
 import coil.imageLoader
 import coil.request.ImageRequest
 import com.bluelinelabs.logansquare.LoganSquare
@@ -75,6 +74,7 @@ import com.nextcloud.talk.receivers.ShareRecordingToChatReceiver
 import com.nextcloud.talk.users.UserManager
 import com.nextcloud.talk.utils.ActorAvatar
 import com.nextcloud.talk.utils.ApiUtils
+import com.nextcloud.talk.utils.BoundedLoad
 import com.nextcloud.talk.utils.CapabilitiesUtil
 import com.nextcloud.talk.utils.CharacterAvatarUtils
 import com.nextcloud.talk.utils.ConversationUtils
@@ -561,11 +561,12 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                     pushMessage.notificationId.toString()
                 )
             ),
-            // everything that needs the network, within the deadline and before the notification is written
-            prepare = { notificationOverall -> prepareUpdate(intent, notificationOverall.ocs!!.notification) },
-            onPrepared = { update ->
+            // the deadline limits the wait for the answer; the loads below have limits of their own
+            onFetched = { notificationOverall ->
+                val update = prepareUpdate(intent, notificationOverall.ocs!!.notification)
                 if (update.ncNotification != null) {
                     showNotification(intent, update.ncNotification, update)
+                    reportIncomingMessageShortcut(update.shortcutName)
                     catchUpPushedRoom(update.threadId)
                 }
             },
@@ -608,8 +609,9 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         }
     }
 
-    /** The server data of a push and everything loaded for it. Runs within the deadline, outside of the room lock. */
+    /** The server data of a push and everything loaded for it, outside of the room lock. */
     private class PreparedUpdate(
+        val shortcutName: String,
         val ncNotification: com.nextcloud.talk.models.json.notifications.NotificationDto?,
         val threadId: Long?,
         val senderAvatar: Bitmap?,
@@ -621,13 +623,14 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         intent: Intent,
         ncNotification: com.nextcloud.talk.models.json.notifications.NotificationDto?
     ): PreparedUpdate {
-        if (ncNotification == null) return PreparedUpdate(null, null, null, null, null)
+        if (ncNotification == null) return PreparedUpdate("", null, null, null, null, null)
         enrichPushMessageByNcNotificationData(ncNotification)
 
         val threadId = parseThreadId(ncNotification.objectId)
         threadId?.let { intent.putExtra(KEY_THREAD_ID, it) }
 
-        reportIncomingMessageShortcut()
+        // getLargeIcon() clears the subject of a one-to-one conversation: keep the name for the shortcut
+        val shortcutName = pushMessage.subject
 
         var senderAvatar: Bitmap? = null
         var conversationAvatar: Bitmap? = null
@@ -649,16 +652,18 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 )
             }
         }
-        return PreparedUpdate(ncNotification, threadId, senderAvatar, conversationAvatar, imageUri)
+        return PreparedUpdate(shortcutName, ncNotification, threadId, senderAvatar, conversationAvatar, imageUri)
     }
 
-    /** The shortcut loads an avatar from the server: never inside the room lock, never before the first notify. */
-    private fun reportIncomingMessageShortcut() {
+    /**
+     * The shortcut loads an avatar from the server: never inside the room lock, never before the first notify,
+     * and with a limit of its own.
+     */
+    private fun reportIncomingMessageShortcut(displayName: String = pushMessage.subject) {
         if (pushMessage.type == TYPE_CHAT || pushMessage.type == TYPE_ROOM) {
             val token = pushMessage.id
-            val displayName = pushMessage.subject
             if (token != null && displayName.isNotEmpty()) {
-                runBlocking {
+                BoundedLoad.within(BoundedLoad.PICTURE_TIMEOUT_MS) {
                     DirectShareHelper.reportIncomingMessage(
                         context!!,
                         user,
@@ -1076,7 +1081,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 false,
                 darkMode = DisplayUtils.isDarkModeOn(context!!)
             )
-            NotificationUtils.loadAvatarBitmapSync(avatarUrl, context!!)
+            NotificationUtils.loadAvatarBitmapSync(avatarUrl, context!!, timeoutMs = BoundedLoad.PICTURE_TIMEOUT_MS)
         } else {
             // Guests and bots have no avatar on the server, so theirs is drawn from their name here
             val avatar = CharacterAvatarUtils.avatarFor(
@@ -1090,7 +1095,13 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     }
 
     private fun loadConversationAvatar(roomToken: String): Bitmap? =
-        NotificationUtils.loadConversationAvatarBitmapSync(user.baseUrl, roomToken, credentials, context!!)
+        NotificationUtils.loadConversationAvatarBitmapSync(
+            user.baseUrl,
+            roomToken,
+            credentials,
+            context!!,
+            BoundedLoad.PICTURE_TIMEOUT_MS
+        )
 
     private fun loadImageBitmapSync(imageUrl: String): Bitmap? {
         var bitmap: Bitmap? = null
@@ -1103,7 +1114,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 onError = { Log.w(TAG, "Failed to load notification image: $imageUrl") }
             )
             .build()
-        context!!.imageLoader.executeBlocking(request)
+        // cancelled at the limit, the target keeps no bitmap: the notification is shown without the picture
+        BoundedLoad.within(BoundedLoad.PICTURE_TIMEOUT_MS) { context!!.imageLoader.execute(request) }
         return bitmap
     }
 
