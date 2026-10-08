@@ -17,7 +17,6 @@ import android.os.PowerManager
 import android.os.Process
 import android.os.SystemClock
 import android.text.TextUtils
-import android.util.Log
 import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.ProcessLifecycleOwner
 import autodagger.AutoInjector
@@ -26,6 +25,7 @@ import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.application.NextcloudTalkApplication.Companion.sharedApplication
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
+import com.nextcloud.talk.logger.AppLog as Log
 import com.nextcloud.talk.models.json.participants.ParticipantDto
 import com.nextcloud.talk.models.json.participants.ParticipantDto.ActorType
 import com.nextcloud.talk.models.json.signaling.NCSignalingMessageDto

@@ -36,7 +36,6 @@ import android.os.Looper
 import android.provider.Settings
 import android.text.TextUtils
 import android.text.format.DateUtils
-import android.util.Log
 import android.view.MotionEvent
 import android.view.OrientationEventListener
 import android.view.View
@@ -94,6 +93,7 @@ import com.nextcloud.talk.databinding.CallActivityBinding
 import com.nextcloud.talk.events.ConfigurationChangeEvent
 import com.nextcloud.talk.events.ProximitySensorEvent
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
+import com.nextcloud.talk.logger.AppLog as Log
 import com.nextcloud.talk.models.ExternalSignalingServer
 import com.nextcloud.talk.models.domain.ConversationModel
 import com.nextcloud.talk.models.json.capabilities.CapabilitiesOverall

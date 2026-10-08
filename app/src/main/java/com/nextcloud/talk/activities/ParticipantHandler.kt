@@ -7,7 +7,7 @@
 
 package com.nextcloud.talk.activities
 
-import android.util.Log
+import com.nextcloud.talk.logger.AppLog as Log
 import com.nextcloud.talk.models.json.participants.ParticipantDto
 import com.nextcloud.talk.signaling.SignalingMessageReceiver
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper

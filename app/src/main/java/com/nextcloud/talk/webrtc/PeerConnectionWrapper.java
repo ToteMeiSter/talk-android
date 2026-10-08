@@ -7,9 +7,9 @@
  */
 package com.nextcloud.talk.webrtc;
 
-import android.util.Log;
 
 import com.bluelinelabs.logansquare.LoganSquare;
+import com.nextcloud.talk.logger.AppLog;
 import com.nextcloud.talk.models.json.signaling.DataChannelMessageDto;
 import com.nextcloud.talk.models.json.signaling.NCIceCandidateDto;
 import com.nextcloud.talk.models.json.signaling.NCMessagePayloadDto;
@@ -179,7 +179,7 @@ public class PeerConnectionWrapper {
             .setSSLCertificateVerifier(SystemTrustSslCertificateVerifier.shared())
             .createPeerConnectionDependencies();
         peerConnection = peerConnectionFactory.createPeerConnection(configuration, dependencies);
-        Log.i(IceDiagnostics.TAG, "Created " + videoStreamType + " connection over " + sessionId
+        AppLog.i(IceDiagnostics.TAG, "Created " + videoStreamType + " connection over " + sessionId
             + " publisher=" + isMCUPublisher + " fromOffer=" + createdFromOffer + " ok=" + (peerConnection != null)
             + " iceServers=" + IceDiagnostics.describeServers(iceServerList));
 
@@ -268,7 +268,7 @@ public class PeerConnectionWrapper {
         try {
             task.run();
         } catch (RuntimeException e) {
-            Log.w(TAG, "ICE restart task failed", e);
+            AppLog.w(TAG, "ICE restart task failed", e);
         }
     }
 
@@ -283,7 +283,7 @@ public class PeerConnectionWrapper {
             return false;
         }
 
-        Log.d(TAG, "Restarting ICE over " + sessionId + " " + videoStreamType);
+        AppLog.d(TAG, "Restarting ICE over " + sessionId + " " + videoStreamType);
         connection.restartIce();
         connection.createOffer(sdpObserver, mediaConstraints);
         scheduleUnansweredOfferRollback();
@@ -301,7 +301,7 @@ public class PeerConnectionWrapper {
 
     private void restartIceWithinLimit() {
         if (automaticIceRestarts >= MAX_AUTOMATIC_ICE_RESTARTS) {
-            Log.w(TAG, "Not restarting ICE again after " + MAX_AUTOMATIC_ICE_RESTARTS + " tries over " + sessionId);
+            AppLog.w(TAG, "Not restarting ICE again after " + MAX_AUTOMATIC_ICE_RESTARTS + " tries over " + sessionId);
         } else if (restartIceNow()) {
             automaticIceRestarts++;
         }
@@ -320,7 +320,7 @@ public class PeerConnectionWrapper {
     private void rollbackUnansweredOffer() {
         PeerConnection connection = peerConnection;
         if (connection != null && connection.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
-            Log.d(TAG, "No answer to the offer, rolling back over " + sessionId + " " + videoStreamType);
+            AppLog.d(TAG, "No answer to the offer, rolling back over " + sessionId + " " + videoStreamType);
             connection.setLocalDescription(new RollbackObserver(this::restartIceIfStillBroken),
                                            new SessionDescription(SessionDescription.Type.ROLLBACK, ""));
         }
@@ -456,7 +456,7 @@ public class PeerConnectionWrapper {
                 iterator.next().getValue().setVolume(volume);
             } catch (IllegalStateException exception) {
                 iterator.remove();
-                Log.w(TAG, "Remote audio track was already disposed", exception);
+                AppLog.w(TAG, "Remote audio track was already disposed", exception);
             }
         }
     }
@@ -475,10 +475,10 @@ public class PeerConnectionWrapper {
         try {
             String trackId = audioTrack.id();
             audioTrack.setVolume(volume);
-            Log.d(TAG, "Remote audio volume " + volume + " for track " + trackId + " over " + sessionId);
+            AppLog.d(TAG, "Remote audio volume " + volume + " for track " + trackId + " over " + sessionId);
             remoteAudioTracks.put(trackId, audioTrack);
         } catch (IllegalStateException exception) {
-            Log.w(TAG, "Remote audio track was already disposed", exception);
+            AppLog.w(TAG, "Remote audio track was already disposed", exception);
         }
     }
 
@@ -489,7 +489,7 @@ public class PeerConnectionWrapper {
                 remoteAudioTracks.remove(trackId);
             }
         } catch (IllegalStateException exception) {
-            Log.w(TAG, "Remote audio track was already disposed", exception);
+            AppLog.w(TAG, "Remote audio track was already disposed", exception);
         }
     }
 
@@ -512,9 +512,9 @@ public class PeerConnectionWrapper {
             // called outside the lock. Nulling peerConnection above causes those callbacks to
             // return early once they acquire the lock.
             connectionToClose.close();
-            Log.d(TAG, "Disposed PeerConnection");
+            AppLog.d(TAG, "Disposed PeerConnection");
         } else {
-            Log.d(TAG, "PeerConnection is null.");
+            AppLog.d(TAG, "PeerConnection is null.");
         }
 
         synchronized (this) {
@@ -527,7 +527,7 @@ public class PeerConnectionWrapper {
                 } catch (IllegalStateException e) {
                     label = "<disposed>";
                 }
-                Log.d(TAG, "Disposed DataChannel " + label);
+                AppLog.d(TAG, "Disposed DataChannel " + label);
 
                 dataChannel.unregisterObserver();
                 dataChannel.dispose();
@@ -582,7 +582,7 @@ public class PeerConnectionWrapper {
         DataChannel statusDataChannel = dataChannels.get("status");
         if (statusDataChannel == null || statusDataChannel.state() != DataChannel.State.OPEN ||
             !pendingDataChannelMessages.isEmpty()) {
-            Log.d(TAG, "Queuing data channel message (" + dataChannelMessage + ") " + sessionId);
+            AppLog.d(TAG, "Queuing data channel message (" + dataChannelMessage + ") " + sessionId);
 
             pendingDataChannelMessages.add(dataChannelMessage);
 
@@ -594,12 +594,12 @@ public class PeerConnectionWrapper {
 
     private void sendWithoutQueuing(DataChannel statusDataChannel, DataChannelMessageDto dataChannelMessage) {
         try {
-            Log.d(TAG, "Sending data channel message (" + dataChannelMessage + ") " + sessionId);
+            AppLog.d(TAG, "Sending data channel message (" + dataChannelMessage + ") " + sessionId);
 
             ByteBuffer buffer = ByteBuffer.wrap(LoganSquare.serialize(dataChannelMessage).getBytes());
             statusDataChannel.send(new DataChannel.Buffer(buffer, false));
         } catch (Exception e) {
-            Log.w(TAG, "Failed to send data channel message");
+            AppLog.w(TAG, "Failed to send data channel message");
         }
     }
 
@@ -657,7 +657,7 @@ public class PeerConnectionWrapper {
 
             if (hasSid(remoteSid) && !remoteSid.equals(sid) && connection.getRemoteDescription() != null) {
                 // The owner of the connection replaces it when the "sid" changes; see isReplacedByOffer().
-                Log.w(TAG, "Ignoring offer with sid " + remoteSid + " for connection " + sid + " " + sessionId);
+                AppLog.w(TAG, "Ignoring offer with sid " + remoteSid + " for connection " + sid + " " + sessionId);
                 return;
             }
 
@@ -666,7 +666,7 @@ public class PeerConnectionWrapper {
             if (connection.signalingState() == PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
                 // Offer collision. The web client gives way (a browser rolls back its own offer by itself), so this
                 // side keeps its offer: two sides that give way would answer crossed offers.
-                Log.d(TAG, "Offer collision, keeping own offer over " + sessionId);
+                AppLog.d(TAG, "Offer collision, keeping own offer over " + sessionId);
                 return;
             }
 
@@ -690,7 +690,7 @@ public class PeerConnectionWrapper {
             if (connection.signalingState() != PeerConnection.SignalingState.HAVE_LOCAL_OFFER) {
                 // The own offer was rolled back or lost a collision, so the sides disagree about ICE credentials.
                 // A new offer brings them back in sync.
-                Log.w(TAG, "Answer without own offer, restarting ICE over " + sessionId + " " + videoStreamType);
+                AppLog.w(TAG, "Answer without own offer, restarting ICE over " + sessionId + " " + videoStreamType);
                 runOnTimer(PeerConnectionWrapper.this::restartIceWithinLimit);
                 return;
             }
@@ -705,7 +705,7 @@ public class PeerConnectionWrapper {
         // Clients that do not send a "sid" (older ones) are treated as matching.
         private boolean isFromOtherConnection(String remoteSid) {
             if (hasSid(remoteSid) && !remoteSid.equals(sid)) {
-                Log.d(TAG, "Ignoring message with sid " + remoteSid + " for connection " + sid + " " + sessionId);
+                AppLog.d(TAG, "Ignoring message with sid " + remoteSid + " for connection " + sid + " " + sessionId);
                 return true;
             }
             return false;
@@ -775,7 +775,7 @@ public class PeerConnectionWrapper {
             }
 
             if (buffer.binary) {
-                Log.d(TAG, "Received binary data channel message over " + dataChannelLabel + " " + sessionId);
+                AppLog.d(TAG, "Received binary data channel message over " + dataChannelLabel + " " + sessionId);
                 return;
             }
 
@@ -783,13 +783,13 @@ public class PeerConnectionWrapper {
             final byte[] bytes = new byte[data.capacity()];
             data.get(bytes);
             String strData = new String(bytes);
-            Log.d(TAG, "Received data channel message (" + strData + ") over " + dataChannelLabel + " " + sessionId);
+            AppLog.d(TAG, "Received data channel message (" + strData + ") over " + dataChannelLabel + " " + sessionId);
 
             DataChannelMessageDto dataChannelMessage;
             try {
                 dataChannelMessage = LoganSquare.parse(strData, DataChannelMessageDto.class);
             } catch (IOException e) {
-                Log.d(TAG, "Failed to parse data channel message");
+                AppLog.d(TAG, "Failed to parse data channel message");
 
                 return;
             }
@@ -848,7 +848,7 @@ public class PeerConnectionWrapper {
                 return;
             }
 
-            Log.d("iceConnectionChangeTo: ", iceConnectionState.name() + " over " + peerConnection.hashCode() + " " + sessionId);
+            AppLog.d("iceConnectionChangeTo: ", iceConnectionState.name() + " over " + peerConnection.hashCode() + " " + sessionId);
 
             peerConnectionNotifier.notifyIceConnectionStateChanged(iceConnectionState);
             handleIceStateForRestart(iceConnectionState);
@@ -861,24 +861,24 @@ public class PeerConnectionWrapper {
 
         @Override
         public void onIceGatheringChange(PeerConnection.IceGatheringState iceGatheringState) {
-            Log.i(IceDiagnostics.TAG, "Gathering " + iceGatheringState + " over " + sessionId + " "
+            AppLog.i(IceDiagnostics.TAG, "Gathering " + iceGatheringState + " over " + sessionId + " "
                 + videoStreamType + " sid=" + sid);
         }
 
         @Override
         public void onIceCandidateError(IceCandidateErrorEvent event) {
-            Log.w(IceDiagnostics.TAG, "Candidate error over " + sessionId + " " + videoStreamType + " sid=" + sid
+            AppLog.w(IceDiagnostics.TAG, "Candidate error over " + sessionId + " " + videoStreamType + " sid=" + sid
                 + " url=" + event.url + " code=" + event.errorCode + " text=" + event.errorText);
         }
 
         @Override
         public void onIceCandidate(IceCandidate iceCandidate) {
             if (IceDiagnostics.isLoopbackCandidate(iceCandidate.sdp)) {
-                Log.i(IceDiagnostics.TAG, "Skipping loopback candidate over " + sessionId + " " + videoStreamType);
+                AppLog.i(IceDiagnostics.TAG, "Skipping loopback candidate over " + sessionId + " " + videoStreamType);
                 return;
             }
             NCSignalingMessageDto ncSignalingMessage = createBaseSignalingMessage("candidate");
-            Log.i(IceDiagnostics.TAG, "Sending candidate " + IceDiagnostics.describeCandidate(iceCandidate.sdp)
+            AppLog.i(IceDiagnostics.TAG, "Sending candidate " + IceDiagnostics.describeCandidate(iceCandidate.sdp)
                 + " server=" + iceCandidate.serverUrl + " over " + sessionId + " " + videoStreamType
                 + " sid=" + ncSignalingMessage.getSid());
             NCMessagePayloadDto ncMessagePayload = new NCMessagePayloadDto();
@@ -902,7 +902,7 @@ public class PeerConnectionWrapper {
 
         @Override
         public void onAddStream(MediaStream mediaStream) {
-            Log.d(TAG, "onAddStream audio=" + mediaStream.audioTracks.size() + " video=" + mediaStream.videoTracks.size()
+            AppLog.d(TAG, "onAddStream audio=" + mediaStream.audioTracks.size() + " video=" + mediaStream.videoTracks.size()
                 + " over " + sessionId + " " + videoStreamType);
             synchronized (PeerConnectionWrapper.this) {
                 stream = mediaStream;
@@ -944,13 +944,13 @@ public class PeerConnectionWrapper {
 
                 DataChannel oldDataChannel = dataChannels.get(dataChannelLabel);
                 if (oldDataChannel == dataChannel) {
-                    Log.w(TAG, "Data channel with label " + dataChannelLabel + " added again");
+                    AppLog.w(TAG, "Data channel with label " + dataChannelLabel + " added again");
 
                     return;
                 }
 
                 if (oldDataChannel != null) {
-                    Log.w(TAG, "Data channel with label " + dataChannelLabel + " exists");
+                    AppLog.w(TAG, "Data channel with label " + dataChannelLabel + " exists");
 
                     // Remove the old entry first so that removePeerConnection() cannot iterate over
                     // a channel that we are about to dispose (it would throw when calling label() on it).
@@ -979,7 +979,7 @@ public class PeerConnectionWrapper {
         @Override
         public void onAddTrack(RtpReceiver rtpReceiver, MediaStream[] mediaStreams) {
             MediaStreamTrack track = rtpReceiver.track();
-            Log.d(TAG, "onAddTrack " + (track == null ? null : track.kind()) + " streams=" + mediaStreams.length
+            AppLog.d(TAG, "onAddTrack " + (track == null ? null : track.kind()) + " streams=" + mediaStreams.length
                 + " over " + sessionId + " " + videoStreamType);
             synchronized (PeerConnectionWrapper.this) {
                 if (track instanceof AudioTrack) {
@@ -1011,7 +1011,7 @@ public class PeerConnectionWrapper {
                     t.stop();
                 }
             }
-            Log.d(TAG, "Stop all Transceivers for MEDIA_TYPE_VIDEO.");
+            AppLog.d(TAG, "Stop all Transceivers for MEDIA_TYPE_VIDEO.");
         }
     }
 
@@ -1043,7 +1043,7 @@ public class PeerConnectionWrapper {
 
         @Override
         public void onSetFailure(String s) {
-            Log.w(TAG, "Rollback failed over " + sessionId + ": " + s);
+            AppLog.w(TAG, "Rollback failed over " + sessionId + ": " + s);
         }
     }
 
@@ -1052,13 +1052,13 @@ public class PeerConnectionWrapper {
 
         @Override
         public void onCreateFailure(String s) {
-            Log.d(TAG, "SDPObserver createFailure: " + s + " over " + sessionId);
+            AppLog.d(TAG, "SDPObserver createFailure: " + s + " over " + sessionId);
 
         }
 
         @Override
         public void onSetFailure(String s) {
-            Log.d(TAG,"SDPObserver setFailure: " + s + " over " + sessionId);
+            AppLog.d(TAG,"SDPObserver setFailure: " + s + " over " + sessionId);
         }
 
         @Override
