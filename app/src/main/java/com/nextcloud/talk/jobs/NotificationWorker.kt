@@ -38,7 +38,6 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.net.toUri
-import androidx.emoji2.text.EmojiCompat
 import androidx.work.Data
 import androidx.work.Worker
 import androidx.work.WorkerParameters
@@ -373,7 +372,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                     .setSubText(baseUrl)
                     .setShowWhen(true)
                     .setWhen(pushMessage.timestamp)
-                    .setContentTitle(EmojiCompat.get().process(pushMessage.subject))
+                    .setContentTitle(SafeEmoji.process(pushMessage.subject))
                     // auto cancel is set to false because notification (including sound) should continue while
                     // CallNotificationActivity is active
                     .setAutoCancel(false)
@@ -521,17 +520,24 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
                 override fun onNext(notificationOverall: NotificationOverall) {
                     // everything that needs the network is loaded here, before the notification is written
-                    val update = prepareUpdate(intent, notificationOverall.ocs!!.notification)
-                    if (update.ncNotification != null) {
-                        showNotification(intent, update.ncNotification, update)
-                        catchUpPushedRoom(update.threadId)
+                    var threadId: Long? = null
+                    try {
+                        val update = prepareUpdate(intent, notificationOverall.ocs!!.notification)
+                        threadId = update.threadId
+                        if (update.ncNotification != null) {
+                            showNotification(intent, update.ncNotification, update)
+                            catchUpPushedRoom(threadId)
+                        }
+                    } catch (e: RuntimeException) {
+                        // the first notification is shown: a failed load must not skip the catch-up of the room
+                        Log.e(TAG, "Failed to enrich the notification", e)
+                        catchUpPushedRoom(threadId)
                     }
                 }
 
                 override fun onError(e: Throwable) {
                     if (PushNotificationDecision.showFromSubjectAfterFailure(notified)) {
-                        setContentsFromPushNotificationSubject()
-                        showNotification(intent, null)
+                        showSubjectFallback(intent)
                     }
 
                     // without the server notification the thread id is unknown — still catch up
@@ -561,6 +567,17 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             showNotification(intent, null)
         } catch (e: RuntimeException) {
             Log.e(TAG, "Failed to show the notification from the push subject", e)
+        }
+    }
+
+    /** The repeat of the first show after a failed request must not throw out of the error handler. */
+    @Suppress("TooGenericExceptionCaught")
+    private fun showSubjectFallback(intent: Intent) {
+        try {
+            setContentsFromPushNotificationSubject()
+            showNotification(intent, null)
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "Failed to show the notification from the push subject after a failed request", e)
         }
     }
 
