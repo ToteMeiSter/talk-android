@@ -367,6 +367,10 @@
     <string name="nc_not_now">Не сейчас</string>
     <string name="nc_notification_channel">канал уведомлений %1$s на %2$s</string>
     <string name="nc_notification_channel_calls">Звонки</string>
+    <string name="nc_notification_channel_calls_while_in_call">Входящие во время звонка</string>
+    <string name="nc_notification_channel_calls_while_in_call_description">Уведомление о входящем вызове, когда идёт другой звонок</string>
+    <string name="nc_call_notification_answer">Ответить</string>
+    <string name="nc_call_notification_decline">Отклонить</string>
     <string name="nc_notification_channel_calls_description">Уведомление о входящих вызовах</string>
     <string name="nc_notification_channel_messages">Сообщения</string>
     <string name="nc_notification_channel_messages_description">Уведомления о входящих сообщениях</string>
