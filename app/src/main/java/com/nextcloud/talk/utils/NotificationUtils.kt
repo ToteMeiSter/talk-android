@@ -51,8 +51,20 @@ object NotificationUtils {
         NOTIFICATION_CHANNEL_MESSAGES_V4,
         NOTIFICATION_CHANNEL_CALLS_V5,
         NOTIFICATION_CHANNEL_CALLS_ONGOING_V1,
+        NOTIFICATION_CHANNEL_CALLS_WHILE_IN_CALL_V1,
         NOTIFICATION_CHANNEL_UPLOADS
     }
+
+    /**
+     * The channel of an incoming call: during another call a heads-up with one short sound and a vibration, else the
+     * looping ringtone.
+     */
+    fun incomingCallChannel(duringCall: Boolean): NotificationChannels =
+        if (duringCall) {
+            NotificationChannels.NOTIFICATION_CHANNEL_CALLS_WHILE_IN_CALL_V1
+        } else {
+            NotificationChannels.NOTIFICATION_CHANNEL_CALLS_V5
+        }
 
     const val DEFAULT_CALL_RINGTONE_URI =
         "android.resource://" + BuildConfig.APPLICATION_ID + "/raw/librem_by_feandesign_call"
@@ -72,7 +84,8 @@ object NotificationUtils {
         context: Context,
         notificationChannel: Channel,
         sound: Uri?,
-        audioAttributes: AudioAttributes?
+        audioAttributes: AudioAttributes?,
+        vibrate: Boolean = false
     ) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -95,6 +108,7 @@ object NotificationUtils {
             channel.enableLights(true)
             channel.lightColor = R.color.colorPrimary
             channel.setSound(sound, audioAttributes)
+            channel.enableVibration(vibrate)
             channel.setBypassDnd(false)
 
             notificationManager.createNotificationChannel(channel)
@@ -119,6 +133,28 @@ object NotificationUtils {
             ),
             soundUri,
             audioAttributes
+        )
+    }
+
+    /**
+     * An incoming call while another call is going on: one short sound and a vibration, not the looping ringtone
+     * over the voices of the call. The notification is a heads-up with Answer and Decline buttons.
+     */
+    private fun createCallWhileInCallNotificationChannel(context: Context) {
+        createNotificationChannel(
+            context,
+            Channel(
+                NotificationChannels.NOTIFICATION_CHANNEL_CALLS_WHILE_IN_CALL_V1.name,
+                context.resources.getString(R.string.nc_notification_channel_calls_while_in_call),
+                context.resources.getString(R.string.nc_notification_channel_calls_while_in_call_description),
+                true
+            ),
+            android.media.RingtoneManager.getDefaultUri(android.media.RingtoneManager.TYPE_NOTIFICATION),
+            AudioAttributes.Builder()
+                .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                .setUsage(AudioAttributes.USAGE_NOTIFICATION)
+                .build(),
+            vibrate = true
         )
     }
 
@@ -179,6 +215,7 @@ object NotificationUtils {
     fun registerNotificationChannels(context: Context, appPreferences: AppPreferences) {
         createCallsNotificationChannel(context, appPreferences)
         createOngoingCallNotificationChannel(context)
+        createCallWhileInCallNotificationChannel(context)
         createMessagesNotificationChannel(context, appPreferences)
         createUploadsNotificationChannel(context)
     }

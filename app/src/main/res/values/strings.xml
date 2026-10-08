@@ -452,6 +452,10 @@ How to translate with transifex:
     <string name="nc_call_on_hold_message">%1$s put the call on hold</string>
     <string name="nc_call_back_from_hold_message">%1$s is back in the call</string>
     <string name="nc_notification_channel_calls_ongoing">Ongoing call</string>
+    <string name="nc_notification_channel_calls_while_in_call">Incoming calls during a call</string>
+    <string name="nc_notification_channel_calls_while_in_call_description">Notify about an incoming call while another call is going on</string>
+    <string name="nc_call_notification_answer">Answer</string>
+    <string name="nc_call_notification_decline">Decline</string>
     <string name="nc_notification_channel_messages">Messages</string>
     <string name="nc_notification_channel_uploads">Uploads</string>
     <string name="nc_notification_channel_calls_description">Notify about incoming calls</string>
