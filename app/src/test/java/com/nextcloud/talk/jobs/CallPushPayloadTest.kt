@@ -53,6 +53,29 @@ class CallPushPayloadTest {
     }
 
     @Test
+    fun stalePushRingsOnlyWhenTheServerConfirmsTheCall() {
+        assertEquals(CallPushPayload.CallState.RING, CallPushPayload.stateOfStalePush(true))
+        assertEquals(CallPushPayload.CallState.MISSED, CallPushPayload.stateOfStalePush(false))
+        assertEquals(CallPushPayload.CallState.MISSED, CallPushPayload.stateOfStalePush(null))
+    }
+
+    @Test
+    fun stageOneRingsFreshPushShowsNothingForStalePushAndKeepsE2eeFirst() {
+        assertEquals(
+            CallPushPayload.Stage1Action.RING,
+            CallPushPayload.stage1Action(stale = false, endToEndEncrypted = false)
+        )
+        assertEquals(
+            CallPushPayload.Stage1Action.ASK_SERVER,
+            CallPushPayload.stage1Action(stale = true, endToEndEncrypted = false)
+        )
+        assertEquals(
+            CallPushPayload.Stage1Action.END_TO_END_ENCRYPTED,
+            CallPushPayload.stage1Action(stale = true, endToEndEncrypted = true)
+        )
+    }
+
+    @Test
     fun callWithoutCacheIsAnAnswerableAudioCall() {
         val call = CallPushPayload.IncomingCall.fromPush(TOKEN, SUBJECT)
 

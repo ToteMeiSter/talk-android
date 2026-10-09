@@ -52,6 +52,31 @@ object CallPushPayload {
             null -> CallState.UNKNOWN
         }
 
+    /** What stage 1 does with a call push. */
+    enum class Stage1Action {
+        /** Ring from the push at once; stage 2 checks that the call is still going on. */
+        RING,
+
+        /** Old push: show nothing, stage 2 asks the server and rings or reports "missed call". */
+        ASK_SERVER,
+
+        /** The calls are end-to-end encrypted, which the app cannot answer: own notification, no stage 2. */
+        END_TO_END_ENCRYPTED
+    }
+
+    fun stage1Action(stale: Boolean, endToEndEncrypted: Boolean): Stage1Action =
+        when {
+            endToEndEncrypted -> Stage1Action.END_TO_END_ENCRYPTED
+            stale -> Stage1Action.ASK_SERVER
+            else -> Stage1Action.RING
+        }
+
+    /**
+     * A stale push is not shown before the server is asked: its age may come from a device clock that runs ahead.
+     * It rings only if the server confirms the call; otherwise, also without an answer, it is a missed call.
+     */
+    fun stateOfStalePush(hasCall: Boolean?): CallState = if (hasCall == true) CallState.RING else CallState.MISSED
+
     /**
      * The incoming call as the notification and the call screens need it.
      *
