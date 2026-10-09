@@ -38,6 +38,7 @@ import com.nextcloud.talk.R
 import com.nextcloud.talk.account.AccountVerificationActivity
 import com.nextcloud.talk.diagnosis.buildDiagnosisElements
 import com.nextcloud.talk.diagnosis.toMarkdown
+import com.nextcloud.talk.data.network.NetDiag
 import com.nextcloud.talk.errorhandling.ExceptionHandler
 import com.nextcloud.talk.logger.LoggerImpl
 import com.nextcloud.talk.account.BrowserLoginActivity
@@ -225,7 +226,12 @@ class NextcloudTalkApplication :
         installExceptionHandler()
 
         ProcessLifecycleOwner.get().lifecycle.addObserver(object : DefaultLifecycleObserver {
+            override fun onStart(owner: LifecycleOwner) {
+                NetDiag.event("app foreground (process onStart)", applicationContext)
+            }
+
             override fun onStop(owner: LifecycleOwner) {
+                NetDiag.event("app background (process onStop)", applicationContext)
                 val ts = System.currentTimeMillis()
                 Log.d(TAG, "ProcessLifecycle onStop: saving lockTimestamp=$ts")
                 appPreferences.setLockTimestamp(ts)
