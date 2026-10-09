@@ -116,6 +116,49 @@ object PushNotificationDecision {
             else -> Stage2Failure.SUBJECT_FALLBACK
         }
 
+    /**
+     * GreedyScheduler starts stage 2 in the process at once, because its network callback does not report that the
+     * system closed the network of the app (Huawei, screen off: BLOCKED). The expedited job that JobScheduler holds
+     * for the same work gets the network, but WorkManager cancels it as soon as the run in the process ends. So a run
+     * that JobScheduler did not start waits while the network is closed. A run of JobScheduler has the network.
+     */
+    fun shouldWaitForNetwork(startedByJobScheduler: Boolean, networkBlocked: Boolean): Boolean =
+        !startedByJobScheduler && networkBlocked
+
+    /**
+     * Result of [waitForOpenNetwork].
+     *
+     * @param waitedMs time spent in the wait
+     * @param opened the network was open when the wait ended
+     */
+    data class NetworkWait(val waitedMs: Long, val opened: Boolean)
+
+    /**
+     * Waits until [isBlocked] says no, the stage is stopped or [maxMs] pass. Never waits longer than [maxMs]: after
+     * it stage 2 goes on as without the wait.
+     */
+    @Suppress("LongParameterList")
+    fun waitForOpenNetwork(
+        isBlocked: () -> Boolean,
+        isStopped: () -> Boolean,
+        now: () -> Long,
+        sleep: (Long) -> Unit,
+        maxMs: Long = NETWORK_WAIT_MAX_MS,
+        stepMs: Long = NETWORK_WAIT_STEP_MS
+    ): NetworkWait {
+        val start = now()
+        var waited = 0L
+        while (isBlocked()) {
+            if (isStopped() || waited >= maxMs) return NetworkWait(waited, opened = false)
+            sleep(minOf(stepMs, maxMs - waited))
+            waited = now() - start
+        }
+        return NetworkWait(waited, opened = true)
+    }
+
+    const val NETWORK_WAIT_MAX_MS = 10_000L
+    const val NETWORK_WAIT_STEP_MS = 250L
+
     /** Time of the notification: the one stage 1 took, so that every run of stage 2 writes the same notification. */
     fun pushTimestamp(stage1Time: Long, now: Long): Long = if (stage1Time > 0L) stage1Time else now
 

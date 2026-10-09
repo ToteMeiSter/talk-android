@@ -11,6 +11,7 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.net.ConnectivityManager
 import android.net.NetworkCapabilities
+import android.net.NetworkInfo
 import android.os.Build
 import android.os.PowerManager
 import com.nextcloud.talk.logger.AppLog as Log
@@ -60,6 +61,19 @@ object PushDiag {
                 if (withPower) " ${describePowerRestrictions(context)}" else ""
         } catch (e: RuntimeException) {
             "network state unavailable: ${describe(e)}"
+        }
+
+    /**
+     * The system closes the network of the app (`NetworkInfo` BLOCKED). The network callback of WorkManager does not
+     * report it on some Huawei devices, `getActiveNetworkInfo` does. False if the state is not known.
+     */
+    @Suppress("TooGenericExceptionCaught", "DEPRECATION")
+    fun isNetworkBlocked(context: Context): Boolean =
+        try {
+            context.getSystemService(ConnectivityManager::class.java)?.activeNetworkInfo?.detailedState ==
+                NetworkInfo.DetailedState.BLOCKED
+        } catch (e: RuntimeException) {
+            false
         }
 
     /**
