@@ -59,15 +59,25 @@ object PushNotificationDecision {
         /** Nothing to show without the server: hand everything to stage 2. */
         SERVER,
 
+        /**
+         * An incoming call: shown from the push subject, the room token and the cached conversation, then stage 2
+         * only asks the server whether the call is still going on.
+         */
+        CALL_FROM_PUSH,
+
         /** A type nobody handles. */
         NONE
     }
 
-    /** Stage 1 needs no network. Only a chat message has a text in the push subject that can be shown at once. */
+    /**
+     * Stage 1 needs no network. A chat message has a text in the push subject that can be shown at once, a call
+     * rings from the push subject and the room token.
+     */
     fun stage1Route(type: String?): Stage1Route =
         when (type) {
             TYPE_CHAT -> Stage1Route.SUBJECT_THEN_SERVER
-            TYPE_ROOM, TYPE_RECORDING, TYPE_REMINDER, TYPE_REMOTE_TALK_SHARE, TYPE_CALL -> Stage1Route.SERVER
+            TYPE_ROOM, TYPE_RECORDING, TYPE_REMINDER, TYPE_REMOTE_TALK_SHARE -> Stage1Route.SERVER
+            TYPE_CALL -> Stage1Route.CALL_FROM_PUSH
             else -> Stage1Route.NONE
         }
 

@@ -87,13 +87,6 @@ class CallPushRetryPolicyTest {
     }
 
     @Test
-    fun lateRoomWithoutCallDoesNotRing() {
-        assertTrue(CallPushRetryPolicy.shouldRingAfterRoomFetch(hasCall = true, elapsedMs = 20_000))
-        assertFalse(CallPushRetryPolicy.shouldRingAfterRoomFetch(hasCall = false, elapsedMs = 20_000))
-        assertFalse(CallPushRetryPolicy.shouldRingAfterRoomFetch(hasCall = true, elapsedMs = 45_000))
-    }
-
-    @Test
     fun firstPollNetworkErrorKeepsTheCall() {
         assertEquals(PollFailureOutcome.RETRY, CallPushRetryPolicy.pollFailureOutcome(UnknownHostException(), 0))
         assertEquals(
@@ -126,8 +119,7 @@ class CallPushRetryPolicyTest {
             var calls = 0
             val room = CallPushRetryPolicy.fetchRoomWithRetry<FakeRoom>(
                 elapsedMs = { currentTime },
-                isStopped = { false },
-                hasCall = { it.hasCall }
+                isStopped = { false }
             ) {
                 calls++
                 if (calls == 1) awaitCancellation() else FakeRoom()
@@ -144,8 +136,7 @@ class CallPushRetryPolicyTest {
             var calls = 0
             val room = CallPushRetryPolicy.fetchRoomWithRetry<FakeRoom>(
                 elapsedMs = { currentTime },
-                isStopped = { false },
-                hasCall = { it.hasCall }
+                isStopped = { false }
             ) {
                 calls++
                 throw UnknownHostException()
@@ -161,8 +152,7 @@ class CallPushRetryPolicyTest {
             var calls = 0
             val room = CallPushRetryPolicy.fetchRoomWithRetry<FakeRoom>(
                 elapsedMs = { currentTime },
-                isStopped = { false },
-                hasCall = { it.hasCall }
+                isStopped = { false }
             ) {
                 calls++
                 throw http(404)
@@ -172,29 +162,27 @@ class CallPushRetryPolicyTest {
         }
 
     @Test
-    fun delayedRoomWithoutCallIsDropped() =
+    fun delayedRoomWithoutCallIsReturnedNotDropped() =
         runTest {
             var calls = 0
             val room = CallPushRetryPolicy.fetchRoomWithRetry<FakeRoom>(
                 elapsedMs = { currentTime },
-                isStopped = { false },
-                hasCall = { it.hasCall }
+                isStopped = { false }
             ) {
                 calls++
                 if (calls == 1) throw UnknownHostException() else FakeRoom(hasCall = false)
             }
-            assertNull(room)
+            assertEquals(false, room?.hasCall)
         }
 
     @Test
-    fun firstTryRoomWithoutCallIsDropped() =
+    fun firstTryRoomWithoutCallIsReturnedNotDropped() =
         runTest {
             val room = CallPushRetryPolicy.fetchRoomWithRetry<FakeRoom>(
                 elapsedMs = { currentTime },
-                isStopped = { false },
-                hasCall = { it.hasCall }
+                isStopped = { false }
             ) { FakeRoom(hasCall = false) }
-            assertNull(room)
+            assertEquals(false, room?.hasCall)
         }
 
     @Test
@@ -202,20 +190,10 @@ class CallPushRetryPolicyTest {
         runTest {
             val room = CallPushRetryPolicy.fetchRoomWithRetry<FakeRoom>(
                 elapsedMs = { currentTime },
-                isStopped = { false },
-                hasCall = { it.hasCall }
+                isStopped = { false }
             ) { FakeRoom(hasCall = true) }
             assertTrue(room != null)
         }
-
-    @Test
-    fun ringingNeedsARunningCallOnEveryAnswer() {
-        assertTrue(CallPushRetryPolicy.shouldRingForRoom(hasCall = true, retried = false, elapsedMs = 3_600_000))
-        assertFalse(CallPushRetryPolicy.shouldRingForRoom(hasCall = false, retried = false, elapsedMs = 0))
-        assertTrue(CallPushRetryPolicy.shouldRingForRoom(hasCall = true, retried = true, elapsedMs = 20_000))
-        assertFalse(CallPushRetryPolicy.shouldRingForRoom(hasCall = true, retried = true, elapsedMs = 45_000))
-        assertFalse(CallPushRetryPolicy.shouldRingForRoom(hasCall = false, retried = true, elapsedMs = 1_000))
-    }
 
     @Test
     fun stoppedWorkerStopsTheLoop() =
@@ -223,8 +201,7 @@ class CallPushRetryPolicyTest {
             var calls = 0
             val room = CallPushRetryPolicy.fetchRoomWithRetry<FakeRoom>(
                 elapsedMs = { currentTime },
-                isStopped = { calls >= 1 },
-                hasCall = { it.hasCall }
+                isStopped = { calls >= 1 }
             ) {
                 calls++
                 throw UnknownHostException()

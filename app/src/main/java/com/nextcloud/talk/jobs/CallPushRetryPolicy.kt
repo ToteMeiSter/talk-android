@@ -81,21 +81,6 @@ object CallPushRetryPolicy {
 
     fun shouldRetry(e: Throwable, elapsedMs: Long, windowMs: Long): Boolean = elapsedMs < windowMs && isTransient(e)
 
-    /**
-     * After a delayed room lookup a room without a running call means the call has already ended: ringing for it
-     * would be a ghost call. Past the window the push is stale whatever the room says.
-     */
-    fun shouldRingAfterRoomFetch(hasCall: Boolean, elapsedMs: Long): Boolean =
-        hasCall && elapsedMs < ROOM_FETCH_WINDOW_MS
-
-    /**
-     * Whether the call rings for the room the lookup returned. The room of a call that has ended never rings, also
-     * on the first answer: stage 2 of a push can start long after the push, and the server knows if the call runs.
-     * After a retry the window of the lookup must also be left.
-     */
-    fun shouldRingForRoom(hasCall: Boolean, retried: Boolean, elapsedMs: Long): Boolean =
-        hasCall && (!retried || shouldRingAfterRoomFetch(hasCall, elapsedMs))
-
     /** Outcome of the participants poll that ended with an error. */
     enum class PollFailureOutcome {
         /** Keep the notification and poll again. */
@@ -121,27 +106,21 @@ object CallPushRetryPolicy {
     /**
      * Loads the room of a call push, retrying transient failures inside [ROOM_FETCH_WINDOW_MS]. Every attempt is
      * limited to [ATTEMPT_TIMEOUT_MS]; an attempt timeout is a transient failure while window is left.
-     * Returns null when the call must not be shown (permanent error, window used up, worker stopped, or the room
-     * has no running call).
+     * Returns the room of any successful answer, also one without a running call: "the server says the call is over"
+     * and "no answer" are different outcomes, the caller decides on the first. Returns null when there is no answer
+     * (permanent error, window used up, worker stopped).
      */
     @Suppress("TooGenericExceptionCaught", "ReturnCount")
     suspend fun <T : Any> fetchRoomWithRetry(
         elapsedMs: () -> Long,
         isStopped: () -> Boolean,
-        hasCall: (T) -> Boolean,
         fetch: suspend () -> T?
     ): T? {
-        var retried = false
         while (!isStopped()) {
             val remaining = ROOM_FETCH_WINDOW_MS - elapsedMs()
             if (remaining <= 0) return null
             try {
-                val room = withTimeout(minOf(remaining, ATTEMPT_TIMEOUT_MS)) { fetch() }
-                return if (room != null && !shouldRingForRoom(hasCall(room), retried, elapsedMs())) {
-                    null
-                } else {
-                    room
-                }
+                return withTimeout(minOf(remaining, ATTEMPT_TIMEOUT_MS)) { fetch() }
             } catch (_: TimeoutCancellationException) {
                 // attempt timed out; the loop decides by the remaining window whether to try again
             } catch (e: CancellationException) {
@@ -149,7 +128,6 @@ object CallPushRetryPolicy {
             } catch (e: Exception) {
                 if (!shouldRetry(e, elapsedMs(), ROOM_FETCH_WINDOW_MS)) return null
             }
-            retried = true
             delay(RETRY_DELAY_MS)
         }
         return null

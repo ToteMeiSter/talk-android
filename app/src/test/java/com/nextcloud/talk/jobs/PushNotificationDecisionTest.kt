@@ -64,9 +64,14 @@ class PushNotificationDecisionTest {
 
     @Test
     fun otherTalkPushesThatNeedTheServerWaitForStageTwo() {
-        listOf("room", "recording", "reminder", "remote_talk_share", "call").forEach {
+        listOf("room", "recording", "reminder", "remote_talk_share").forEach {
             assertEquals(it, Stage1Route.SERVER, PushNotificationDecision.stage1Route(it))
         }
+    }
+
+    @Test
+    fun callPushRingsFromThePushInStageOne() {
+        assertEquals(Stage1Route.CALL_FROM_PUSH, PushNotificationDecision.stage1Route("call"))
     }
 
     @Test
