@@ -353,7 +353,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
      * conversation, or from audio-call defaults without a cache. No request: the process of a backgrounded app can be
      * frozen and its network closed right after the push, and a call shown only after the server answered never rang.
      *
-     * @return true if the call rings, so that stage 2 has to check that the call is still going on
+     * @return true if stage 2 has to run: it checks that the ringing call is still going on, or for an old push
+     *  (nothing shown) decides between ringing and "missed call"
      */
     @Suppress("TooGenericExceptionCaught")
     private fun showCallFromPush(): Boolean {
@@ -371,25 +372,29 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             ?: CallPushPayload.IncomingCall.fromPush(roomToken, pushMessage.subject)
 
         val sentTime = inputData.getLong(BundleKeys.KEY_NOTIFICATION_PUSH_SENT_TIME, 0L)
-        val shown = when {
-            CallPushPayload.isStale(sentTime, pushMessage.timestamp) -> {
-                Log.d(TAG, "Call push is older than ${CallPushPayload.MAX_PUSH_AGE_MS} ms, showing it as missed")
-                showMissedCallNotification(pushedCall.displayName, requireRingingCall = false)
-                false
-            }
-
-            CapabilitiesUtil.isCallEndToEndEncryptionEnabled(capabilities) -> {
+        // the age is the phone clock against the FCM time: a clock that runs ahead must not drop a live call
+        val stale = CallPushPayload.isStale(sentTime, pushMessage.timestamp)
+        val shown = when (
+            CallPushPayload.stage1Action(stale, CapabilitiesUtil.isCallEndToEndEncryptionEnabled(capabilities))
+        ) {
+            CallPushPayload.Stage1Action.END_TO_END_ENCRYPTED -> {
                 showEndToEndEncryptionUnsupportedNotification(pushedCall.displayName, roomToken)
+                null
+            }
+
+            CallPushPayload.Stage1Action.ASK_SERVER -> {
+                Log.d(TAG, "Call push is older than ${CallPushPayload.MAX_PUSH_AGE_MS} ms, asking the server first")
                 false
             }
 
-            else -> {
+            CallPushPayload.Stage1Action.RING -> {
                 showCallNotification(pushedCall, isUpdate = false)
                 true
             }
         }
-        subjectShown = shown
-        return shown
+        // stage 2 reads "subject shown = false" as: nothing rings yet, the push is old
+        subjectShown = shown == true
+        return shown != null
     }
 
     /**
@@ -397,7 +402,9 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
      * stays untouched when there is no answer; its timeout ends the ringing.
      */
     private fun handleCallPushMessage() {
-        if (!NotificationUtils.isNotificationVisible(context, pushMessage.timestamp.toInt())) {
+        // nothing is shown by stage 1 for an old push (subjectShown=false): the server decides
+        val stalePush = !subjectShown
+        if (!stalePush && !NotificationUtils.isNotificationVisible(context, pushMessage.timestamp.toInt())) {
             // declined, answered, deleted or timed out before the system gave the app the network
             Log.d(TAG, "Call notification is gone, not asking the server")
             return
@@ -405,16 +412,21 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         val userBeingCalled = runBlocking { userManager.getUserWithId(user.id!!) }
         val room = fetchRoomForCall(userBeingCalled)
 
-        when (CallPushPayload.stateOf(room?.hasCall)) {
+        val state = if (stalePush) {
+            CallPushPayload.stateOfStalePush(room?.hasCall)
+        } else {
+            CallPushPayload.stateOf(room?.hasCall)
+        }
+        when (state) {
             CallPushPayload.CallState.RING ->
-                if (NotificationUtils.isNotificationVisible(context, pushMessage.timestamp.toInt())) {
+                if (stalePush || NotificationUtils.isNotificationVisible(context, pushMessage.timestamp.toInt())) {
                     showCallNotification(
                         CallPushPayload.IncomingCall.fromConversation(
                             room!!,
                             pushMessage.subject,
                             userBeingCalled?.capabilities?.spreedCapability
                         ),
-                        isUpdate = true
+                        isUpdate = !stalePush
                     )
                     checkIfCallIsActive(room)
                 } else {
@@ -423,7 +435,10 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 }
 
             CallPushPayload.CallState.MISSED -> {
-                showMissedCallNotification(room!!.displayName)
+                showMissedCallNotification(
+                    room?.displayName ?: pushMessage.subject,
+                    requireRingingCall = !stalePush
+                )
                 removeNotification(pushMessage.timestamp.toInt())
             }
 
