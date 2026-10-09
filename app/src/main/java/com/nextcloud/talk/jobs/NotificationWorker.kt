@@ -260,6 +260,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     /** Stage 2: the requests to the server. The system starts it when it lets the app use the network. */
     private fun runNetworkStage() {
         initNcApiAndCredentials()
+        waitForOpenNetwork()
         subjectShown = inputData.getBoolean(BundleKeys.KEY_NOTIFICATION_SUBJECT_SHOWN, false)
         notified = subjectShown
         if (pushMessage.type == TYPE_CHAT) {
@@ -296,11 +297,46 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         return if (sentTime > 0L) "${System.currentTimeMillis() - sentTime} ms" else "unknown"
     }
 
+    /**
+     * JobScheduler gives the worker the network of its job (`SystemJobService.onStartJob`, WorkManager 2.11.2),
+     * GreedyScheduler starts it without one. A job without an assigned network looks the same, so the answer is
+     * "jobScheduler" or "unknown", never "greedy".
+     */
+    private fun starterText() = if (network != null) STARTER_JOB else STARTER_UNKNOWN
+
+    private fun sinceStage1Text(): String {
+        val stage1Time = inputData.getLong(BundleKeys.KEY_NOTIFICATION_STAGE1_TIME, 0L)
+        return if (stage1Time > 0L) "${System.currentTimeMillis() - stage1Time} ms" else "unknown"
+    }
+
     /** Network state of the app and the delay between the sending of the push and this run, for the settings log. */
     private fun logPushDiagnostics(networkStage: Boolean) {
+        val starter = if (networkStage) "starter=${starterText()} sinceStage1=${sinceStage1Text()} " else ""
         PushDiag.i(
             "doWork: stage=${stageNumber(networkStage)} sinceSent=${sinceSentText()} runAttempt=$runAttemptCount " +
+                starter +
                 PushDiag.describeNetworkAndProcess(applicationContext, withPower = true)
+        )
+    }
+
+    /**
+     * Stage 2 that GreedyScheduler started while the system keeps the network closed would fail at once, and the
+     * end of the run makes WorkManager cancel the expedited job of JobScheduler that opens the network
+     * (`Schedulers.registerRescheduling`). The run waits for that job instead, for at most
+     * [PushNotificationDecision.NETWORK_WAIT_MAX_MS]; after that it goes on as before (subject fallback).
+     */
+    private fun waitForOpenNetwork() {
+        val blocked = PushDiag.isNetworkBlocked(applicationContext)
+        if (!PushNotificationDecision.shouldWaitForNetwork(network != null, blocked)) return
+        val result = PushNotificationDecision.waitForOpenNetwork(
+            isBlocked = { PushDiag.isNetworkBlocked(applicationContext) },
+            isStopped = { isStopped },
+            now = SystemClock::elapsedRealtime,
+            sleep = SystemClock::sleep
+        )
+        PushDiag.i(
+            "stage 2 network wait: starter=${starterText()} waited=${result.waitedMs} ms opened=${result.opened} " +
+                "stopped=$isStopped ${PushDiag.describeNetworkAndProcess(applicationContext)}"
         )
     }
 
@@ -1753,6 +1789,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         fun networkStageTag(userId: Long?): String = "push-stage2-$userId"
         private const val STAGE_LOCAL = 1
         private const val STAGE_NETWORK = 2
+        private const val STARTER_JOB = "jobScheduler"
+        private const val STARTER_UNKNOWN = "unknown"
         private const val VIBRATION_ON_MS = 400L
         private const val VIBRATION_PAUSE_MS = 200L
         private const val TYPE_CHAT = PushNotificationDecision.TYPE_CHAT
