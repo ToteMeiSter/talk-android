@@ -217,8 +217,9 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     override fun onStop() {
-        val notificationManager = NotificationManagerCompat.from(context)
-        notificationManager.cancel(notificationTimestamp!!)
+        if (isFinishing) {
+            NotificationManagerCompat.from(context).cancel(notificationTimestamp!!)
+        }
         super.onStop()
     }
 
