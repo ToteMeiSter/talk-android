@@ -403,9 +403,11 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             null
         }
         val capabilities = userBeingCalled?.capabilities?.spreedCapability
-        val pushedCall = cachedConversation
-            ?.let { CallPushPayload.IncomingCall.fromConversation(it, pushMessage.subject, capabilities) }
-            ?: CallPushPayload.IncomingCall.fromPush(roomToken, pushMessage.subject)
+        val pushedCall = (
+            cachedConversation
+                ?.let { CallPushPayload.IncomingCall.fromConversation(it, pushMessage.subject, capabilities) }
+                ?: CallPushPayload.IncomingCall.fromPush(roomToken, pushMessage.subject)
+            ).withUnknownCallType()
 
         val sentTime = inputData.getLong(BundleKeys.KEY_NOTIFICATION_PUSH_SENT_TIME, 0L)
         // the age is the phone clock against the FCM time: a clock that runs ahead must not drop a live call
@@ -603,7 +605,9 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                         .setIsVideo(isVideoCall)
                 )
         }
-        val notification = notificationBuilder.build()
+        val notification = notificationBuilder
+            .addExtras(call.toNotificationExtras(user.id!!, pushMessage.timestamp.toInt()))
+            .build()
         if (!duringCall) {
             notification.flags = notification.flags or Notification.FLAG_INSISTENT
         }
