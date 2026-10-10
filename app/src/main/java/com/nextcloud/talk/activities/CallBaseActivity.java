@@ -15,13 +15,13 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.PowerManager;
-import android.util.Log;
 import android.util.Rational;
 import android.view.View;
 import android.view.Window;
 import android.view.WindowManager;
 
 import com.nextcloud.talk.BuildConfig;
+import com.nextcloud.talk.logger.AppLog;
 
 import androidx.activity.OnBackPressedCallback;
 
@@ -109,7 +109,7 @@ public abstract class CallBaseActivity extends BaseActivity {
     @Override
     public void onTopResumedActivityChanged(boolean isTopResumedActivity) {
         super.onTopResumedActivityChanged(isTopResumedActivity);
-        Log.d(TAG, "onTopResumedActivityChanged: isTopResumedActivity=" + isTopResumedActivity
+        AppLog.d(TAG, "onTopResumedActivityChanged: isTopResumedActivity=" + isTopResumedActivity
                 + " isInPictureInPictureMode=" + isInPictureInPictureMode() + screenState());
         if (isTopResumedActivity || isInPictureInPictureMode()
                 || !isPipModePossible()
@@ -125,13 +125,13 @@ public abstract class CallBaseActivity extends BaseActivity {
     @Override
     public void onStart() {
         super.onStart();
-        Log.d(TAG, "onStart" + screenState());
+        AppLog.d(TAG, "onStart" + screenState());
     }
 
     @Override
     public void onPause() {
         super.onPause();
-        Log.d(TAG, "onPause: isInPipMode=" + isInPipMode
+        AppLog.d(TAG, "onPause: isInPipMode=" + isInPipMode
                 + " isInPictureInPictureMode=" + isInPictureInPictureMode() + screenState());
         // Fallback for API 26-28 where onTopResumedActivityChanged doesn't exist.
         // On API 29+, onTopResumedActivityChanged already handled this.
@@ -147,13 +147,13 @@ public abstract class CallBaseActivity extends BaseActivity {
     @Override
     public void onStop() {
         super.onStop();
-        Log.d(TAG, "onStop: isInPipMode=" + isInPipMode + " isFinishing=" + isFinishing() + screenState());
+        AppLog.d(TAG, "onStop: isInPipMode=" + isInPipMode + " isFinishing=" + isFinishing() + screenState());
     }
 
     @Override
     protected void onUserLeaveHint() {
         super.onUserLeaveHint();
-        Log.d(TAG, "onUserLeaveHint: isInPipMode=" + isInPipMode
+        AppLog.d(TAG, "onUserLeaveHint: isInPipMode=" + isInPipMode
                 + " isInPictureInPictureMode=" + isInPictureInPictureMode());
         // On API 26-30, enter PIP manually. On API 31+ auto-enter handles swipe-up/home, and plain
         // backgrounding (e.g. task switch) keeps the activity alive on its own. Deliberately no
@@ -183,10 +183,10 @@ public abstract class CallBaseActivity extends BaseActivity {
     }
 
     void enterPipMode() {
-        Log.d(TAG, "enterPipMode: isPipModePossible=" + isPipModePossible() + " isInPipMode=" + isInPipMode
+        AppLog.d(TAG, "enterPipMode: isPipModePossible=" + isPipModePossible() + " isInPipMode=" + isInPipMode
                 + screenState());
         if (!isInteractive()) {
-            Log.d(TAG, "enterPipMode skipped: the screen is off, this is not the user leaving the call");
+            AppLog.d(TAG, "enterPipMode skipped: the screen is off, this is not the user leaving the call");
             return;
         }
         enableKeyguard();
@@ -194,10 +194,10 @@ public abstract class CallBaseActivity extends BaseActivity {
             Rational pipRatio = new Rational(300, 500);
             mPictureInPictureParamsBuilder.setAspectRatio(pipRatio);
             boolean entered = enterPictureInPictureMode(mPictureInPictureParamsBuilder.build());
-            Log.d(TAG, "enterPictureInPictureMode returned: " + entered);
+            AppLog.d(TAG, "enterPictureInPictureMode returned: " + entered);
         } else {
             // If PIP is not available, move to background instead of finishing
-            Log.d(TAG, "PIP is not available, moving call to background.");
+            AppLog.d(TAG, "PIP is not available, moving call to background.");
             moveTaskToBack(true);
         }
     }
