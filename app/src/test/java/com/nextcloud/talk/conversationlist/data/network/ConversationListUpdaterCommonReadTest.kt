@@ -34,7 +34,7 @@ class ConversationListUpdaterCommonReadTest {
     @Test
     fun `last common read is written to the conversation`() =
         runTest {
-            updater.updateLastCommonRead(stored.internalId, NEWER)
+            updater.updateLastCommonRead(ACCOUNT_ID, stored.internalId, NEWER)
 
             verifyBlocking(conversationsDao) { updateLastCommonRead(stored.internalId, NEWER) }
         }
@@ -43,10 +43,10 @@ class ConversationListUpdaterCommonReadTest {
     fun `a room list response requested before the read marker answer does not lower it`() =
         runTest {
             val requestedAt = System.nanoTime()
-            updater.updateLastCommonRead(stored.internalId, NEWER)
+            updater.updateLastCommonRead(ACCOUNT_ID, stored.internalId, NEWER)
 
             assertEquals(NEWER, preserve(serverLastCommonRead = OLDER, requestedAt).lastCommonReadMessage)
-            // the guard stays for every response of that age, it is not used up by the first one
+            // every response of that age is held back, the first one does not use the value up
             assertEquals(NEWER, preserve(serverLastCommonRead = OLDER, requestedAt).lastCommonReadMessage)
         }
 
@@ -54,35 +54,42 @@ class ConversationListUpdaterCommonReadTest {
     fun `a room list response requested before the read marker answer still brings a higher value`() =
         runTest {
             val requestedAt = System.nanoTime()
-            updater.updateLastCommonRead(stored.internalId, NEWER)
+            updater.updateLastCommonRead(ACCOUNT_ID, stored.internalId, NEWER)
 
             assertEquals(NEWEST, preserve(serverLastCommonRead = NEWEST, requestedAt).lastCommonReadMessage)
         }
 
     @Test
-    fun `a room list response requested after the read marker answer applies unchanged and ends the guard`() =
+    fun `a room list response requested after the read marker answer applies unchanged and supersedes older ones`() =
         runTest {
             val requestedBefore = System.nanoTime()
-            updater.updateLastCommonRead(stored.internalId, NEWER)
+            updater.updateLastCommonRead(ACCOUNT_ID, stored.internalId, NEWER)
             val requestedAfter = System.nanoTime()
 
             // someone marked a message as unread, so the server really reports less now
             assertEquals(OLDER, preserve(serverLastCommonRead = OLDER, requestedAfter).lastCommonReadMessage)
-            // the guard is gone: not even an older request is held back any more
-            assertEquals(OLDER, preserve(serverLastCommonRead = OLDER, requestedBefore).lastCommonReadMessage)
+            // once that response is written, nothing older is applied over it: it is left out whole
+            updater.recordServerWrite(listOf(stored.internalId), requestedAfter)
+            assertEquals(emptyList<ConversationEntity>(), preserveAll(serverLastCommonRead = OLDER, requestedBefore))
         }
 
     @Test
-    fun `a room without a stored common read takes the server value`() {
-        assertEquals(OLDER, preserve(serverLastCommonRead = OLDER, System.nanoTime()).lastCommonReadMessage)
-    }
+    fun `a room without a stored common read takes the server value`() =
+        runTest {
+            assertEquals(OLDER, preserve(serverLastCommonRead = OLDER, System.nanoTime()).lastCommonReadMessage)
+        }
 
-    private fun preserve(serverLastCommonRead: Int, requestedAtNanos: Long): ConversationEntity =
+    private suspend fun preserve(serverLastCommonRead: Int, requestedAtNanos: Long): ConversationEntity =
+        preserveAll(serverLastCommonRead, requestedAtNanos).single()
+
+    // the stored entry holds the value the read marker answer wrote, as the database does
+    private suspend fun preserveAll(serverLastCommonRead: Int, requestedAtNanos: Long): List<ConversationEntity> =
         updater.preservePendingLocalState(
-            previousConversations = mapOf(stored.internalId to stored),
+            previousConversations = mapOf(stored.internalId to stored.copy(lastCommonReadMessage = NEWER)),
             conversationsFromServer = listOf(stored.copy(lastCommonReadMessage = serverLastCommonRead)),
-            requestedAtNanos = requestedAtNanos
-        ).single()
+            requestedAtNanos = requestedAtNanos,
+            ownUserId = "me"
+        )
 
     companion object {
         private const val ACCOUNT_ID = 7L

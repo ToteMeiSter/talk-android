@@ -116,7 +116,7 @@ class ReadMarkerSyncWorker(context: Context, workerParams: WorkerParameters) :
     private suspend fun storeLastCommonRead(userId: Long, roomToken: String, response: Response<*>) {
         val lastCommonRead = lastCommonReadOf(response) ?: return
         runCatching {
-            conversationListUpdater.updateLastCommonRead("$userId@$roomToken", lastCommonRead)
+            conversationListUpdater.updateLastCommonRead(userId, "$userId@$roomToken", lastCommonRead)
         }.onFailure { throwable ->
             if (throwable is CancellationException) throw throwable
             Log.w(TAG, "Last common read $lastCommonRead for room $roomToken could not be stored: $throwable")

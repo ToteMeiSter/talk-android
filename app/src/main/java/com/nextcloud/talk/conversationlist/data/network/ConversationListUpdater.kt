@@ -15,6 +15,7 @@ import com.nextcloud.talk.data.database.dao.ChatMessagesDao
 import com.nextcloud.talk.data.database.dao.ConversationsDao
 import com.nextcloud.talk.data.database.model.ConversationEntity
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -51,22 +52,131 @@ class ConversationListUpdater @Inject constructor(
     private val pendingReadMarkers = ConcurrentHashMap<String, Int>()
 
     /**
-     * The last message read by all participants as the server reported it in the answer to a read
-     * marker, with the time that answer arrived. A room list response whose request started before
-     * that moment can carry an older value, so the merge keeps this one against it.
+     * A set of fields that one writer sets without writing the whole entry. Such a writer is not
+     * ordered against a response by the entry mark of [recordServerWrite], as a response may be
+     * newer than the entry and still older than the fields.
      */
-    private data class CommonReadWrite(val lastCommonRead: Int, val writtenAtNanos: Long)
+    enum class FieldGroup {
+        /** The last message of the conversation, its activity and the unread count, as a catch-up writes them. */
+        PREVIEW,
 
-    private val commonReadWrites = ConcurrentHashMap<String, CommonReadWrite>()
+        /** The last message read by all participants, as the answer to a read marker reports it. */
+        COMMON_READ
+    }
 
     /**
-     * Held by a sync (or single room refresh) from the merge through the write of its response, and by
-     * [updateLastCommonRead] for its record and write. Without it a read marker answer arriving
-     * between the merge and the write is not seen by the merge and then overwritten by the write.
-     * With it, either the answer is recorded before the merge and the merge keeps it, or its write
-     * comes after the sync's write.
+     * The [System.nanoTime] at which the request behind the newest state written to a room's entry
+     * was started: the request of the last room list sync or single room refresh that wrote it. A
+     * server response replaces the whole entry, so one whose request was started before that
+     * moment is older than what is stored and is not applied; see [isSuperseded]. The same is kept
+     * per [FieldGroup] for writers of a part of the entry. In memory only: the clock is monotonic
+     * within a process, and a process starts with nothing in flight. The marks are never removed,
+     * they are bounded by the rooms seen in the process, and the mark of a deleted room must stay
+     * so that a late response does not bring the room back.
      */
-    val syncWriteLock = Mutex()
+    private val serverWriteStarts = ConcurrentHashMap<String, Long>()
+
+    private val fieldGroupWriteStarts = ConcurrentHashMap<Pair<String, FieldGroup>, Long>()
+
+    private val serverWriteLocks = ConcurrentHashMap<Long, Mutex>()
+
+    /**
+     * Runs [block] holding the lock of [accountId] that orders writes of server state. A sync or
+     * single room refresh holds it from reading the stored entries through writing its response and
+     * [recordServerWrite], and a catch-up holds it for its write: otherwise a response could be
+     * judged against a state that changes before the response is written.
+     */
+    suspend fun <T> withServerWriteLock(accountId: Long, block: suspend () -> T): T =
+        serverWriteLocks.getOrPut(accountId) { Mutex() }.withLock { block() }
+
+    /**
+     * Whether the room's entry holds state from a request started after [requestedAtNanos], so a
+     * response to a request started then is older than the entry.
+     */
+    fun isSuperseded(internalConversationId: String, requestedAtNanos: Long): Boolean =
+        isNewer(serverWriteStarts[internalConversationId], requestedAtNanos)
+
+    /**
+     * Whether any write to the room, of the whole entry or of a [FieldGroup], was made from a
+     * request started after [requestedAtNanos]. Such a write shows that the account has the room.
+     */
+    fun hasNewerWrite(internalConversationId: String, requestedAtNanos: Long): Boolean =
+        isSuperseded(internalConversationId, requestedAtNanos) ||
+            FieldGroup.entries.any { isNewer(fieldGroupWriteStarts[internalConversationId to it], requestedAtNanos) }
+
+    private fun isNewer(writtenAt: Long?, requestedAtNanos: Long): Boolean =
+        writtenAt != null && requestedAtNanos - writtenAt < 0
+
+    /**
+     * Records that the entries of [internalConversationIds] were written, or deleted, from state
+     * requested at [requestedAtNanos]; with a [fieldGroup], that only its fields were written. Call
+     * it after the write, holding [withServerWriteLock].
+     */
+    fun recordServerWrite(
+        internalConversationIds: Collection<String>,
+        requestedAtNanos: Long,
+        fieldGroup: FieldGroup? = null
+    ) {
+        internalConversationIds.forEach { id ->
+            if (fieldGroup == null) {
+                serverWriteStarts.merge(id, requestedAtNanos, ::newerOf)
+            } else {
+                fieldGroupWriteStarts.merge(id to fieldGroup, requestedAtNanos, ::newerOf)
+            }
+        }
+    }
+
+    private fun newerOf(recorded: Long, new: Long): Long = if (new - recorded > 0) new else recorded
+
+    /**
+     * Gives the fields of [group] the values of the stored entry: a response older than their
+     * write must not revert them. [ownUserId] is null when the account has no user id.
+     */
+    private suspend fun keepStored(
+        group: FieldGroup,
+        serverItem: ConversationEntity,
+        stored: ConversationEntity,
+        ownUserId: String?
+    ): ConversationEntity =
+        when (group) {
+            FieldGroup.PREVIEW -> serverItem.copy(
+                lastMessage = stored.lastMessage,
+                lastActivity = stored.lastActivity,
+                unreadMessages = unreadFollowingMarker(serverItem, stored, ownUserId)
+            )
+
+            // a response requested before the answer can only bring a higher value, never a lower one
+            FieldGroup.COMMON_READ -> serverItem.copy(
+                lastCommonReadMessage = maxOf(serverItem.lastCommonReadMessage, stored.lastCommonReadMessage)
+            )
+        }
+
+    /**
+     * The unread count is not a server value but follows from the last read message, so a pair of
+     * the two must come from one state. With the marker of the response unchanged the stored count
+     * stands; otherwise it is derived again from the marker of the response. Where that is not
+     * possible the count of the response is taken, for a lower marker the higher of it and the
+     * stored count: both are lower bounds, the response does not know the new messages and the
+     * stored count was derived from a higher marker.
+     */
+    private suspend fun unreadFollowingMarker(
+        serverItem: ConversationEntity,
+        stored: ConversationEntity,
+        ownUserId: String?
+    ): Int {
+        if (serverItem.lastReadMessage == stored.lastReadMessage) {
+            return stored.unreadMessages
+        }
+        val derived = ownUserId?.let {
+            deriveUnreadMessagesCount(serverItem.internalId, it, serverItem.lastReadMessage)
+        } ?: UNREAD_COUNT_UNKNOWN
+        return when {
+            derived != UNREAD_COUNT_UNKNOWN -> derived
+            serverItem.lastReadMessage < stored.lastReadMessage ->
+                maxOf(serverItem.unreadMessages, stored.unreadMessages)
+            else -> serverItem.unreadMessages
+        }
+    }
 
     /**
      * Favorite flags applied locally but not yet confirmed by a server response; guarded in the
@@ -183,11 +293,18 @@ class ConversationListUpdater @Inject constructor(
      * Stores the last message read by all participants, which the server reports in the response to a
      * read marker, so that the read check marks of the user's own messages are up to date without a
      * further request.
+     *
+     * The value can be lower than the stored one: marking a chat as unread lowers it on the server.
+     * It is recorded as [FieldGroup.COMMON_READ] with the time the answer arrived, so a room list
+     * response requested before it keeps the value, and one requested after it applies unchanged.
      */
-    suspend fun updateLastCommonRead(internalConversationId: String, lastCommonRead: Int) {
-        syncWriteLock.withLock {
-            commonReadWrites[internalConversationId] = CommonReadWrite(lastCommonRead, System.nanoTime())
-            conversationsDao.updateLastCommonRead(internalConversationId, lastCommonRead)
+    suspend fun updateLastCommonRead(accountId: Long, internalConversationId: String, lastCommonRead: Int) {
+        withServerWriteLock(accountId) {
+            // the write and its mark are one step even if the caller gives up meanwhile
+            withContext(NonCancellable) {
+                conversationsDao.updateLastCommonRead(internalConversationId, lastCommonRead)
+                recordServerWrite(listOf(internalConversationId), System.nanoTime(), FieldGroup.COMMON_READ)
+            }
         }
     }
 
@@ -321,17 +438,31 @@ class ConversationListUpdater @Inject constructor(
      * the server state applies unchanged, so the server stays the authority.
      *
      * [requestedAtNanos] is the [System.nanoTime] at which the request that produced
-     * [conversationsFromServer] was started; it tells whether such a response can predate the last
-     * message read by all participants that a read marker answer reported.
+     * [conversationsFromServer] was started. A room whose entry already holds state from a later
+     * request is left out of the result, as the response is older than the entry: the pending
+     * guards above only cover what the user changed, not two server responses that arrive in a
+     * different order than their requests were made. The fields of a [FieldGroup] written from a
+     * later request keep their stored values. [ownUserId] is the user of the account, for the
+     * unread count that has to be derived again; without it the count of the response is taken.
      */
-    fun preservePendingLocalState(
+    suspend fun preservePendingLocalState(
         previousConversations: Map<String, ConversationEntity>,
         conversationsFromServer: List<ConversationEntity>,
-        requestedAtNanos: Long
+        requestedAtNanos: Long,
+        ownUserId: String?
     ): List<ConversationEntity> =
-        conversationsFromServer.map { serverItem ->
+        conversationsFromServer.mapNotNull { serverItem ->
+            if (isSuperseded(serverItem.internalId, requestedAtNanos)) {
+                Log.d(
+                    TAG,
+                    "Dropping a response for room ${serverItem.token}: requested at $requestedAtNanos, " +
+                        "older than the stored entry written from a request at " +
+                        "${serverWriteStarts[serverItem.internalId]}"
+                )
+                return@mapNotNull null
+            }
             val previous = previousConversations[serverItem.internalId]
-                ?: return@map serverItem
+                ?: return@mapNotNull serverItem
             var guarded = guardPendingReadMarker(serverItem, previous)
             guarded = guardPendingUnread(guarded, previous)
             guarded = guardPendingFavorite(guarded, previous)
@@ -339,25 +470,28 @@ class ConversationListUpdater @Inject constructor(
             guarded = guardPendingHiddenPinnedId(guarded, previous)
             guarded = guardPendingArchived(guarded, previous)
             guarded = guardPendingTags(guarded, previous)
-            guardLastCommonRead(guarded, requestedAtNanos)
+            keepNewerFieldGroups(guarded, previous, requestedAtNanos, ownUserId)
         }
 
-    /**
-     * The server only moves the last message read by all participants back when someone marks a
-     * message as unread, so a response that is older than the value taken from a read marker answer
-     * must not lower it. A response whose request started after that answer arrived is current and
-     * applies unchanged, which also ends the guard for the room - nothing stays pinned.
-     */
-    private fun guardLastCommonRead(serverItem: ConversationEntity, requestedAtNanos: Long): ConversationEntity {
-        val write = commonReadWrites[serverItem.internalId] ?: return serverItem
-
-        return if (requestedAtNanos - write.writtenAtNanos < 0) {
-            serverItem.copy(lastCommonReadMessage = maxOf(serverItem.lastCommonReadMessage, write.lastCommonRead))
-        } else {
-            commonReadWrites.remove(serverItem.internalId, write)
-            serverItem
+    private suspend fun keepNewerFieldGroups(
+        serverItem: ConversationEntity,
+        previous: ConversationEntity,
+        requestedAtNanos: Long,
+        ownUserId: String?
+    ): ConversationEntity =
+        FieldGroup.entries.fold(serverItem) { item, group ->
+            val writtenAt = fieldGroupWriteStarts[item.internalId to group]
+            if (isNewer(writtenAt, requestedAtNanos)) {
+                Log.d(
+                    TAG,
+                    "Keeping $group of room ${item.token}: requested at $requestedAtNanos, older than " +
+                        "its write from a request at $writtenAt"
+                )
+                keepStored(group, item, previous, ownUserId)
+            } else {
+                item
+            }
         }
-    }
 
     private fun guardPendingReadMarker(
         serverItem: ConversationEntity,
@@ -471,7 +605,10 @@ class ConversationListUpdater @Inject constructor(
      * Concurrency: runs inside the per-room catch-up mutex and writes via a single guarded UPDATE
      * that only applies when the derived state is newer than the stored one, so a concurrently
      * finishing room list sync can neither be overwritten with older data nor interleave with a
-     * read-modify-write. Thread catch-ups don't describe the room itself and are skipped.
+     * read-modify-write. It also holds [withServerWriteLock] and records its write as
+     * [FieldGroup.PREVIEW], from the start of the request that fetched the message, so a response
+     * requested before that request cannot revert these fields. Thread catch-ups don't describe the
+     * room itself and are skipped.
      *
      * Unlike [preservePendingLocalState], this path doesn't merge against a server response, so a
      * pending read marker can't be guarded the same way — but the marker is still consulted as the
@@ -491,26 +628,40 @@ class ConversationListUpdater @Inject constructor(
         if (target.threadId != null || !outcome.persistedNewMessages || newestMessage == null) {
             return
         }
-        val conversation =
-            conversationsDao.getConversationForUser(target.accountId, target.roomToken).first() ?: return
+        withServerWriteLock(target.accountId) {
+            val conversation =
+                conversationsDao.getConversationForUser(target.accountId, target.roomToken).first()
+                    ?: return@withServerWriteLock
 
-        val lastReadMessage = maxOf(
-            conversation.lastReadMessage,
-            pendingReadMarker(target.internalConversationId) ?: 0
-        )
-        val unreadMessages = deriveUnreadMessagesCount(target, lastReadMessage)
-        val updatedRows = conversationsDao.updateConversationFromCatchUp(
-            internalId = conversation.internalId,
-            lastMessageJson = LoganSquare.serialize(newestMessage),
-            lastActivity = newestMessage.timestamp,
-            unreadMessages = unreadMessages
-        )
-        Log.d(
-            TAG,
-            "Conversation list update for room ${target.roomToken} from catch-up " +
-                "(lastActivity=${newestMessage.timestamp}, unread=$unreadMessages): " +
-                if (updatedRows > 0) "applied" else "skipped, stored state is newer"
-        )
+            val lastReadMessage = maxOf(
+                conversation.lastReadMessage,
+                pendingReadMarker(target.internalConversationId) ?: 0
+            )
+            val unreadMessages =
+                deriveUnreadMessagesCount(target.internalConversationId, target.user.userId!!, lastReadMessage)
+            // the write and its mark are one step even if the caller gives up meanwhile
+            val updatedRows = withContext(NonCancellable) {
+                conversationsDao.updateConversationFromCatchUp(
+                    internalId = conversation.internalId,
+                    lastMessageJson = LoganSquare.serialize(newestMessage),
+                    lastActivity = newestMessage.timestamp,
+                    unreadMessages = unreadMessages
+                ).also { rows ->
+                    // a response requested before the request of the message can still lack it
+                    if (rows > 0) {
+                        outcome.newestMessageRequestedAtNanos?.let {
+                            recordServerWrite(listOf(conversation.internalId), it, FieldGroup.PREVIEW)
+                        }
+                    }
+                }
+            }
+            Log.d(
+                TAG,
+                "Conversation list update for room ${target.roomToken} from catch-up " +
+                    "(lastActivity=${newestMessage.timestamp}, unread=$unreadMessages): " +
+                    if (updatedRows > 0) "applied" else "skipped, stored state is newer"
+            )
+        }
     }
 
     /**
@@ -519,9 +670,13 @@ class ConversationListUpdater @Inject constructor(
      * the last read message. Own messages don't count: sending from another device advances the
      * server-side read marker, which the locally cached [lastReadMessage] may lag behind.
      */
-    private suspend fun deriveUnreadMessagesCount(target: ChatMessageSyncer.SyncTarget, lastReadMessage: Int): Int {
+    private suspend fun deriveUnreadMessagesCount(
+        internalConversationId: String,
+        ownUserId: String,
+        lastReadMessage: Int
+    ): Int {
         val latestBlock = if (lastReadMessage > 0) {
-            chatBlocksDao.getLatestChatBlock(target.internalConversationId, null).first()
+            chatBlocksDao.getLatestChatBlock(internalConversationId, null).first()
         } else {
             null
         }
@@ -530,9 +685,9 @@ class ConversationListUpdater @Inject constructor(
 
         return if (blockReachesUnreadBoundary) {
             chatDao.countMessagesNewerThan(
-                internalConversationId = target.internalConversationId,
+                internalConversationId = internalConversationId,
                 messageId = lastReadMessage.toLong(),
-                excludedActorId = target.user.userId!!
+                excludedActorId = ownUserId
             )
         } else {
             UNREAD_COUNT_UNKNOWN

@@ -74,7 +74,7 @@ class ReadMarkerSyncWorkerTest {
         val result = runBlocking { worker().send() }
 
         assertEquals(ListenableWorker.Result.success(), result)
-        verifyBlocking(conversationListUpdater) { updateLastCommonRead("$USER_ID@$ROOM_TOKEN", 2624) }
+        verifyBlocking(conversationListUpdater) { updateLastCommonRead(USER_ID, "$USER_ID@$ROOM_TOKEN", 2624) }
     }
 
     @Test
@@ -84,7 +84,7 @@ class ReadMarkerSyncWorkerTest {
         val result = runBlocking { worker().send() }
 
         assertEquals(ListenableWorker.Result.success(), result)
-        verifyBlocking(conversationListUpdater, never()) { updateLastCommonRead(any(), any()) }
+        verifyBlocking(conversationListUpdater, never()) { updateLastCommonRead(any(), any(), any()) }
     }
 
     @Test
@@ -94,13 +94,13 @@ class ReadMarkerSyncWorkerTest {
         val result = runBlocking { worker().send() }
 
         assertEquals(ListenableWorker.Result.retry(), result)
-        verifyBlocking(conversationListUpdater, never()) { updateLastCommonRead(any(), any()) }
+        verifyBlocking(conversationListUpdater, never()) { updateLastCommonRead(any(), any(), any()) }
     }
 
     @Test
     fun `a failing database write does not send the delivered marker again`() {
         givenMarkerAnswer(responseWithHeader("2624"))
-        wheneverBlocking { conversationListUpdater.updateLastCommonRead(any(), any()) }
+        wheneverBlocking { conversationListUpdater.updateLastCommonRead(any(), any(), any()) }
             .thenThrow(IllegalStateException("database closed"))
 
         val result = runBlocking { worker().send() }

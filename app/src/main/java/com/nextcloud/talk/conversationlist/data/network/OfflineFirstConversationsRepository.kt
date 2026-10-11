@@ -35,6 +35,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -43,9 +44,7 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
-import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -141,15 +140,25 @@ class OfflineFirstConversationsRepository @Inject constructor(
                 val existingEntity = dao.getConversationForUser(user.id!!, model.token).first()
                 model.hiddenUpcomingEvent = existingEntity?.hiddenUpcomingEvent
                 _conversationFlow.emit(model)
-                val previous = existingEntity?.let { mapOf(it.internalId to it) }.orEmpty()
-                conversationListUpdater.syncWriteLock.withLock {
+                // the entry is read again under the lock: a sync may have written it since
+                conversationListUpdater.withServerWriteLock(user.id!!) {
+                    val previous = dao.getConversationForUser(user.id!!, model.token).first()
+                        ?.let { mapOf(it.internalId to it) }.orEmpty()
                     val entityList = conversationListUpdater.preservePendingLocalState(
                         previous,
                         listOf(model.asEntity()),
-                        requestedAtNanos
+                        requestedAtNanos,
+                        user.userId
                     )
                     try {
-                        dao.upsertConversations(user.id!!, entityList)
+                        // the write and its mark are one step even if the caller gives up meanwhile
+                        withContext(NonCancellable) {
+                            dao.upsertConversations(user.id!!, entityList)
+                            conversationListUpdater.recordServerWrite(
+                                entityList.map { it.internalId },
+                                requestedAtNanos
+                            )
+                        }
                     } catch (e: SQLiteConstraintException) {
                         Log.w(TAG, "Skipping conversation upsert for removed account ${user.id}", e)
                     }
@@ -230,12 +239,13 @@ class OfflineFirstConversationsRepository @Inject constructor(
         val accountId = user.id!!
         val includeStatus = modifiedSince == null && isUserStatusAvailable(user)
 
-        val requestedAtNanos = System.nanoTime()
+        var requestedAtNanos = 0L
         val roomList = withRetry(
             retries = NETWORK_FETCH_RETRIES,
             initialDelayMillis = NETWORK_FETCH_RETRY_INITIAL_DELAY_MS,
             maxDelayMillis = NETWORK_FETCH_RETRY_MAX_DELAY_MS
         ) {
+            requestedAtNanos = System.nanoTime()
             network.getRooms(user, user.baseUrl!!, includeStatus, modifiedSince)
                 .subscribeOn(Schedulers.io())
                 .observeOn(AndroidSchedulers.mainThread())
@@ -246,30 +256,42 @@ class OfflineFirstConversationsRepository @Inject constructor(
             it.asEntity(accountId)
         }
 
-        val previousConversations = dao.getConversationsForUser(accountId).first()
-            .associateBy { it.internalId }
+        val previousConversations = conversationListUpdater.withServerWriteLock(accountId) {
+            val stored = dao.getConversationsForUser(accountId).first()
+                .associateBy { it.internalId }
 
-        val serverItems = if (includeStatus) {
-            conversationsFromSync
-        } else {
-            keepCachedStatus(conversationsFromSync, previousConversations)
-        }
+            val serverItems = if (includeStatus) {
+                conversationsFromSync
+            } else {
+                keepCachedStatus(conversationsFromSync, stored)
+            }
 
-        // merge and write as one step with respect to a last common read arriving from a read marker
-        conversationListUpdater.syncWriteLock.withLock {
-            dao.syncConversationsForUser(
-                accountId = accountId,
-                serverItems = conversationListUpdater.preservePendingLocalState(
-                    previousConversations,
-                    serverItems,
-                    requestedAtNanos
-                ),
-                conversationIdsToDelete = if (roomList.wasDelta) {
-                    emptyList()
-                } else {
-                    determineLeftConversationIds(previousConversations, conversationsFromSync)
-                }
+            // a conversation that holds state from a later request is not one this response can delete
+            val conversationIdsToDelete = if (roomList.wasDelta) {
+                emptyList()
+            } else {
+                determineLeftConversationIds(stored, conversationsFromSync)
+                    .filterNot { conversationListUpdater.hasNewerWrite(it, requestedAtNanos) }
+            }
+            val mergedItems = conversationListUpdater.preservePendingLocalState(
+                stored,
+                serverItems,
+                requestedAtNanos,
+                user.userId
             )
+            // the write and its mark are one step even if the worker's time budget runs out meanwhile
+            withContext(NonCancellable) {
+                dao.syncConversationsForUser(
+                    accountId = accountId,
+                    serverItems = mergedItems,
+                    conversationIdsToDelete = conversationIdsToDelete
+                )
+                conversationListUpdater.recordServerWrite(
+                    mergedItems.map { it.internalId } + conversationIdsToDelete,
+                    requestedAtNanos
+                )
+            }
+            stored
         }
 
         rememberSyncedState(accountId, roomList)
