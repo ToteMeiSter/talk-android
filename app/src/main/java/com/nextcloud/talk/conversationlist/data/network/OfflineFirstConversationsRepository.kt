@@ -43,7 +43,9 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -134,19 +136,23 @@ class OfflineFirstConversationsRepository @Inject constructor(
     override fun getRoom(user: User, roomToken: String): Job =
         scope.launch {
             try {
+                val requestedAtNanos = System.nanoTime()
                 val model = chatNetworkDataSource.getRoom(user, roomToken)
                 val existingEntity = dao.getConversationForUser(user.id!!, model.token).first()
                 model.hiddenUpcomingEvent = existingEntity?.hiddenUpcomingEvent
                 _conversationFlow.emit(model)
                 val previous = existingEntity?.let { mapOf(it.internalId to it) }.orEmpty()
-                val entityList = conversationListUpdater.preservePendingLocalState(
-                    previous,
-                    listOf(model.asEntity())
-                )
-                try {
-                    dao.upsertConversations(user.id!!, entityList)
-                } catch (e: SQLiteConstraintException) {
-                    Log.w(TAG, "Skipping conversation upsert for removed account ${user.id}", e)
+                conversationListUpdater.syncWriteLock.withLock {
+                    val entityList = conversationListUpdater.preservePendingLocalState(
+                        previous,
+                        listOf(model.asEntity()),
+                        requestedAtNanos
+                    )
+                    try {
+                        dao.upsertConversations(user.id!!, entityList)
+                    } catch (e: SQLiteConstraintException) {
+                        Log.w(TAG, "Skipping conversation upsert for removed account ${user.id}", e)
+                    }
                 }
             } catch (e: Exception) {
                 // In case network is offline, the call fails, or getRoom can't resolve a supported
@@ -224,6 +230,7 @@ class OfflineFirstConversationsRepository @Inject constructor(
         val accountId = user.id!!
         val includeStatus = modifiedSince == null && isUserStatusAvailable(user)
 
+        val requestedAtNanos = System.nanoTime()
         val roomList = withRetry(
             retries = NETWORK_FETCH_RETRIES,
             initialDelayMillis = NETWORK_FETCH_RETRY_INITIAL_DELAY_MS,
@@ -248,18 +255,22 @@ class OfflineFirstConversationsRepository @Inject constructor(
             keepCachedStatus(conversationsFromSync, previousConversations)
         }
 
-        dao.syncConversationsForUser(
-            accountId = accountId,
-            serverItems = conversationListUpdater.preservePendingLocalState(
-                previousConversations,
-                serverItems
-            ),
-            conversationIdsToDelete = if (roomList.wasDelta) {
-                emptyList()
-            } else {
-                determineLeftConversationIds(previousConversations, conversationsFromSync)
-            }
-        )
+        // merge and write as one step with respect to a last common read arriving from a read marker
+        conversationListUpdater.syncWriteLock.withLock {
+            dao.syncConversationsForUser(
+                accountId = accountId,
+                serverItems = conversationListUpdater.preservePendingLocalState(
+                    previousConversations,
+                    serverItems,
+                    requestedAtNanos
+                ),
+                conversationIdsToDelete = if (roomList.wasDelta) {
+                    emptyList()
+                } else {
+                    determineLeftConversationIds(previousConversations, conversationsFromSync)
+                }
+            )
+        }
 
         rememberSyncedState(accountId, roomList)
 
