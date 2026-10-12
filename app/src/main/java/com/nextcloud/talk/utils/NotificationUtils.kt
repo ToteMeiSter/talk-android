@@ -300,17 +300,31 @@ object NotificationUtils {
             .setTimeoutAfter(CALL_NOTIFICATION_TIMEOUT_MS)
 
     fun cancelAllNotificationsForAccount(context: Context?, conversationUser: User) {
-        scanNotifications(context, conversationUser) { notificationManager, statusBarNotification, _ ->
-            notificationManager.cancel(statusBarNotification.id)
+        val cancelled = mutableListOf<Int>()
+        scanNotifications(context, conversationUser) { _, statusBarNotification, _ ->
+            PushDiag.cancel(context!!, "delete-all-push", statusBarNotification.id)
+            cancelled += statusBarNotification.id
         }
+        logCancelScan(context, "delete-all-push", "account=${conversationUser.id}", cancelled)
     }
 
     fun cancelNotification(context: Context?, conversationUser: User, notificationId: Long?) {
-        scanNotifications(context, conversationUser) { notificationManager, statusBarNotification, notification ->
+        val cancelled = mutableListOf<Int>()
+        scanNotifications(context, conversationUser) { _, statusBarNotification, notification ->
             if (notificationId == notification.extras.getLong(BundleKeys.KEY_NOTIFICATION_ID)) {
-                notificationManager.cancel(statusBarNotification.id)
+                PushDiag.cancel(context!!, "delete-push", statusBarNotification.id)
+                cancelled += statusBarNotification.id
             }
         }
+        logCancelScan(context, "delete-push", "serverId=$notificationId", cancelled)
+    }
+
+    /** The scan of a cancel: what was active when it ran and what it took; empty `cancelled` = nothing to remove. */
+    private fun logCancelScan(context: Context?, reason: String, filter: String, cancelled: List<Int>) {
+        context ?: return
+        val active = (context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager)
+            .activeNotifications.toList()
+        PushDiag.cancelScan(reason, filter, active, cancelled)
     }
 
     fun findNotificationForRoom(
@@ -327,13 +341,16 @@ object NotificationUtils {
     }
 
     fun cancelExistingNotificationsForRoom(context: Context?, conversationUser: User, roomTokenOrId: String) {
-        scanNotifications(context, conversationUser) { notificationManager, statusBarNotification, notification ->
+        val cancelled = mutableListOf<Int>()
+        scanNotifications(context, conversationUser) { _, statusBarNotification, notification ->
             if (roomTokenOrId == notification.extras.getString(BundleKeys.KEY_ROOM_TOKEN) &&
                 !notification.extras.getBoolean(BundleKeys.KEY_NOTIFICATION_RESTRICT_DELETION)
             ) {
-                notificationManager.cancel(statusBarNotification.id)
+                PushDiag.cancel(context!!, "chat-opened", statusBarNotification.id)
+                cancelled += statusBarNotification.id
             }
         }
+        logCancelScan(context, "chat-opened", "room=$roomTokenOrId", cancelled)
     }
 
     /** The extras of the active notification with this id, or null when it is not shown. */

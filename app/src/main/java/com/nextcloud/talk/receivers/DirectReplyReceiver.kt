@@ -18,7 +18,6 @@ import android.text.style.ForegroundColorSpan
 import android.util.Log
 import androidx.core.app.ActivityCompat
 import androidx.core.app.NotificationCompat
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.app.Person
 import androidx.core.app.RemoteInput
 import autodagger.AutoInjector
@@ -31,6 +30,7 @@ import com.nextcloud.talk.users.UserManager
 import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.DisplayUtils
 import com.nextcloud.talk.utils.NotificationUtils
+import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_INTERNAL_USER_ID
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_ROOM_TOKEN
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_SYSTEM_NOTIFICATION_ID
@@ -178,7 +178,7 @@ class DirectReplyReceiver : BroadcastReceiver() {
             ) {
                 // Check if notification still exists
                 if (findActiveNotification(systemNotificationId!!) != null) {
-                    NotificationManagerCompat.from(context).notify(systemNotificationId!!, previousBuilder.build())
+                    PushDiag.notify(context, "direct-reply", systemNotificationId!!, previousBuilder.build())
                 }
             }
         }

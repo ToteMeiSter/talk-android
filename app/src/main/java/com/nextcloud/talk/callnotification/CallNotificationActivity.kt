@@ -16,7 +16,6 @@ import android.os.Looper
 import android.util.Log
 import android.view.View
 import android.widget.Toast
-import androidx.core.app.NotificationManagerCompat
 import autodagger.AutoInjector
 import com.nextcloud.talk.R
 import com.nextcloud.talk.activities.CallActivity
@@ -32,6 +31,7 @@ import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.CapabilitiesUtil
 import com.nextcloud.talk.utils.CapabilitiesUtil.hasSpreedFeatureCapability
 import com.nextcloud.talk.utils.NotificationUtils
+import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.SpreedFeatures
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_VOICE_ONLY
@@ -221,7 +221,7 @@ class CallNotificationActivity : CallBaseActivity() {
         // screen), so only a decision of the user removes it: decline, closing the window, e2ee refusal. All of
         // them finish the window. notificationTimestamp is null when the window finished in onCreate.
         if (isFinishing) {
-            notificationTimestamp?.let { NotificationManagerCompat.from(context).cancel(it) }
+            notificationTimestamp?.let { PushDiag.cancel(context, "call-window-finishing", it) }
         }
         leavingScreen = true
         if (handler != null) {

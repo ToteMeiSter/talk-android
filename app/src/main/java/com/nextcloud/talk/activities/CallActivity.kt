@@ -52,7 +52,6 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
-import androidx.core.app.NotificationManagerCompat
 import androidx.core.graphics.drawable.DrawableCompat
 import androidx.core.net.toUri
 import androidx.core.view.ViewCompat
@@ -124,6 +123,7 @@ import com.nextcloud.talk.utils.CapabilitiesUtil.hasSpreedFeatureCapability
 import com.nextcloud.talk.utils.CapabilitiesUtil.isCallRecordingAvailable
 import com.nextcloud.talk.utils.ConversationUtils.checkIfVoiceRoom
 import com.nextcloud.talk.utils.NotificationUtils.getCallRingtoneUri
+import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.ReceiverFlag
 import com.nextcloud.talk.utils.SpreedFeatures
 import com.nextcloud.talk.utils.VibrationUtils.vibrateShort
@@ -745,7 +745,7 @@ class CallActivity : CallBaseActivity() {
             val notificationId = extras.getInt(KEY_NOTIFICATION_TIMESTAMP, 0)
             if (notificationId != 0) {
                 // cancel the notification to stop the call ringing
-                NotificationManagerCompat.from(this).cancel(notificationId)
+                PushDiag.cancel(this, "call-activity-start", notificationId)
             }
         }
         if (extras.containsKey(KEY_IS_BREAKOUT_ROOM)) {

@@ -1543,6 +1543,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 Manifest.permission.POST_NOTIFICATIONS
             ) != PackageManager.PERMISSION_GRANTED
         ) {
+            PushDiag.notifySkippedNoPermission("push", notificationId)
             // here to request the missing permissions, and then overriding
             //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
             //                                          int[] grantResults)
@@ -1550,14 +1551,14 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             // for ActivityCompat#requestPermissions for more details.
             return
         }
-        notificationManager.notify(notificationId, notification)
+        PushDiag.notify(applicationContext, "push", notificationId, notification)
 
         return
     }
 
     private fun removeNotification(notificationId: Int) {
         logger.d(TAG, "removed notification with id $notificationId")
-        notificationManager.cancel(notificationId)
+        PushDiag.cancel(applicationContext, "worker-removeNotification", notificationId)
     }
 
     private fun checkIfCallIsActive(conversation: ConversationModel) {
@@ -1689,14 +1690,10 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                     Manifest.permission.POST_NOTIFICATIONS
                 ) != PackageManager.PERMISSION_GRANTED
             ) {
-                // here to request the missing permissions, and then overriding
-                //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
-                //                                          int[] grantResults)
-                // to handle the case where the user grants the permission. See the documentation
-                // for ActivityCompat#requestPermissions for more details.
+                PushDiag.notifySkippedNoPermission("missed-call", notificationId)
                 return
             }
-            notificationManager.notify(notificationId, notification)
+            PushDiag.notify(applicationContext, "missed-call", notificationId, notification)
             Log.d(TAG, "'you missed a call' notification was created")
         }
     }

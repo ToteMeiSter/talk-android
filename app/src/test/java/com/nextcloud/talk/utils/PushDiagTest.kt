@@ -9,6 +9,7 @@ package com.nextcloud.talk.utils
 import android.app.Application
 import androidx.test.core.app.ApplicationProvider
 import okhttp3.ResponseBody.Companion.toResponseBody
+import com.nextcloud.talk.utils.bundle.BundleKeys
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -119,5 +120,70 @@ class PushDiagTest {
         listOf("standbyBucket=", "powerSave=", "ignoringBatteryOpt=", "backgroundRestricted=")
             .forEach { assertTrue("$it in $text", text.contains(it)) }
         listOf("lightIdle", "lowPowerStandby").forEach { assertFalse("$it in $text", text.contains(it)) }
+    }
+
+    @Test
+    fun notifyLineHasIdsChannelAndAlertState() {
+        val notification = PushDiag.formatNotification(
+            -487209525, 3951L, "MESSAGES_V4", "grp", false, true, "sc1", false, false
+        )
+        val state = PushDiag.formatAlertState(true, 1, 0, 4, true, false, true)
+
+        assertEquals(
+            "id=-487209525 serverId=3951 tag=null channel=MESSAGES_V4 group=grp groupSummary=false " +
+                "onlyAlertOnce=true shortcutId=sc1 bubbleFlag=false bubbleMetadata=false",
+            notification
+        )
+        assertEquals(
+            "enabled=true dnd=ALL ringer=SILENT chImportance=4 chSound=true chBypassDnd=false chVibrate=true",
+            state
+        )
+    }
+
+    @Test
+    fun filterAndRingerNamesAreReadable() {
+        assertEquals("PRIORITY", PushDiag.interruptionFilterName(2))
+        assertEquals("NONE", PushDiag.interruptionFilterName(3))
+        assertEquals("UNKNOWN(9)", PushDiag.interruptionFilterName(9))
+        assertEquals("VIBRATE", PushDiag.ringerModeName(1))
+        assertEquals("UNKNOWN(null)", PushDiag.ringerModeName(null))
+    }
+
+    @Test
+    fun exitLineNamesTheReason() {
+        val line = PushDiag.formatExit(2217, "com.nextcloud.talk2", 3, 1_700_000_000_000L, 400, "lmkd kill")
+
+        assertEquals(
+            "pid=2217 process=com.nextcloud.talk2 reason=LOW_MEMORY at=1700000000000 importance=400 " +
+                "description=lmkd kill",
+            line
+        )
+        assertEquals("FREEZER", PushDiag.exitReasonName(14))
+        assertEquals("UNKNOWN(99)", PushDiag.exitReasonName(99))
+    }
+
+    @Test
+    fun activeListHasSystemIdAndServerId() {
+        assertEquals(
+            "[1/3951/MESSAGES_V4 -2/null/null]",
+            PushDiag.formatActive(
+                listOf(PushDiag.ActiveRef(1, 3951L, "MESSAGES_V4"), PushDiag.ActiveRef(-2, null, null))
+            )
+        )
+    }
+
+    @Test
+    fun notifyThenCancelKeepsTheActiveListInStep() {
+        val context = ApplicationProvider.getApplicationContext<Application>()
+        val notification = androidx.core.app.NotificationCompat.Builder(context, "ch")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .addExtras(android.os.Bundle().apply { putLong(BundleKeys.KEY_NOTIFICATION_ID, 77L) })
+            .build()
+
+        PushDiag.notify(context, "test", 5, notification)
+        assertEquals("[5/77/ch]", PushDiag.describeActive(context))
+
+        PushDiag.cancel(context, "test", 5)
+        assertEquals("[]", PushDiag.describeActive(context))
     }
 }

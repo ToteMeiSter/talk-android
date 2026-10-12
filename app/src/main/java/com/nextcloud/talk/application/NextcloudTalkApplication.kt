@@ -63,6 +63,7 @@ import com.nextcloud.talk.users.UserManager
 import com.nextcloud.talk.utils.ClosedInterfaceImpl
 import com.nextcloud.talk.utils.DeviceUtils
 import com.nextcloud.talk.utils.NotificationUtils
+import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.database.arbitrarystorage.ArbitraryStorageModule
 import com.nextcloud.talk.utils.database.user.UserModule
 import com.nextcloud.talk.utils.preferences.AppPreferences
@@ -168,6 +169,7 @@ class NextcloudTalkApplication :
     //endregion
 
     //region Overridden methods
+    @Suppress("LongMethod")
     override fun onCreate() {
         Log.d(TAG, "onCreate")
         sharedApplication = this
@@ -180,6 +182,8 @@ class NextcloudTalkApplication :
             Log.d(TAG, "Crash process detected — skipping full Application init")
             return
         }
+
+        PushDiag.logPreviousProcessExits(this)
 
         RxJavaPlugins.setErrorHandler { e ->
             var throwable: Throwable = if (e is UndeliverableException) e.cause ?: e else e

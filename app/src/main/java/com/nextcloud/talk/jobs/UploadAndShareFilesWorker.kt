@@ -55,6 +55,7 @@ import com.nextcloud.talk.utils.CapabilitiesUtil
 import com.nextcloud.talk.utils.FileUtils
 import com.nextcloud.talk.utils.ImageCompressor
 import com.nextcloud.talk.utils.NotificationUtils
+import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.RemoteFileUtils
 import com.nextcloud.talk.utils.VideoCompressor
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_INTERNAL_USER_ID
@@ -672,7 +673,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             .setOngoing(false)
             .build()
 
-        notificationManager.notify(SystemClock.uptimeMillis().toInt(), failureNotification)
+        PushDiag.notify(context, "upload-failure", SystemClock.uptimeMillis().toInt(), failureNotification)
     }
 
     // The upload can fail before the file name is known, e.g. when its account does not exist anymore.
