@@ -46,7 +46,6 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -70,13 +69,10 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import com.nextcloud.talk.R
-import com.nextcloud.talk.logger.AppLog as Log
-import com.nextcloud.talk.utils.FileUtils
 import com.yalantis.ucrop.UCrop
 import kotlinx.coroutines.launch
 import java.io.File
 
-private const val TAG = "AttachmentPreview"
 private const val MAX_ADD_MORE_FILES = 10
 
 private const val APP_BAR_HEIGHT_DP = 64
@@ -104,9 +100,8 @@ internal fun FileAttachmentPreviewContent(
 ) {
     val context = LocalContext.current
     val currentFiles = viewModel.files
-    val hasCompressibleMedia = currentFiles.any { isCompressible(FileUtils.resolveMimeType(context, it.toUri())) }
     var caption by rememberSaveable { mutableStateOf("") }
-    var compressImages by rememberSaveable { mutableStateOf(hasCompressibleMedia && initialCompressImages) }
+    var compressImages by rememberSaveable { mutableStateOf(initialCompressImages) }
     var allowUpdate by rememberSaveable { mutableStateOf(false) }
     var drawingUri by rememberSaveable { mutableStateOf<String?>(null) }
 
@@ -114,6 +109,9 @@ internal fun FileAttachmentPreviewContent(
         viewModel.describeFiles(compressImages)
     }
     val fileDescriptions = currentFiles.mapNotNull { viewModel.descriptionsByUri[it] }
+    // Type comes from the descriptions (read off the main thread): asking a provider such as Nextcloud Files
+    // for it during composition blocks the main thread on every recomposition.
+    val hasCompressibleMedia = fileDescriptions.any { isCompressible(it.mimeType) }
 
     AutoStartDrawing(viewModel, fileDescriptions) {
         viewModel.drawing.clear()
@@ -145,8 +143,6 @@ internal fun FileAttachmentPreviewContent(
         }
     }
 
-    SideEffect { Log.d(TAG, "screen composed allowUpdate=$allowUpdate files=${currentFiles.size}") }
-
     val density = LocalDensity.current
     var bottomPanelHeight by remember { mutableStateOf(0.dp) }
     val topBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + APP_BAR_HEIGHT_DP.dp
@@ -174,10 +170,7 @@ internal fun FileAttachmentPreviewContent(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .onSizeChanged {
-                    Log.d(TAG, "bottom panel size ${it.width}x${it.height} allowUpdate=$allowUpdate")
-                    bottomPanelHeight = with(density) { it.height.toDp() }
-                }
+                .onSizeChanged { bottomPanelHeight = with(density) { it.height.toDp() } }
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = SCRIM_ALPHA))))
                 .navigationBarsPadding()
                 .imePadding()
@@ -220,7 +213,9 @@ internal fun FileAttachmentPreviewContent(
                 onHighQualityChange = { highQuality -> compressImages = !highQuality },
                 onAllowUpdateChange = { allowUpdate = it },
                 sendEnabled = viewModel.selectedFiles().isNotEmpty() && !viewModel.isEditing,
-                onSend = { onSend(viewModel.selectedFiles(), caption, compressImages, allowUpdate) }
+                onSend = {
+                    onSend(viewModel.selectedFiles(), caption, compressImages && hasCompressibleMedia, allowUpdate)
+                }
             )
         }
 

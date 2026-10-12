@@ -51,9 +51,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.nextcloud.talk.R
-import com.nextcloud.talk.logger.AppLog as Log
 
-private const val TAG = "AttachmentToolBar"
 private const val BADGE_BORDER_DP = 1
 private const val BADGE_CORNER_RADIUS_DP = 4
 private const val BADGE_HORIZONTAL_PADDING_DP = 3
@@ -91,9 +89,6 @@ internal data class ToolBarActions(
  */
 @Composable
 internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, modifier: Modifier = Modifier) {
-    // Not snapshot state: it is written during measure and only feeds the diagnostic lines below.
-    val lastCompact = remember { BooleanArray(1) }
-    val lastSize = remember { IntArray(2) }
     SubcomposeLayout(
         modifier = modifier
             .clip(RoundedCornerShape(percent = 50))
@@ -101,25 +96,13 @@ internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, mod
     ) { constraints ->
         val full = subcompose(PermissionStyle.LABELED) { ToolBarContent(state, actions, compactPermission = false) }
         val fullWidth = full.maxOfOrNull { it.maxIntrinsicWidth(Constraints.Infinity) } ?: 0
-        val compact = state.showPermission && shouldCompactPermission(fullWidth, constraints.maxWidth)
-        if (compact != lastCompact[0]) {
-            lastCompact[0] = compact
-            Log.d(TAG, "permission choice compact=$compact fullWidth=$fullWidth maxWidth=${constraints.maxWidth}")
-        }
-        val measurables = if (compact) {
+        val measurables = if (state.showPermission && shouldCompactPermission(fullWidth, constraints.maxWidth)) {
             subcompose(PermissionStyle.ICON_ONLY) { ToolBarContent(state, actions, compactPermission = true) }
         } else {
             full
         }
         val placeables = measurables.map { it.measure(constraints.copy(minWidth = 0)) }
-        val width = placeables.maxOfOrNull { it.width } ?: 0
-        val height = placeables.maxOfOrNull { it.height } ?: 0
-        if (width != lastSize[0] || height != lastSize[1]) {
-            lastSize[0] = width
-            lastSize[1] = height
-            Log.d(TAG, "pill ${width}x$height allowUpdate=${state.allowUpdate} maxWidth=${constraints.maxWidth}")
-        }
-        layout(width, height) {
+        layout(placeables.maxOfOrNull { it.width } ?: 0, placeables.maxOfOrNull { it.height } ?: 0) {
             placeables.forEach { it.place(0, 0) }
         }
     }
@@ -194,22 +177,12 @@ private fun PermissionChoice(allowUpdate: Boolean, compact: Boolean, onAllowUpda
         if (allowUpdate) R.string.nc_file_permission_editable else R.string.nc_file_permission_view_only
     )
 
-    fun choose(value: Boolean) {
-        Log.d(TAG, "permission chosen allowUpdate=$value (was $allowUpdate)")
-        onAllowUpdateChange(value)
-        expanded = false
-        Log.d(TAG, "permission applied allowUpdate=$value")
-    }
-
     Box {
         Row(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clip(RoundedCornerShape(percent = 50))
-                .clickable(role = Role.Button, onClickLabel = label) {
-                    Log.d(TAG, "permission menu opened allowUpdate=$allowUpdate compact=$compact")
-                    expanded = true
-                }
+                .clickable(role = Role.Button, onClickLabel = label) { expanded = true }
                 .padding(
                     horizontal = if (compact) PERMISSION_COMPACT_PADDING_DP.dp else 10.dp,
                     vertical = if (compact) PERMISSION_COMPACT_PADDING_DP.dp else 12.dp
@@ -236,13 +209,19 @@ private fun PermissionChoice(allowUpdate: Boolean, compact: Boolean, onAllowUpda
                 text = { Text(stringResource(R.string.nc_file_permission_view_only)) },
                 leadingIcon = { Icon(Icons.Filled.EditOff, contentDescription = null) },
                 trailingIcon = { if (!allowUpdate) Icon(Icons.Filled.Check, contentDescription = null) },
-                onClick = { choose(false) }
+                onClick = {
+                    onAllowUpdateChange(false)
+                    expanded = false
+                }
             )
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.nc_file_permission_editable)) },
                 leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                 trailingIcon = { if (allowUpdate) Icon(Icons.Filled.Check, contentDescription = null) },
-                onClick = { choose(true) }
+                onClick = {
+                    onAllowUpdateChange(true)
+                    expanded = false
+                }
             )
         }
     }

@@ -35,7 +35,6 @@ class FileAttachmentPreviewFragment : DialogFragment() {
     private var showFilePermissionsOption: Boolean = false
     private var startDrawing: Boolean = false
     private var composeView: ComposeView? = null
-    private val stallWatchdog = MainThreadStallWatchdog("attachment preview")
 
     @Inject
     lateinit var viewThemeUtils: ViewThemeUtils
@@ -68,7 +67,6 @@ class FileAttachmentPreviewFragment : DialogFragment() {
     @Suppress("DEPRECATION")
     override fun onStart() {
         super.onStart()
-        stallWatchdog.start()
         dialog?.window?.apply {
             setLayout(WindowManager.LayoutParams.MATCH_PARENT, WindowManager.LayoutParams.MATCH_PARENT)
             setBackgroundDrawableResource(android.R.color.transparent)
@@ -85,11 +83,6 @@ class FileAttachmentPreviewFragment : DialogFragment() {
                 isAppearanceLightNavigationBars = false
             }
         }
-    }
-
-    override fun onStop() {
-        stallWatchdog.stop()
-        super.onStop()
     }
 
     override fun onViewCreated(view: View, savedInstanceState: Bundle?) {
