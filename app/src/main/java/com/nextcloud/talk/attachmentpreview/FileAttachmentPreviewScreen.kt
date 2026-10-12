@@ -111,6 +111,7 @@ internal fun FileAttachmentPreviewContent(
     val fileDescriptions = currentFiles.mapNotNull { viewModel.descriptionsByUri[it] }
     // Type comes from the descriptions (read off the main thread): asking a provider such as Nextcloud Files
     // for it during composition blocks the main thread on every recomposition.
+    val allDescribed = fileDescriptions.size == currentFiles.size
     val hasCompressibleMedia = fileDescriptions.any { isCompressible(it.mimeType) }
 
     AutoStartDrawing(viewModel, fileDescriptions) {
@@ -212,7 +213,7 @@ internal fun FileAttachmentPreviewContent(
                 },
                 onHighQualityChange = { highQuality -> compressImages = !highQuality },
                 onAllowUpdateChange = { allowUpdate = it },
-                sendEnabled = viewModel.selectedFiles().isNotEmpty() && !viewModel.isEditing,
+                sendEnabled = viewModel.selectedFiles().isNotEmpty() && !viewModel.isEditing && allDescribed,
                 onSend = {
                     onSend(viewModel.selectedFiles(), caption, compressImages && hasCompressibleMedia, allowUpdate)
                 }
