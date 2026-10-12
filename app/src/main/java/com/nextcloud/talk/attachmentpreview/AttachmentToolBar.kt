@@ -51,7 +51,9 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.dp
 import com.nextcloud.talk.R
+import com.nextcloud.talk.logger.AppLog as Log
 
+private const val TAG = "AttachmentToolBar"
 private const val BADGE_BORDER_DP = 1
 private const val BADGE_CORNER_RADIUS_DP = 4
 private const val BADGE_HORIZONTAL_PADDING_DP = 3
@@ -89,6 +91,8 @@ internal data class ToolBarActions(
  */
 @Composable
 internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, modifier: Modifier = Modifier) {
+    // Not snapshot state: it is written during measure and only feeds the diagnostic line below.
+    val lastCompact = remember { BooleanArray(1) }
     SubcomposeLayout(
         modifier = modifier
             .clip(RoundedCornerShape(percent = 50))
@@ -96,7 +100,12 @@ internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, mod
     ) { constraints ->
         val full = subcompose(PermissionStyle.LABELED) { ToolBarContent(state, actions, compactPermission = false) }
         val fullWidth = full.maxOfOrNull { it.maxIntrinsicWidth(Constraints.Infinity) } ?: 0
-        val measurables = if (state.showPermission && shouldCompactPermission(fullWidth, constraints.maxWidth)) {
+        val compact = state.showPermission && shouldCompactPermission(fullWidth, constraints.maxWidth)
+        if (compact != lastCompact[0]) {
+            lastCompact[0] = compact
+            Log.d(TAG, "permission choice compact=$compact fullWidth=$fullWidth maxWidth=${constraints.maxWidth}")
+        }
+        val measurables = if (compact) {
             subcompose(PermissionStyle.ICON_ONLY) { ToolBarContent(state, actions, compactPermission = true) }
         } else {
             full
@@ -182,7 +191,10 @@ private fun PermissionChoice(allowUpdate: Boolean, compact: Boolean, onAllowUpda
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier
                 .clip(RoundedCornerShape(percent = 50))
-                .clickable(role = Role.Button, onClickLabel = label) { expanded = true }
+                .clickable(role = Role.Button, onClickLabel = label) {
+                    Log.d(TAG, "permission menu opened allowUpdate=$allowUpdate compact=$compact")
+                    expanded = true
+                }
                 .padding(
                     horizontal = if (compact) PERMISSION_COMPACT_PADDING_DP.dp else 10.dp,
                     vertical = if (compact) PERMISSION_COMPACT_PADDING_DP.dp else 12.dp
@@ -210,6 +222,7 @@ private fun PermissionChoice(allowUpdate: Boolean, compact: Boolean, onAllowUpda
                 leadingIcon = { Icon(Icons.Filled.EditOff, contentDescription = null) },
                 trailingIcon = { if (!allowUpdate) Icon(Icons.Filled.Check, contentDescription = null) },
                 onClick = {
+                    Log.d(TAG, "permission chosen allowUpdate=false (was $allowUpdate)")
                     onAllowUpdateChange(false)
                     expanded = false
                 }
@@ -219,6 +232,7 @@ private fun PermissionChoice(allowUpdate: Boolean, compact: Boolean, onAllowUpda
                 leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                 trailingIcon = { if (allowUpdate) Icon(Icons.Filled.Check, contentDescription = null) },
                 onClick = {
+                    Log.d(TAG, "permission chosen allowUpdate=true (was $allowUpdate)")
                     onAllowUpdateChange(true)
                     expanded = false
                 }
