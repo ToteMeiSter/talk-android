@@ -46,6 +46,7 @@ import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -69,11 +70,13 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.core.net.toUri
 import com.nextcloud.talk.R
+import com.nextcloud.talk.logger.AppLog as Log
 import com.nextcloud.talk.utils.FileUtils
 import com.yalantis.ucrop.UCrop
 import kotlinx.coroutines.launch
 import java.io.File
 
+private const val TAG = "AttachmentPreview"
 private const val MAX_ADD_MORE_FILES = 10
 
 private const val APP_BAR_HEIGHT_DP = 64
@@ -142,6 +145,8 @@ internal fun FileAttachmentPreviewContent(
         }
     }
 
+    SideEffect { Log.d(TAG, "screen composed allowUpdate=$allowUpdate files=${currentFiles.size}") }
+
     val density = LocalDensity.current
     var bottomPanelHeight by remember { mutableStateOf(0.dp) }
     val topBarHeight = WindowInsets.statusBars.asPaddingValues().calculateTopPadding() + APP_BAR_HEIGHT_DP.dp
@@ -169,7 +174,10 @@ internal fun FileAttachmentPreviewContent(
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
-                .onSizeChanged { bottomPanelHeight = with(density) { it.height.toDp() } }
+                .onSizeChanged {
+                    Log.d(TAG, "bottom panel size ${it.width}x${it.height} allowUpdate=$allowUpdate")
+                    bottomPanelHeight = with(density) { it.height.toDp() }
+                }
                 .background(Brush.verticalGradient(listOf(Color.Transparent, Color.Black.copy(alpha = SCRIM_ALPHA))))
                 .navigationBarsPadding()
                 .imePadding()

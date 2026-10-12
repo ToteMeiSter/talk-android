@@ -91,8 +91,9 @@ internal data class ToolBarActions(
  */
 @Composable
 internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, modifier: Modifier = Modifier) {
-    // Not snapshot state: it is written during measure and only feeds the diagnostic line below.
+    // Not snapshot state: it is written during measure and only feeds the diagnostic lines below.
     val lastCompact = remember { BooleanArray(1) }
+    val lastSize = remember { IntArray(2) }
     SubcomposeLayout(
         modifier = modifier
             .clip(RoundedCornerShape(percent = 50))
@@ -111,7 +112,14 @@ internal fun AttachmentToolBar(state: ToolBarState, actions: ToolBarActions, mod
             full
         }
         val placeables = measurables.map { it.measure(constraints.copy(minWidth = 0)) }
-        layout(placeables.maxOfOrNull { it.width } ?: 0, placeables.maxOfOrNull { it.height } ?: 0) {
+        val width = placeables.maxOfOrNull { it.width } ?: 0
+        val height = placeables.maxOfOrNull { it.height } ?: 0
+        if (width != lastSize[0] || height != lastSize[1]) {
+            lastSize[0] = width
+            lastSize[1] = height
+            Log.d(TAG, "pill ${width}x$height allowUpdate=${state.allowUpdate} maxWidth=${constraints.maxWidth}")
+        }
+        layout(width, height) {
             placeables.forEach { it.place(0, 0) }
         }
     }
@@ -186,6 +194,13 @@ private fun PermissionChoice(allowUpdate: Boolean, compact: Boolean, onAllowUpda
         if (allowUpdate) R.string.nc_file_permission_editable else R.string.nc_file_permission_view_only
     )
 
+    fun choose(value: Boolean) {
+        Log.d(TAG, "permission chosen allowUpdate=$value (was $allowUpdate)")
+        onAllowUpdateChange(value)
+        expanded = false
+        Log.d(TAG, "permission applied allowUpdate=$value")
+    }
+
     Box {
         Row(
             verticalAlignment = Alignment.CenterVertically,
@@ -221,21 +236,13 @@ private fun PermissionChoice(allowUpdate: Boolean, compact: Boolean, onAllowUpda
                 text = { Text(stringResource(R.string.nc_file_permission_view_only)) },
                 leadingIcon = { Icon(Icons.Filled.EditOff, contentDescription = null) },
                 trailingIcon = { if (!allowUpdate) Icon(Icons.Filled.Check, contentDescription = null) },
-                onClick = {
-                    Log.d(TAG, "permission chosen allowUpdate=false (was $allowUpdate)")
-                    onAllowUpdateChange(false)
-                    expanded = false
-                }
+                onClick = { choose(false) }
             )
             DropdownMenuItem(
                 text = { Text(stringResource(R.string.nc_file_permission_editable)) },
                 leadingIcon = { Icon(Icons.Filled.Edit, contentDescription = null) },
                 trailingIcon = { if (allowUpdate) Icon(Icons.Filled.Check, contentDescription = null) },
-                onClick = {
-                    Log.d(TAG, "permission chosen allowUpdate=true (was $allowUpdate)")
-                    onAllowUpdateChange(true)
-                    expanded = false
-                }
+                onClick = { choose(true) }
             )
         }
     }
