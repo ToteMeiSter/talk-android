@@ -324,8 +324,13 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
      * the uploader through [onStopped].
      */
     private fun startChunkedUpload(uploader: ChunkedFileUploader, mimeType: MediaType?, path: String): Boolean {
+        // The folder has to be known before onStopped can reach the uploader, or an abort has nothing to remove.
+        uploader.prepare(file!!)
         chunkedFileUploader = uploader
         if (isStopped || isCancelled()) {
+            if (isCancelled()) {
+                uploader.abortUpload {}
+            }
             return false
         }
         return uploader.upload(file!!, mimeType, path)
@@ -395,7 +400,8 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         )
 
     private fun prepareFile(sourceFileUri: Uri, dir: File): PreparedUpload? {
-        val original = FileUtils.getFileFromUri(context, sourceFileUri, dir) ?: return null
+        val original = FileUtils.getFileFromUri(context, sourceFileUri, dir)?.let { FileUtils.ensureInDir(it, dir) }
+            ?: return null
         throwIfStopped()
         val compressed = if (inputData.getBoolean(COMPRESS_IMAGES, false)) {
             compressMediaIfPossible(sourceFileUri, original, dir)
