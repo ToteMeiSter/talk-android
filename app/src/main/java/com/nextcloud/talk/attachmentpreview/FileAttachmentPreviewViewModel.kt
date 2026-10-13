@@ -46,6 +46,7 @@ internal class FileAttachmentPreviewViewModel @Inject constructor(private val co
     val mimeTypesByUri: Map<String, String?> get() = _mimeTypesByUri
 
     internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    internal var mainDispatcher: CoroutineDispatcher = Dispatchers.Main
     internal var mimeTypeResolver: (Context, String) -> String? = { ctx, uri ->
         FileUtils.resolveMimeType(ctx, uri.toUri())
     }
@@ -191,7 +192,7 @@ internal class FileAttachmentPreviewViewModel @Inject constructor(private val co
             }
             ensureActive()
             // files is mutated on the main thread, so publish there
-            withContext(Dispatchers.Main) { publishDescriptions(described) }
+            withContext(mainDispatcher) { publishDescriptions(described) }
         }
     }
 
@@ -215,8 +216,12 @@ internal class FileAttachmentPreviewViewModel @Inject constructor(private val co
         mimeTypeJob?.cancel()
         mimeTypeJob = viewModelScope.launch(ioDispatcher) {
             val resolved = snapshot.associateWith { mimeTypeResolver(context, it) }
-            _mimeTypesByUri.putAll(resolved)
-            _mimeTypesByUri.keys.retainAll(resolved.keys)
+            // the blocking resolve above cannot be interrupted, so a cancelled job reaches this point too;
+            // withContext checks for cancellation and runs on main, where cancel() is also called
+            withContext(mainDispatcher) {
+                _mimeTypesByUri.putAll(resolved)
+                _mimeTypesByUri.keys.retainAll(resolved.keys)
+            }
         }
     }
 }

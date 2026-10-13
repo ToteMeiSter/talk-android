@@ -20,6 +20,8 @@ import org.junit.runner.RunWith
 import org.mockito.Mockito.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -33,6 +35,7 @@ class FileAttachmentPreviewMimeTypesTest {
     fun setUp() {
         viewModel = FileAttachmentPreviewViewModel(mock(Context::class.java)).apply {
             ioDispatcher = StandardTestDispatcher(testScope.testScheduler)
+            mainDispatcher = StandardTestDispatcher(testScope.testScheduler)
             mimeTypeResolver = { _, uri -> if (uri.endsWith(".mp4")) "video/mp4" else "text/plain" }
         }
     }
@@ -59,5 +62,35 @@ class FileAttachmentPreviewMimeTypesTest {
         testScope.advanceUntilIdle()
 
         assertEquals(setOf("content://a/2.txt"), viewModel.mimeTypesByUri.keys)
+    }
+
+    @Test
+    fun `a cancelled resolve that is still running does not drop a newer type`() {
+        val started = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        viewModel.ioDispatcher = kotlinx.coroutines.Dispatchers.IO
+        viewModel.mimeTypeResolver = { _, uri ->
+            if (uri == "content://a/1.txt" && started.count == 1L) {
+                started.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            }
+            "text/plain"
+        }
+        viewModel.setInitialFiles(listOf("content://a/1.txt"))
+        viewModel.resolveMimeTypes()
+        assertTrue(started.await(5, TimeUnit.SECONDS))
+
+        viewModel.addFiles(listOf("content://a/2.txt"))
+        viewModel.resolveMimeTypes()
+        Thread.sleep(300)
+        testScope.advanceUntilIdle()
+        val both = setOf("content://a/1.txt", "content://a/2.txt")
+        assertEquals(both, viewModel.mimeTypesByUri.keys)
+
+        release.countDown()
+        Thread.sleep(300)
+        testScope.advanceUntilIdle()
+
+        assertEquals(both, viewModel.mimeTypesByUri.keys)
     }
 }
