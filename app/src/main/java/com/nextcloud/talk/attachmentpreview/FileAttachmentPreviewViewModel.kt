@@ -16,6 +16,8 @@ import androidx.compose.runtime.setValue
 import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
+import com.nextcloud.talk.utils.FileUtils
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.ensureActive
@@ -37,6 +39,18 @@ internal class FileAttachmentPreviewViewModel @Inject constructor(private val co
 
     private val _descriptionsByUri = mutableStateMapOf<String, FileDescription>()
     val descriptionsByUri: Map<String, FileDescription> get() = _descriptionsByUri
+
+    private val _mimeTypesByUri = mutableStateMapOf<String, String?>()
+
+    /** Cheap, type-only counterpart of [descriptionsByUri]; filled before the (slow) full descriptions. */
+    val mimeTypesByUri: Map<String, String?> get() = _mimeTypesByUri
+
+    internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    internal var mimeTypeResolver: (Context, String) -> String? = { ctx, uri ->
+        FileUtils.resolveMimeType(ctx, uri.toUri())
+    }
+
+    private var mimeTypeJob: Job? = null
 
     /**
      * The file whose drawing editor is to be opened as soon as it is described, set once by
@@ -190,5 +204,19 @@ internal class FileAttachmentPreviewViewModel @Inject constructor(private val co
         val current = files.toSet()
         described.filterKeys { it in current }.forEach { (uri, description) -> _descriptionsByUri[uri] = description }
         _descriptionsByUri.keys.retainAll(current)
+    }
+
+    /**
+     * Resolves only the MIME type of every current file. Unlike [describeFiles] this does not copy
+     * content:// files into the cache, so it is quick enough not to hold anything back.
+     */
+    fun resolveMimeTypes() {
+        val snapshot = files.toList()
+        mimeTypeJob?.cancel()
+        mimeTypeJob = viewModelScope.launch(ioDispatcher) {
+            val resolved = snapshot.associateWith { mimeTypeResolver(context, it) }
+            _mimeTypesByUri.putAll(resolved)
+            _mimeTypesByUri.keys.retainAll(resolved.keys)
+        }
     }
 }

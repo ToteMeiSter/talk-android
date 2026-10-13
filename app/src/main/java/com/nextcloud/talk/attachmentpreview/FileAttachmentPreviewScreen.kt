@@ -108,11 +108,14 @@ internal fun FileAttachmentPreviewContent(
     LaunchedEffect(currentFiles.toSet(), compressImages) {
         viewModel.describeFiles(compressImages)
     }
+    LaunchedEffect(currentFiles.toSet()) {
+        viewModel.resolveMimeTypes()
+    }
     val fileDescriptions = currentFiles.mapNotNull { viewModel.descriptionsByUri[it] }
-    // Type comes from the descriptions (read off the main thread): asking a provider such as Nextcloud Files
-    // for it during composition blocks the main thread on every recomposition.
-    val allDescribed = fileDescriptions.size == currentFiles.size
-    val hasCompressibleMedia = fileDescriptions.any { isCompressible(it.mimeType) }
+    // The type is resolved off the main thread, separately from the full descriptions: asking a content provider
+    // (e.g. Nextcloud Files) for it during composition would block the main thread on every recomposition,
+    // while waiting for the descriptions would hold Send back until large files are copied.
+    val hasCompressibleMedia = currentFiles.any { isCompressible(viewModel.mimeTypesByUri[it]) }
 
     AutoStartDrawing(viewModel, fileDescriptions) {
         viewModel.drawing.clear()
@@ -213,9 +216,9 @@ internal fun FileAttachmentPreviewContent(
                 },
                 onHighQualityChange = { highQuality -> compressImages = !highQuality },
                 onAllowUpdateChange = { allowUpdate = it },
-                sendEnabled = viewModel.selectedFiles().isNotEmpty() && !viewModel.isEditing && allDescribed,
+                sendEnabled = viewModel.selectedFiles().isNotEmpty() && !viewModel.isEditing,
                 onSend = {
-                    onSend(viewModel.selectedFiles(), caption, compressImages && hasCompressibleMedia, allowUpdate)
+                    onSend(viewModel.selectedFiles(), caption, compressImages, allowUpdate)
                 }
             )
         }
