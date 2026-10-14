@@ -819,8 +819,10 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             // happen to complete. APPEND_OR_REPLACE rather than APPEND: if the chain already ended in a
             // failed or cancelled request, this starts a fresh chain. It does not protect requests that
             // are already appended behind a request that fails later; that is why a failed upload is
-            // recorded on its row and finishes with Result.success(). Cancelling by id still cancels the
-            // requests behind it.
+            // recorded on its row and finishes with Result.success(). The same holds for a cancel by the user:
+            // it only sets a flag in the workspace of the request (see cancelUpload) and the request finishes
+            // with Result.success(); WorkManager is not asked to cancel it, which would cancel the requests
+            // behind it too.
             WorkManager.getInstance().enqueueUniqueWork(
                 uploadQueueName(internalConversationId),
                 ExistingWorkPolicy.APPEND_OR_REPLACE,

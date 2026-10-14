@@ -87,11 +87,12 @@ class UploadCancelCascadeTest {
     }
 
     init {
+        // develop writes the send status of a placeholder row only, see updatePlaceholderStatus
         doAnswer {
-            val row = it.getArgument<ChatMessageEntity>(0)
-            rows[row.referenceId!!] = row
-            Unit
-        }.whenever(chatDao).updateChatMessage(any())
+            val referenceId = it.getArgument<String>(1)
+            rows[referenceId]?.let { row -> rows[referenceId] = row.copy(sendStatus = it.getArgument(2)) }
+            1
+        }.whenever(chatDao).updateTempMessageSendStatus(any(), any(), any())
     }
 
     @After
