@@ -643,6 +643,7 @@ class ChatActivity :
                     }
                     val typingParticipant = typingParticipants[userIdOrGuestSession]
                     if (typingParticipant != null) {
+                        typingParticipant.addSession(session)
                         typingParticipant.restartTimer()
                     } else {
                         typingParticipants[userIdOrGuestSession] =
