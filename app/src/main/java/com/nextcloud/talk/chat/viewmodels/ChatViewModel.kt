@@ -478,6 +478,7 @@ class ChatViewModel @AssistedInject constructor(
     override fun onPause(owner: LifecycleOwner) {
         super.onPause(owner)
         currentLifeCycleFlag = LifeCycleFlag.PAUSED
+        roomJoinClaimed = false
         disposableSet.forEach { disposable -> disposable.dispose() }
         disposableSet.clear()
         searchRequestJob?.cancel()
@@ -801,6 +802,8 @@ class ChatViewModel @AssistedInject constructor(
     // Last read message cache
     // ------------------------------
     private var lastReadMessage: Int = 0
+
+    private var roomJoinClaimed = false
 
     // ------------------------------
     // Initialization
@@ -1918,7 +1921,6 @@ class ChatViewModel @AssistedInject constructor(
                 }
                 withContext(Dispatchers.Main) {
                     _leaveRoomViewState.value = LeaveRoomSuccessState
-                    _getCapabilitiesViewState.value = GetCapabilitiesStartState
                     functionToCallAfterLeave?.invoke()
                 }
             } catch (e: Exception) {
@@ -2597,6 +2599,18 @@ class ChatViewModel @AssistedInject constructor(
 
     fun setVoiceRecordingLocked(boolean: Boolean) {
         _getVoiceRecordingLocked.postValue(boolean)
+    }
+
+    /**
+     * Allows one join of the room per resume of the chat screen. The claim is released when the screen is paused,
+     * where the chat leaves the room.
+     */
+    fun claimRoomJoin(): Boolean {
+        if (roomJoinClaimed) {
+            return false
+        }
+        roomJoinClaimed = true
+        return true
     }
 
     fun handleOrientationChange() {
