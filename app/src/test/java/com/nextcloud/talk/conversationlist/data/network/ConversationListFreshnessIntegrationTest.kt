@@ -16,6 +16,7 @@ import com.nextcloud.talk.arbitrarystorage.ArbitraryStorageManager
 import com.nextcloud.talk.chat.data.model.ChatMessage
 import com.nextcloud.talk.chat.data.network.ChatMessageSyncer
 import com.nextcloud.talk.chat.data.network.ChatNetworkDataSource
+import com.nextcloud.talk.data.database.dao.ChatMessagesDao
 import com.nextcloud.talk.data.database.dao.ConversationsDao
 import com.nextcloud.talk.data.database.mappers.asEntity
 import com.nextcloud.talk.data.database.model.ConversationEntity
@@ -359,6 +360,25 @@ class ConversationListFreshnessIntegrationTest {
             assertEquals("the marker the server knows stays", 10, conversationEntity().lastReadMessage)
             assertEquals("the list shows the messages as read", 0, conversationEntity().unreadMessages)
             assertEquals(null, conversationListUpdater.pendingReadMarker(INTERNAL_CONVERSATION_ID))
+        }
+    }
+
+    @Test
+    fun `unread count only write does not overwrite a marker written while it counts`() {
+        // a full read state write (the marker of a sent message) lands while the count is being made
+        val countingChatDao = mock<ChatMessagesDao>()
+        val updater = ConversationListUpdater(countingChatDao, db.chatBlocksDao(), db.conversationsDao())
+        runBlocking {
+            seedConversation(lastActivity = 12, lastReadMessage = 10, unreadMessages = 2)
+            wheneverBlocking { countingChatDao.countMessagesNewerThan(any(), any(), any()) }
+                .doSuspendableAnswer {
+                    db.conversationsDao().updateReadState(INTERNAL_CONVERSATION_ID, 15, 0)
+                    0
+                }
+
+            updater.updateLocalUnreadCountOnly(target(), lastReadMessage = 12)
+
+            assertEquals("the marker written meanwhile stays", 15, conversationEntity().lastReadMessage)
         }
     }
 
