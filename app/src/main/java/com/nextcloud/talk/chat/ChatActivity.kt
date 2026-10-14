@@ -462,7 +462,6 @@ class ChatActivity :
     private var isLeavingRoom: Boolean = false
     private var isScreenResumed: Boolean = false
     private var hasBeenPaused: Boolean = false
-    private var isInitialLoadDone: Boolean = false
 
     private var lastHandledHighlightNonce: Long? = null
     private var pendingHighlightedMessageId: Long? = null
@@ -1972,7 +1971,6 @@ class ChatActivity :
                 }
 
                 is ChatViewModel.GetCapabilitiesInitialLoadState -> {
-                    isInitialLoadDone = true
                     spreedCapabilities = state.spreedCapabilities
                     capabilitiesLoaded = true
                     currentConversation = state.conversationModel
@@ -2479,7 +2477,7 @@ class ChatActivity :
         updateToolbarState()
 
         isScreenResumed = true
-        currentConversation?.takeIf { isInitialLoadDone }?.let { conversation ->
+        currentConversation?.takeIf { capabilitiesLoaded }?.let { conversation ->
             ensureJoined()
             if (hasBeenPaused) {
                 returnToChat(conversation)
@@ -2492,7 +2490,7 @@ class ChatActivity :
      * and the capabilities are loaded. It does not depend on when the conversation is refreshed.
      */
     private fun ensureJoined() {
-        if (isInitialLoadDone && chatViewModel.claimRoomJoin()) {
+        if (capabilitiesLoaded && chatViewModel.claimRoomJoin()) {
             joinRoomWithPassword()
         }
     }
