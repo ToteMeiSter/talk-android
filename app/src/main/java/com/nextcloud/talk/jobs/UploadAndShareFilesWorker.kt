@@ -138,7 +138,10 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     private fun isCancelled(): Boolean = ::workspace.isInitialized && workspace.isCancelled()
 
     override fun doWork(): Result {
-        NextcloudTalkApplication.sharedApplication!!.componentApplication.inject(this)
+        // Invariant: dependencies that are already set (a test worker factory) are not overwritten.
+        if (!::chatDao.isInitialized) {
+            NextcloudTalkApplication.sharedApplication!!.componentApplication.inject(this)
+        }
 
         referenceId = inputData.getString(KEY_REFERENCE_ID)
         workspace = UploadWorkspace(workspaceDir(context, id))
