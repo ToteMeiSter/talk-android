@@ -462,6 +462,7 @@ class ChatActivity :
     private var isLeavingRoom: Boolean = false
     private var isScreenResumed: Boolean = false
     private var hasBeenPaused: Boolean = false
+    private var isInitialLoadDone: Boolean = false
 
     private var lastHandledHighlightNonce: Long? = null
     private var pendingHighlightedMessageId: Long? = null
@@ -1971,6 +1972,7 @@ class ChatActivity :
                 }
 
                 is ChatViewModel.GetCapabilitiesInitialLoadState -> {
+                    isInitialLoadDone = true
                     spreedCapabilities = state.spreedCapabilities
                     capabilitiesLoaded = true
                     currentConversation = state.conversationModel
@@ -2477,7 +2479,7 @@ class ChatActivity :
         updateToolbarState()
 
         isScreenResumed = true
-        currentConversation?.let { conversation ->
+        currentConversation?.takeIf { isInitialLoadDone }?.let { conversation ->
             ensureJoined()
             if (hasBeenPaused) {
                 returnToChat(conversation)
@@ -2487,17 +2489,17 @@ class ChatActivity :
 
     /**
      * Joining the room is the counterpart of leaving it in onPause: once per resume, as soon as the screen is shown
-     * and the conversation is known. It does not depend on when the conversation is refreshed.
+     * and the capabilities are loaded. It does not depend on when the conversation is refreshed.
      */
     private fun ensureJoined() {
-        if (currentConversation != null && chatViewModel.claimRoomJoin()) {
+        if (isInitialLoadDone && chatViewModel.claimRoomJoin()) {
             joinRoomWithPassword()
         }
     }
 
     private fun returnToChat(conversation: ConversationModel) {
         sendSharedFiles()
-        if (focusInput) {
+        if (focusInput && messageInputFragment.isAdded) {
             messageInputFragment.binding.fragmentMessageInputView.requestFocus()
         }
         refreshConversationExtras(conversation)
