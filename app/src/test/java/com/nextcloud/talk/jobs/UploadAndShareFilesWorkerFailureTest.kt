@@ -105,6 +105,13 @@ class UploadAndShareFilesWorkerFailureTest {
             rows[row.referenceId!!] = row
             Unit
         }.whenever(chatDao).updateChatMessage(any())
+        // In develop the worker writes only the send status of the temporary row.
+        doAnswer {
+            val referenceId = it.getArgument<String>(1)
+            val row = rows[referenceId]
+            row?.let { found -> rows[referenceId] = found.copy(sendStatus = it.getArgument(2)) }
+            if (row == null) 0 else 1
+        }.whenever(chatDao).updateTempMessageSendStatus(any(), any(), any())
     }
 
     @After
