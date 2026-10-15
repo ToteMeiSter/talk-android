@@ -8,6 +8,7 @@ package com.nextcloud.talk.jobs
 
 import android.app.Application
 import android.content.Context
+import android.net.Uri
 import androidx.test.core.app.ApplicationProvider
 import androidx.work.Configuration
 import androidx.work.ListenableWorker
@@ -31,6 +32,7 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -44,7 +46,11 @@ import retrofit2.HttpException
 import retrofit2.Response
 import java.io.File
 import java.io.IOException
+import java.util.UUID
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
 
 /**
  * Forwarding a file of another user: the share API answers 403 (no right to share it again) and Talk forwards a copy
@@ -64,7 +70,16 @@ class ShareOperationWorkerCopyTest {
 
     @Volatile
     private var downloads = 0
-    private val toasts = mutableListOf<Int>()
+    private val toasts = CopyOnWriteArrayList<Int>()
+
+    // what the stand-ins saw: the input of the download, the input of the queued uploads
+    private val downloadInputs = CopyOnWriteArrayList<androidx.work.Data>()
+    private val uploadInputs = CopyOnWriteArrayList<androidx.work.Data>()
+
+    // a download that waits for the test, as one that is running while the user forwards
+    @Volatile
+    private var downloadGate: CountDownLatch? = null
+    private val downloadStarted = CountDownLatch(1)
 
     private val user: User = mock {
         on { id } doReturn ACCOUNT_ID
@@ -94,6 +109,8 @@ class ShareOperationWorkerCopyTest {
         assertEquals(1, queuedUploads(workManager))
         assertEquals(0, downloads)
         assertTrue(cached.isFile)
+        runQueuedUploads(workManager)
+        assertUploadOf(cached)
     }
 
     @Test
@@ -105,6 +122,12 @@ class ShareOperationWorkerCopyTest {
 
         assertEquals(1, downloads)
         assertEquals(1, queuedUploads(workManager))
+        val download = downloadInputs.single()
+        assertEquals(FILE_ID, download.getString("KEY_FILE_ID"))
+        assertEquals(FILE_NAME, download.getString("KEY_FILE_NAME"))
+        assertEquals("Talk/Room/bob/a.jpg", download.getString("KEY_FILE_PATH"))
+        runQueuedUploads(workManager)
+        assertUploadOf(FileUtils.resolveSharedAttachmentFile(context().cacheDir, FILE_ID, FILE_NAME)!!)
     }
 
     @Test
@@ -158,6 +181,109 @@ class ShareOperationWorkerCopyTest {
         assertEquals(R.string.nc_common_error_sorry, lastToastText())
     }
 
+    @Test
+    fun `403 without a copy source tells the user that the file may not be shared`() {
+        refuseShare(403)
+        cacheFile()
+        val workManager = initWorkManager()
+
+        run(withCopy = false)
+
+        assertEquals(0, downloads)
+        assertEquals(0, queuedUploads(workManager))
+        assertEquals(R.string.nc_file_share_not_allowed, lastToastText())
+    }
+
+    @Test
+    fun `a second run of the same share work queues the copy only once`() {
+        refuseShare(403)
+        cacheFile()
+        val workManager = initWorkManager()
+        val shareWorkId = UUID.randomUUID()
+
+        run(id = shareWorkId)
+        run(id = shareWorkId)
+
+        assertEquals(1, queuedUploads(workManager))
+    }
+
+    @Test
+    fun `a download of the same file that is running already is waited for, not started again`() {
+        refuseShare(403)
+        val workManager = initWorkManager()
+        downloadGate = CountDownLatch(1)
+        val running = androidx.work.OneTimeWorkRequest.Builder(DownloadFileToCacheWorker::class.java)
+            .addTag(FILE_ID)
+            .build()
+        workManager.enqueue(running)
+        assertTrue(downloadStarted.await(WAIT_MILLIS, TimeUnit.MILLISECONDS))
+
+        val share = Thread { run() }.apply { start() }
+        Thread.sleep(SETTLE_MILLIS)
+        downloadGate!!.countDown()
+        share.join(WAIT_MILLIS)
+
+        assertEquals("only the download that was running", 1, downloads)
+        assertEquals(1, queuedUploads(workManager))
+    }
+
+    @Test
+    fun `a stop while the download is awaited shows nothing and queues nothing`() {
+        refuseShare(403)
+        val workManager = initWorkManager()
+        downloadGate = CountDownLatch(1)
+        workManager.enqueue(
+            androidx.work.OneTimeWorkRequest.Builder(DownloadFileToCacheWorker::class.java).addTag(FILE_ID).build()
+        )
+        assertTrue(downloadStarted.await(WAIT_MILLIS, TimeUnit.MILLISECONDS))
+        val shareWorker = worker()
+
+        val share = Thread { shareWorker.doWork() }.apply { start() }
+        Thread.sleep(SETTLE_MILLIS)
+        shareWorker.stop(WorkInfo.STOP_REASON_UNKNOWN)
+        share.join(WAIT_MILLIS)
+        downloadGate!!.countDown()
+
+        assertTrue("the work ended", !share.isAlive)
+        assertNull(lastToastText())
+        assertEquals(0, queuedUploads(workManager))
+    }
+
+    @Test
+    fun `a work that is stopped before the upload of the copy does not queue it`() {
+        refuseShare(403)
+        cacheFile()
+        val workManager = initWorkManager()
+        val shareWorker = worker()
+        shareWorker.stop(WorkInfo.STOP_REASON_UNKNOWN)
+
+        shareWorker.doWork()
+
+        assertEquals(0, queuedUploads(workManager))
+    }
+
+    @Test
+    fun `a work that is stopped does not start a download`() {
+        refuseShare(403)
+        val workManager = initWorkManager()
+        val shareWorker = worker()
+        shareWorker.stop(WorkInfo.STOP_REASON_UNKNOWN)
+
+        shareWorker.doWork()
+
+        assertEquals(0, workManager.getWorkInfosByTag(FILE_ID).get().size)
+        assertNull(lastToastText())
+        assertEquals(0, queuedUploads(workManager))
+    }
+
+    private fun assertUploadOf(cached: File) {
+        val upload = uploadInputs.single()
+        assertEquals(Uri.fromFile(cached).toString(), upload.getString("DEVICE_SOURCE_FILE"))
+        assertEquals(CAPTION_META_DATA, upload.getString("META_DATA"))
+        assertEquals("room", upload.getString("ROOM_TOKEN"))
+        assertEquals(CONVERSATION_ID, upload.getString("INTERNAL_CONVERSATION_ID"))
+    }
+
     private fun refuseShare(code: Int) {
         val error = HttpException(Response.error<Any>(code, "".toResponseBody("text/plain".toMediaType())))
         shareAnswers(Observable.error(error))
@@ -183,27 +309,43 @@ class ShareOperationWorkerCopyTest {
         return file
     }
 
-    private fun run(): ListenableWorker.Result {
+    private fun run(withCopy: Boolean = true, id: UUID = UUID.randomUUID()): ListenableWorker.Result =
+        worker(withCopy, id).doWork()
+
+    private fun worker(withCopy: Boolean = true, id: UUID = UUID.randomUUID()): ShareOperationWorker {
         val inputData = androidx.work.Data.Builder()
             .putLong("KEY_INTERNAL_USER_ID", ACCOUNT_ID)
             .putString("KEY_ROOM_TOKEN", "room")
             .putString("KEY_CONVERSATION_NAME", "Room")
+            .putString("KEY_META_DATA", CAPTION_META_DATA)
             .putStringArray("KEY_FILE_PATHS", arrayOf("/Talk/Room/bob/a.jpg"))
             .let {
-                ShareOperationWorker.CopySource(FILE_ID, FILE_NAME, 7L, "/Talk").putInto(it)
+                if (withCopy) ShareOperationWorker.CopySource(FILE_ID, FILE_NAME, 7L, "/Talk").putInto(it) else it
             }
             .build()
-        val worker = TestListenableWorkerBuilder<ShareOperationWorker>(context())
+        return TestListenableWorkerBuilder<ShareOperationWorker>(context())
+            .setId(id)
             .setInputData(inputData)
             .setWorkerFactory(factory())
             .build()
-        return worker.doWork()
     }
 
     private fun lastToastText(): Int? = toasts.lastOrNull()
 
+    // every upload in the queue of the conversation, whatever its state
     private fun queuedUploads(workManager: WorkManager): Int =
-        workManager.getWorkInfosForUniqueWork(QUEUE_NAME).get().count { it.state == WorkInfo.State.ENQUEUED }
+        workManager.getWorkInfosForUniqueWork(QUEUE_NAME).get().size
+
+    // lets the queued uploads run (the stand-in records their input) and waits for them
+    private fun runQueuedUploads(workManager: WorkManager) {
+        val driver = WorkManagerTestInitHelper.getTestDriver(context())!!
+        workManager.getWorkInfosForUniqueWork(QUEUE_NAME).get().forEach { driver.setAllConstraintsMet(it.id) }
+        val deadline = System.currentTimeMillis() + WAIT_MILLIS
+        while (workManager.getWorkInfosForUniqueWork(QUEUE_NAME).get().any { !it.state.isFinished }) {
+            check(System.currentTimeMillis() < deadline) { "the uploads did not finish" }
+            Thread.sleep(POLL_MILLIS)
+        }
+    }
 
     private fun factory(): WorkerFactory =
         object : WorkerFactory() {
@@ -219,9 +361,18 @@ class ShareOperationWorkerCopyTest {
                         it.userMessage = { message -> toasts.add(message) }
                     }
                     // the download itself needs a server; here it only writes the file or fails
+                    UploadAndShareFilesWorker::class.java.name -> object : Worker(appContext, workerParameters) {
+                        override fun doWork(): Result {
+                            uploadInputs.add(inputData)
+                            return Result.success()
+                        }
+                    }
                     DownloadFileToCacheWorker::class.java.name -> object : Worker(appContext, workerParameters) {
                         override fun doWork(): Result {
                             downloads++
+                            downloadInputs.add(inputData)
+                            downloadStarted.countDown()
+                            downloadGate?.await(WAIT_MILLIS, TimeUnit.MILLISECONDS)
                             if (!downloadSucceeds) return Result.failure()
                             FileUtils.resolveSharedAttachmentFile(appContext.cacheDir, FILE_ID, FILE_NAME)!!
                                 .writeText("downloaded")
@@ -256,5 +407,9 @@ class ShareOperationWorkerCopyTest {
         private const val FILE_NAME = "a.jpg"
         private const val CONVERSATION_ID = "1@room"
         private const val QUEUE_NAME = "upload_queue_$CONVERSATION_ID"
+        private const val CAPTION_META_DATA = "{\"caption\":\"hi\"}"
+        private const val WAIT_MILLIS = 30_000L
+        private const val POLL_MILLIS = 20L
+        private const val SETTLE_MILLIS = 300L
     }
 }

@@ -41,6 +41,8 @@ import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.runBlocking
 import retrofit2.HttpException
 import java.io.File
+import java.util.UUID
+import java.util.concurrent.ExecutionException
 import javax.inject.Inject
 
 @AutoInjector(NextcloudTalkApplication::class)
@@ -101,6 +103,8 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
             val source = copySource
             if (isForbidden(lastRefusal) && source != null && roomToken != null) {
                 copyFile(source, roomToken)
+            } else if (isForbidden(lastRefusal)) {
+                showToast(R.string.nc_file_share_not_allowed)
             } else {
                 showToast(R.string.nc_common_error_sorry)
             }
@@ -121,7 +125,7 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
         } else {
             // null: this work was stopped while it waited; WorkManager runs it again, and the file is cached then
             when (ensureCached(source, cached)) {
-                true -> upload(cached, room)
+                true -> if (!isStopped) upload(cached, room)
                 false -> showToast(R.string.nc_forward_file_copy_failed)
                 null -> Unit
             }
@@ -140,17 +144,37 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
             roomToken = room,
             conversationName = conversationName,
             metaData = metaData,
-            internalConversationId = "$userId@$room"
+            internalConversationId = "$userId@$room",
+            // this work can run again (WorkManager restarts a stopped one): the copy is queued once
+            onceTag = "forward_copy:$id"
         )
     }
 
     /**
-     * Downloads the file into the cache with [DownloadFileToCacheWorker], as the media viewer does. The download is
+     * Downloads the file into the cache with [DownloadFileToCacheWorker], as the media viewer does, or waits for the
+     * download of the same file that is running already (the media viewer or an earlier forward). The download is
      * a work of its own, not part of the queue of uploads of the conversation: it ends as failed when the download
      * fails, and WorkManager would fail the uploads queued behind a failed work.
-     * Returns whether it succeeded, null when this work was stopped while it waited.
+     * Returns whether it succeeded, null when this work was stopped or interrupted while it waited.
      */
     private fun download(source: CopySource): Boolean? {
+        if (isStopped) return null
+        val workManager = WorkManager.getInstance(applicationContext)
+        return try {
+            val running = workManager.getWorkInfosByTag(source.fileId).get()
+                .firstOrNull { it.state == WorkInfo.State.RUNNING || it.state == WorkInfo.State.ENQUEUED }
+            val workId = running?.id ?: enqueueDownload(workManager, source)
+            awaitWork(workManager, workId)
+        } catch (e: ExecutionException) {
+            Log.e(TAG, "Could not ask WorkManager about the download", e)
+            null
+        } catch (e: InterruptedException) {
+            Thread.currentThread().interrupt()
+            null
+        }
+    }
+
+    private fun enqueueDownload(workManager: WorkManager, source: CopySource): UUID {
         val data = Data.Builder()
             .putLong(KEY_INTERNAL_USER_ID, userId)
             .putString(DownloadFileToCacheWorker.KEY_ATTACHMENT_FOLDER, source.attachmentFolder)
@@ -164,16 +188,22 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
             .addTag(source.fileId)
             .setExpeditedIfSupported()
             .build()
-        val workManager = WorkManager.getInstance(applicationContext)
         workManager.enqueue(request)
+        return request.id
+    }
+
+    /** Waits for the work to finish. True when it succeeded, null when this work was stopped meanwhile. */
+    private fun awaitWork(workManager: WorkManager, workId: UUID): Boolean? {
+        var result: Boolean? = null
         while (!isStopped) {
-            val info = workManager.getWorkInfoById(request.id).get()
+            val info = workManager.getWorkInfoById(workId).get()
             if (info == null || info.state.isFinished) {
-                return info?.state == WorkInfo.State.SUCCEEDED
+                result = info?.state == WorkInfo.State.SUCCEEDED
+                break
             }
             Thread.sleep(DOWNLOAD_POLL_MS)
         }
-        return null
+        return result
     }
 
     private fun showToast(@StringRes message: Int) = userMessage(message)

@@ -46,7 +46,10 @@ class DownloadFileToCacheWorker(val context: Context, workerParameters: WorkerPa
     lateinit var appPreferences: AppPreferences
 
     override fun doWork(): Result {
-        NextcloudTalkApplication.sharedApplication!!.componentApplication.inject(this)
+        // Invariant: dependencies that are already set (a test worker factory) are not overwritten.
+        if (!::ncApi.isInitialized) {
+            NextcloudTalkApplication.sharedApplication!!.componentApplication.inject(this)
+        }
 
         if (totalFileSize > -1) {
             setProgressAsync(Data.Builder().putInt(PROGRESS, 0).build())
@@ -101,17 +104,31 @@ class DownloadFileToCacheWorker(val context: Context, workerParameters: WorkerPa
             return Result.failure()
         }
 
-        var count: Int
-        val data = ByteArray(BYTE_UNIT_DIVIDER * DATA_BYTES)
         val bis: InputStream = BufferedInputStream(body.byteStream(), BYTE_UNIT_DIVIDER * DOWNLOAD_STREAM_SIZE)
-        val outputFile = File(targetFile.parentFile, targetFile.name + "_")
-        val output: OutputStream = FileOutputStream(outputFile)
+        // One temp file per run: two downloads of the same file (the media viewer and a forwarded copy) must not
+        // write into the same one.
+        val outputFile = File.createTempFile(TEMP_PREFIX, TEMP_SUFFIX, targetFile.parentFile)
+        var finished = false
+        try {
+            FileOutputStream(outputFile).use { output -> copyWithProgress(bis, output) }
+            bis.close()
+            finished = true
+        } finally {
+            if (!finished) {
+                // a failed read must not leave its temp file in the cache
+                outputFile.delete()
+            }
+        }
+
+        return onDownloadComplete(outputFile, targetFile)
+    }
+
+    private fun copyWithProgress(input: InputStream, output: OutputStream) {
+        val data = ByteArray(BYTE_UNIT_DIVIDER * DATA_BYTES)
         var total: Long = 0
         val startTime = System.currentTimeMillis()
         var timeCount = 1
-
-        count = bis.read(data)
-
+        var count = input.read(data)
         while (count != -1) {
             if (totalFileSize > 0) {
                 total += count.toLong()
@@ -123,26 +140,27 @@ class DownloadFileToCacheWorker(val context: Context, workerParameters: WorkerPa
                 }
             }
             output.write(data, 0, count)
-            count = bis.read(data)
+            count = input.read(data)
         }
-
         output.flush()
-        output.close()
-        bis.close()
-
-        return onDownloadComplete(outputFile, targetFile)
     }
 
+    // rename replaces an existing target. When it fails although a whole target is there (a run of the same file was
+    // faster), the file is cached and the download is done.
     private fun onDownloadComplete(tempFile: File, targetFile: File): Result =
-        if (tempFile.renameTo(targetFile)) {
+        if (tempFile.renameTo(targetFile) || targetFile.isFile) {
+            tempFile.delete()
             setProgressAsync(Data.Builder().putBoolean(SUCCESS, true).build())
             Result.success()
         } else {
+            tempFile.delete()
             Result.failure()
         }
 
     companion object {
         const val TAG = "DownloadFileToCache"
+        private const val TEMP_PREFIX = "download"
+        private const val TEMP_SUFFIX = "_"
         const val KEY_ATTACHMENT_FOLDER = "KEY_ATTACHMENT_FOLDER"
         const val KEY_FILE_ID = "KEY_FILE_ID"
         const val KEY_FILE_NAME = "KEY_FILE_NAME"

@@ -657,8 +657,8 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
     }
 
     private fun updatePlaceholderStatus(status: SendStatus) {
-        val refId = referenceId ?: return
-        val convId = internalConversationId ?: return
+        val refId = referenceId?.takeIf { it.isNotEmpty() } ?: return
+        val convId = internalConversationId?.takeIf { it.isNotEmpty() } ?: return
         chatDao.updateTempMessageSendStatus(convId, refId, status)
     }
 
@@ -781,8 +781,14 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             referenceId: String = "",
             internalConversationId: String = "",
             compressImages: Boolean = false,
-            allowUpdate: Boolean = false
+            allowUpdate: Boolean = false,
+            onceTag: String? = null
         ): UUID {
+            // With [onceTag] the upload is queued once: a work with this tag (in any state) is the one to return.
+            // The caller can run again (WorkManager restarts a stopped work) and must not queue the file twice.
+            onceTag?.let { tag ->
+                WorkManager.getInstance().getWorkInfosByTag(tag).get().firstOrNull()?.let { return it.id }
+            }
             val data: Data = Data.Builder()
                 .putLong(KEY_INTERNAL_USER_ID, userId)
                 .putString(DEVICE_SOURCE_FILE, fileUri)
@@ -800,6 +806,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                     if (referenceId.isNotEmpty()) {
                         addTag(referenceTag(referenceId))
                     }
+                    onceTag?.let { addTag(it) }
                 }
                 .setConstraints(
                     Constraints.Builder()

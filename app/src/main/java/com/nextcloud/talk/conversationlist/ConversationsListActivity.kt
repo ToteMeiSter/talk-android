@@ -899,16 +899,13 @@ class ConversationsListActivity : BaseActivity() {
                 val confirmed = PendingFileForward.take(key) ?: return@setPositiveButton
                 val caption = confirmed.caption
                 val metaData = if (caption.isNotEmpty()) Gson().toJson(mapOf("caption" to caption)) else null
-                val copySource = if (confirmed.fileId.isNotBlank() && confirmed.fileName.isNotBlank()) {
-                    ShareOperationWorker.CopySource(
-                        confirmed.fileId,
-                        confirmed.fileName,
-                        confirmed.fileSize,
-                        CapabilitiesUtil.getAttachmentFolder(currentUser.capabilities!!.spreedCapability!!)
-                    )
-                } else {
-                    null
-                }
+                val attachmentFolder = currentUser.capabilities?.spreedCapability
+                    ?.let { CapabilitiesUtil.getAttachmentFolder(it) }
+                val copySource = attachmentFolder
+                    ?.takeIf { confirmed.fileId.isNotBlank() && confirmed.fileName.isNotBlank() }
+                    ?.let {
+                        ShareOperationWorker.CopySource(confirmed.fileId, confirmed.fileName, confirmed.fileSize, it)
+                    }
                 ShareOperationWorker.shareFile(
                     conversation.token,
                     conversation.displayName,

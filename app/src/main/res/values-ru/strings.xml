@@ -692,7 +692,8 @@
     <string name="send_email">Отправить письмо</string>
     <string name="send_to">Отправить в</string>
     <string name="send_to_forbidden">Вам не разрешено делиться контентом в этом чате</string>
-    <string name="nc_forward_file_copy_failed">Не удалось скопировать файл в беседу</string>
+    <string name="nc_file_share_not_allowed">Вам не разрешено делиться этим файлом</string>
+    <string name="nc_forward_file_copy_failed">Не удалось переслать копию файла</string>
     <string name="send_to_three_dots">Отправить …</string>
     <string name="send_without_notification">Отправить без уведомления</string>
     <string name="set">Указать</string>
