@@ -92,6 +92,8 @@ class UploadWorkspace(private val dir: File) {
     fun prepareOnce(prepare: (File) -> PreparedUpload?): PreparedUpload? {
         stored()?.let { return it }
         resetFiles()
+        // A new preparation is a new file: the chunks start from the beginning, the old progress means nothing.
+        forgetProgress()
         dir.mkdirs()
         return prepare(dir)?.also { write(preparedFile, "${it.file.absolutePath}\n${it.fileName}") }
     }
@@ -178,6 +180,13 @@ class UploadWorkspace(private val dir: File) {
     fun markRestarted() {
         dir.mkdirs()
         write(restartedFile, "1")
+        // The upload starts from the beginning: the progress and the time of the old answers mean nothing.
+        forgetProgress()
+    }
+
+    private fun forgetProgress() {
+        progressFile.delete()
+        unavailableFile.delete()
     }
 
     fun isShared(): Boolean = sharedFile.exists()
