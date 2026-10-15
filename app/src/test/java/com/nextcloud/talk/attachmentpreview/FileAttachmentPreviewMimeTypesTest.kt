@@ -33,11 +33,12 @@ class FileAttachmentPreviewMimeTypesTest {
 
     @Before
     fun setUp() {
-        viewModel = FileAttachmentPreviewViewModel(mock(Context::class.java)).apply {
-            ioDispatcher = StandardTestDispatcher(testScope.testScheduler)
-            mainDispatcher = StandardTestDispatcher(testScope.testScheduler)
+        viewModel = FileAttachmentPreviewViewModel(
+            context = mock(Context::class.java),
+            ioDispatcher = StandardTestDispatcher(testScope.testScheduler),
+            mainDispatcher = StandardTestDispatcher(testScope.testScheduler),
             mimeTypeResolver = { _, uri -> if (uri.endsWith(".mp4")) "video/mp4" else "text/plain" }
-        }
+        )
     }
 
     @Test
@@ -68,14 +69,18 @@ class FileAttachmentPreviewMimeTypesTest {
     fun `a cancelled resolve that is still running does not drop a newer type`() {
         val started = CountDownLatch(1)
         val release = CountDownLatch(1)
-        viewModel.ioDispatcher = kotlinx.coroutines.Dispatchers.IO
-        viewModel.mimeTypeResolver = { _, uri ->
-            if (uri == "content://a/1.txt" && started.count == 1L) {
-                started.countDown()
-                release.await(5, TimeUnit.SECONDS)
+        viewModel = FileAttachmentPreviewViewModel(
+            context = mock(Context::class.java),
+            ioDispatcher = kotlinx.coroutines.Dispatchers.IO,
+            mainDispatcher = StandardTestDispatcher(testScope.testScheduler),
+            mimeTypeResolver = { _, uri ->
+                if (uri == "content://a/1.txt" && started.count == 1L) {
+                    started.countDown()
+                    release.await(5, TimeUnit.SECONDS)
+                }
+                "text/plain"
             }
-            "text/plain"
-        }
+        )
         viewModel.setInitialFiles(listOf("content://a/1.txt"))
         viewModel.resolveMimeTypes()
         assertTrue(started.await(5, TimeUnit.SECONDS))

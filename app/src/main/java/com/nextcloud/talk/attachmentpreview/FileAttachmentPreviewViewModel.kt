@@ -33,7 +33,18 @@ import javax.inject.Inject
  * screen — caption text, drag/scroll position, HQ toggle animation state — is ephemeral UI state
  * and stays in Compose's `remember`.
  */
-internal class FileAttachmentPreviewViewModel @Inject constructor(private val context: Context) : ViewModel() {
+internal class FileAttachmentPreviewViewModel(
+    private val context: Context,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val mimeTypeResolver: (Context, String) -> String? = { ctx, uri ->
+        FileUtils.resolveMimeType(ctx, uri.toUri())
+    }
+) : ViewModel() {
+
+    // Dagger cannot use the default values above, so it gets a constructor with the context only
+    @Inject
+    constructor(context: Context) : this(context, ioDispatcher = Dispatchers.IO)
 
     val files = mutableStateListOf<String>()
 
@@ -44,12 +55,6 @@ internal class FileAttachmentPreviewViewModel @Inject constructor(private val co
 
     /** Cheap, type-only counterpart of [descriptionsByUri]; filled before the (slow) full descriptions. */
     val mimeTypesByUri: Map<String, String?> get() = _mimeTypesByUri
-
-    internal var ioDispatcher: CoroutineDispatcher = Dispatchers.IO
-    internal var mainDispatcher: CoroutineDispatcher = Dispatchers.Main
-    internal var mimeTypeResolver: (Context, String) -> String? = { ctx, uri ->
-        FileUtils.resolveMimeType(ctx, uri.toUri())
-    }
 
     private var mimeTypeJob: Job? = null
 
