@@ -45,6 +45,7 @@ import org.robolectric.annotation.Config
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [33])
+@Suppress("TooManyFunctions")
 class ParentMessageTempPlaceholderTest {
 
     private lateinit var db: TalkDatabase
@@ -62,7 +63,10 @@ class ParentMessageTempPlaceholderTest {
             db.usersDao().saveUser(UserEntity(id = ACCOUNT_ID, userId = "me", username = "me", baseUrl = BASE_URL))
             db.conversationsDao().upsertConversations(
                 ACCOUNT_ID,
-                listOf(ConversationDto(token = ROOM_TOKEN).asEntity(ACCOUNT_ID))
+                listOf(
+                    ConversationDto(token = ROOM_TOKEN).asEntity(ACCOUNT_ID),
+                    ConversationDto(token = OTHER_ROOM_TOKEN).asEntity(ACCOUNT_ID)
+                )
             )
         }
         val conversationListUpdater =
@@ -134,10 +138,51 @@ class ParentMessageTempPlaceholderTest {
             assertEquals("other-ref", storedMessage(SERVER_MESSAGE_ID)!!.referenceId)
         }
 
-    private fun dto(id: Long, referenceId: String?) =
+    @Test
+    fun `fetched parent with another referenceId keeps the temp placeholder`() =
+        runBlocking {
+            storePlaceholder()
+            whenever(network.getContextForChatMessage(any(), any(), any(), any(), any(), anyOrNull()))
+                .thenReturn(listOf(serverCopy().apply { referenceId = "other-ref" }))
+
+            repository.fetchMissingParents(ROOM_TOKEN, listOf(SERVER_MESSAGE_ID))
+
+            assertNotNull(tempMessage())
+            assertEquals("other-ref", storedMessage(SERVER_MESSAGE_ID)!!.referenceId)
+        }
+
+    @Test
+    fun `parent of a system message keeps the temp placeholder of another conversation`() =
+        runBlocking {
+            storePlaceholder(OTHER_ROOM_TOKEN)
+            val systemMessage = dto(id = SYSTEM_MESSAGE_ID, referenceId = null).apply {
+                systemMessageType = ChatMessage.SystemMessageType.MESSAGE_EDITED
+                parentMessage = serverCopy()
+            }
+
+            syncer.persistChatMessagesAndHandleSystemMessages(target(), listOf(systemMessage))
+
+            assertNotNull(storedMessage(SERVER_MESSAGE_ID))
+            assertNotNull(tempMessage(OTHER_INTERNAL_CONVERSATION_ID))
+        }
+
+    @Test
+    fun `fetched parent keeps the temp placeholder of another conversation`() =
+        runBlocking {
+            storePlaceholder(OTHER_ROOM_TOKEN)
+            whenever(network.getContextForChatMessage(any(), any(), any(), any(), any(), anyOrNull()))
+                .thenReturn(listOf(serverCopy()))
+
+            repository.fetchMissingParents(ROOM_TOKEN, listOf(SERVER_MESSAGE_ID))
+
+            assertNotNull(storedMessage(SERVER_MESSAGE_ID))
+            assertNotNull(tempMessage(OTHER_INTERNAL_CONVERSATION_ID))
+        }
+
+    private fun dto(id: Long, referenceId: String?, token: String = ROOM_TOKEN) =
         ChatMessageDto(
             id = id,
-            token = ROOM_TOKEN,
+            token = token,
             actorType = "users",
             actorId = "me",
             actorDisplayName = "Me",
@@ -149,17 +194,19 @@ class ParentMessageTempPlaceholderTest {
 
     private fun serverCopy() = dto(id = SERVER_MESSAGE_ID, referenceId = REFERENCE_ID)
 
-    private suspend fun storePlaceholder() {
-        val placeholder = dto(id = PLACEHOLDER_ID, referenceId = REFERENCE_ID).asEntity(ACCOUNT_ID).apply {
-            isTemporary = true
-            sendStatus = SendStatus.PENDING
-        }
+    private suspend fun storePlaceholder(token: String = ROOM_TOKEN) {
+        val placeholder = dto(id = PLACEHOLDER_ID, referenceId = REFERENCE_ID, token = token)
+            .asEntity(ACCOUNT_ID)
+            .apply {
+                isTemporary = true
+                sendStatus = SendStatus.PENDING
+            }
         db.chatMessagesDao().upsertChatMessage(placeholder)
-        assertNotNull(tempMessage())
+        assertNotNull(tempMessage(placeholder.internalConversationId))
     }
 
-    private suspend fun tempMessage(): ChatMessageEntity? =
-        db.chatMessagesDao().getTempMessageForConversation(INTERNAL_CONVERSATION_ID, REFERENCE_ID, null).first()
+    private suspend fun tempMessage(internalConversationId: String = INTERNAL_CONVERSATION_ID): ChatMessageEntity? =
+        db.chatMessagesDao().getTempMessageForConversation(internalConversationId, REFERENCE_ID, null).first()
 
     private suspend fun storedMessage(id: Long): ChatMessageEntity? =
         db.chatMessagesDao().getChatMessageEntity(INTERNAL_CONVERSATION_ID, id)
@@ -173,6 +220,8 @@ class ParentMessageTempPlaceholderTest {
         private const val ACCOUNT_ID = 1L
         private const val ROOM_TOKEN = "room1"
         private const val INTERNAL_CONVERSATION_ID = "$ACCOUNT_ID@$ROOM_TOKEN"
+        private const val OTHER_ROOM_TOKEN = "room2"
+        private const val OTHER_INTERNAL_CONVERSATION_ID = "$ACCOUNT_ID@$OTHER_ROOM_TOKEN"
         private const val BASE_URL = "https://server.example.com"
         private const val CHAT_URL = "$BASE_URL/ocs/v2.php/apps/spreed/api/v1/chat/$ROOM_TOKEN"
         private const val REFERENCE_ID = "ref-1"
