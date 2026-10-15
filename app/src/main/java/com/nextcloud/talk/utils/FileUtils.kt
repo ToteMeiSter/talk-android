@@ -297,7 +297,7 @@ object FileUtils {
     /** An empty copy is a broken copy; a stream that broke off throws and never gets here. */
     internal fun isCompleteCopy(copiedLength: Long): Boolean = copiedLength > 0
 
-    private fun querySize(context: Context, uri: Uri): Long? =
+    internal fun querySize(context: Context, uri: Uri): Long? =
         try {
             context.contentResolver.query(uri, arrayOf(OpenableColumns.SIZE), null, null, null)?.use { cursor ->
                 val index = cursor.getColumnIndex(OpenableColumns.SIZE)
