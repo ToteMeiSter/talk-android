@@ -1020,13 +1020,23 @@ class ConversationsListActivity : BaseActivity() {
                 extractFilesFromClipData()
             }
             if (filesToShare!!.isEmpty() && textToPaste!!.isEmpty()) {
-                logger.e(TAG, "failed to get data from intent")
+                logger.e(TAG, "failed to get data from intent: ${describeShareIntent()}")
                 showSnackbar(context.resources.getString(R.string.nc_common_error_sorry))
             }
         } catch (e: Exception) {
             logger.e(TAG, "Something went wrong when extracting data from intent", e)
             showSnackbar(context.resources.getString(R.string.nc_common_error_sorry))
         }
+    }
+
+    /** Shape of the share intent without file names or uri paths: enough to see why no file was accepted. */
+    private fun describeShareIntent(): String {
+        val clipData = intent.clipData
+        val clipUris = (0 until (clipData?.itemCount ?: 0)).mapNotNull { clipData?.getItemAt(it)?.uri }
+        val authorities = clipUris.map { "${it.scheme}://${it.authority}" }
+        val hasStream = intent.hasExtra(Intent.EXTRA_STREAM)
+        return "action=${intent.action} type=${intent.type} clipItems=${clipData?.itemCount} " +
+            "clipUris=$authorities hasExtraStream=$hasStream data=${intent.data?.scheme}://${intent.data?.authority}"
     }
 
     private fun extractFilesFromClipData() {
