@@ -993,11 +993,15 @@ class ConversationsListActivity : BaseActivity() {
 
     private fun clearIntentAction() {
         intent.action = ""
+        // the share is consumed; without an onResume (list and chat side by side) the picker would stay in share mode
+        showShareToScreenState.value = hasActivityActionSendIntent()
     }
 
     @Suppress("Detekt.TooGenericExceptionCaught")
     private fun collectDataFromIntent() {
         filesToShare = ArrayList()
+        // text of an earlier share must not survive into this one
+        textToPaste = ""
         val intentAction = intent?.action ?: return
         if (intentAction != Intent.ACTION_SEND && intentAction != Intent.ACTION_SEND_MULTIPLE) return
         try {
