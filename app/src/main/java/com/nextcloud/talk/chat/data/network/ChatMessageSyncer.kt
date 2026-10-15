@@ -1073,7 +1073,8 @@ class ChatMessageSyncer @Inject constructor(
         }
 
         try {
-            chatDao.upsertChatMessage(parentMessageEntity)
+            // also drops the temporary row (upload placeholder) of a message that reached us only as a parent
+            chatDao.upsertChatMessagesAndDeleteTemp(target.internalConversationId, listOf(parentMessageEntity))
         } catch (e: SQLiteConstraintException) {
             Log.w(TAG, "Skip upserting parent message: conversation not in DB (yet). Swallowed exception: $e")
         }

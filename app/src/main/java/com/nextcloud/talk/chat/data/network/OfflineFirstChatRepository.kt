@@ -573,7 +573,11 @@ class OfflineFirstChatRepository @Inject constructor(
                 )
 
                 val message = messages.firstOrNull { it.id == id } ?: continue
-                chatDao.upsertChatMessage(message.asEntity(currentUser.id!!))
+                // also drops the temporary row (upload placeholder) sharing the parent's referenceId
+                chatDao.upsertChatMessagesAndDeleteTemp(
+                    internalConversationId,
+                    listOf(message.asEntity(currentUser.id!!))
+                )
             } catch (e: Exception) {
                 Log.e(TAG, "Failed to fetch parent message $id", e)
             }
