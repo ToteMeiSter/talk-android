@@ -65,6 +65,7 @@ import java.util.concurrent.atomic.AtomicInteger
  * The name, type and size of a file to send come from the provider of the app that owns it (Nextcloud Files):
  * a blocking binder call into another process. Sending a file must not make it on the main thread.
  */
+@Suppress("TooManyFunctions")
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class ChatViewModelUploadFileTest {
