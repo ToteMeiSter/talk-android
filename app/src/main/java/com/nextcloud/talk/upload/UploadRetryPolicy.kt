@@ -34,6 +34,12 @@ object UploadRetryPolicy {
     /** How long a server may keep answering "unavailable" without taking data before the upload fails: 24 hours. */
     const val MAX_UNAVAILABLE_MILLIS = 24L * 60 * 60 * 1000
 
+    /**
+     * "Unavailable" answers the server must have given, besides the 24 hours, before the upload fails. Time without
+     * a network passes too; a few answers after a long wait do not show a server that keeps refusing.
+     */
+    const val MIN_UNAVAILABLE_ANSWERS = 10
+
     private const val MAX_CAUSE_DEPTH = 8
     private const val HTTP_REQUEST_TIMEOUT = 408
     private const val HTTP_TOO_MANY_REQUESTS = 429
@@ -43,7 +49,7 @@ object UploadRetryPolicy {
     /**
      * NETWORK: no connection, retried without a limit.
      * UNAVAILABLE: the server answered that it is overloaded or restarting (5xx except 507, 408, 429), retried
-     * until [MAX_UNAVAILABLE_MILLIS] pass without progress of the upload.
+     * until [MAX_UNAVAILABLE_MILLIS] pass and [MIN_UNAVAILABLE_ANSWERS] answers came without progress of the upload.
      * SERVER: an answer or a TLS problem that may not go away, retried up to [MAX_SERVER_ERRORS] times.
      * OTHER: a local problem, fails at once.
      */
@@ -111,11 +117,19 @@ object UploadRetryPolicy {
     /**
      * @param serverErrorCount server errors of this upload so far, including the one being decided on
      * @param unavailableForMillis how long the server has been answering "unavailable" without the upload moving on
+     * @param unavailableAnswers how many such answers came in that time, including the one being decided on
      */
-    fun decide(kind: FailureKind, serverErrorCount: Int, unavailableForMillis: Long): Decision =
+    fun decide(
+        kind: FailureKind,
+        serverErrorCount: Int,
+        unavailableForMillis: Long,
+        unavailableAnswers: Int
+    ): Decision =
         when {
             kind == FailureKind.NETWORK -> Decision.RETRY
-            kind == FailureKind.UNAVAILABLE && unavailableForMillis < MAX_UNAVAILABLE_MILLIS -> Decision.RETRY
+            kind == FailureKind.UNAVAILABLE &&
+                (unavailableForMillis < MAX_UNAVAILABLE_MILLIS || unavailableAnswers < MIN_UNAVAILABLE_ANSWERS) ->
+                Decision.RETRY
             kind == FailureKind.SERVER && serverErrorCount < MAX_SERVER_ERRORS -> Decision.RETRY
             else -> Decision.FAIL
         }
