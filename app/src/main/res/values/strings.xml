@@ -672,6 +672,7 @@ How to translate with transifex:
     <string name="send_to_three_dots">Send to …</string>
     <string name="read_storage_no_permission">Sharing files from storage is not possible without permissions</string>
     <string name="open_in_files_app">Open in Files app</string>
+    <string name="nc_file_share_not_allowed">You are not allowed to share this file</string>
     <string name="send_to_forbidden">You are not allowed to share content to this chat</string>
     <string name="reaction_forbidden">You are not allowed to add or remove reactions in this conversation</string>
     <string name="reaction_add_failed">Could not add the reaction</string>

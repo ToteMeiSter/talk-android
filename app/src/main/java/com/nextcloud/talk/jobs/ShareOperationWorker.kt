@@ -12,6 +12,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.widget.Toast
+import androidx.annotation.StringRes
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequest
 import com.nextcloud.talk.utils.setExpeditedIfSupported
@@ -52,13 +53,14 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
     private val credentials: String
     private val baseUrl: String?
     private val metaData: String?
+    private var lastRefusal: Throwable? = null
 
     override fun doWork(): Result {
         val failed = filesArray.count { !tryCreateShare(it) }
         if (failed > 0) {
             // The work itself is not retried (the share was refused), so the user has to be told.
             Handler(Looper.getMainLooper()).post {
-                Toast.makeText(applicationContext, R.string.nc_common_error_sorry, Toast.LENGTH_LONG).show()
+                Toast.makeText(applicationContext, refusalMessage(lastRefusal), Toast.LENGTH_LONG).show()
             }
         }
         roomToken?.let { _shareCompletedFlow.tryEmit(it) }
@@ -88,6 +90,7 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
                             shouldRetry = true
                         } else {
                             Log.w(TAG, "error while creating RemoteShare", e)
+                            lastRefusal = e
                         }
                     }
                 )
@@ -116,11 +119,24 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
     companion object {
         private val TAG = ShareOperationWorker::class.simpleName
         private const val HTTP_NOT_FOUND = 404
+        private const val HTTP_FORBIDDEN = 403
         private const val SHARE_MAX_ATTEMPTS = 4
         private const val SHARE_RETRY_DELAY_MS = 2000L
 
         private val _shareCompletedFlow: MutableSharedFlow<String> = MutableSharedFlow(extraBufferCapacity = 1)
         val shareCompletedFlow: SharedFlow<String> = _shareCompletedFlow
+
+        /**
+         * Text for the user when the server refused a share. 403 is the answer for a file the user may not hand on:
+         * a file of another user shared without the right to share it again (a forwarded chat attachment).
+         */
+        @StringRes
+        internal fun refusalMessage(error: Throwable?): Int =
+            if (error is HttpException && error.code() == HTTP_FORBIDDEN) {
+                R.string.nc_file_share_not_allowed
+            } else {
+                R.string.nc_common_error_sorry
+            }
 
         fun shareFile(roomToken: String?, currentUser: User, remotePath: String, metaData: String?) {
             val paths: MutableList<String> = ArrayList()
