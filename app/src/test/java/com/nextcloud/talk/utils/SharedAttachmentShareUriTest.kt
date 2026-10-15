@@ -21,22 +21,20 @@ import org.robolectric.annotation.Config
 import java.io.File
 
 /**
- * The uris Talk hands to the system share sheet for a chat attachment come from its own FileProvider. When the user
- * picks Talk as the target, the conversation list gets such a uri back and must accept it, with the same rule it
- * applies in addFileToShareIfTrusted: another authority, or an own uri inside the shared attachments directory.
+ * A chat attachment shared from Talk to Talk arrives in the conversation list as a uri of the own FileProvider, and
+ * any app may send that activity a uri of the same provider. [FileUtils.isTrustedShareUri] is the rule the list
+ * applies: foreign uris pass, own uris only inside the shared attachments directory.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [33])
 class SharedAttachmentShareUriTest {
 
     private val context = ApplicationProvider.getApplicationContext<Application>()
+    private val own = BuildConfig.APPLICATION_ID
 
-    private fun isAccepted(uri: Uri): Boolean =
-        ContentResolver.SCHEME_CONTENT == uri.scheme &&
-            (
-                uri.authority != BuildConfig.APPLICATION_ID ||
-                    FileUtils.isSharedAttachmentProviderPath(context.cacheDir, uri.pathSegments)
-                )
+    private fun isTrusted(uri: Uri): Boolean = FileUtils.isTrustedShareUri(uri, own, context.cacheDir)
+
+    private fun isTrusted(uri: String): Boolean = isTrusted(Uri.parse(uri))
 
     /**
      * The uri FileProvider builds for [file] with the paths of res/xml/file_provider_paths.xml: the name of the
@@ -53,7 +51,7 @@ class SharedAttachmentShareUriTest {
         val path = file.relativeTo(root).path
         return Uri.Builder()
             .scheme(ContentResolver.SCHEME_CONTENT)
-            .authority(BuildConfig.APPLICATION_ID)
+            .authority(own)
             .encodedPath(Uri.encode(rootName) + "/" + Uri.encode(path, "/"))
             .build()
     }
@@ -66,8 +64,8 @@ class SharedAttachmentShareUriTest {
 
         val uri = providerUri(file)
 
-        assertEquals(BuildConfig.APPLICATION_ID, uri.authority)
-        assertTrue(isAccepted(uri))
+        assertEquals(own, uri.authority)
+        assertTrue(isTrusted(uri))
     }
 
     @Test
@@ -76,7 +74,7 @@ class SharedAttachmentShareUriTest {
         val file = FileUtils.resolveSharedAttachmentFile(context.cacheDir, "4711", "photo.jpg")!!
         file.writeText("x")
 
-        assertTrue(isAccepted(providerUri(file)))
+        assertTrue(isTrusted(providerUri(file)))
     }
 
     @Test
@@ -84,17 +82,56 @@ class SharedAttachmentShareUriTest {
         val logs = File(context.filesDir, "logs").apply { mkdirs() }.resolve("log.json").apply { writeText("x") }
         val photos = File(context.cacheDir, "photos").apply { mkdirs() }.resolve("p.jpg").apply { writeText("x") }
 
-        assertFalse(isAccepted(providerUri(logs)))
-        assertFalse(isAccepted(providerUri(photos)))
+        assertFalse(isTrusted(providerUri(logs)))
+        assertFalse(isTrusted(providerUri(photos)))
     }
 
     @Test
-    fun uriOfAnotherAppIsAccepted() {
-        assertTrue(isAccepted(Uri.parse("content://media/external/images/media/42")))
+    fun foreignUrisAreAccepted() {
+        assertTrue(isTrusted("content://media/external/images/media/42"))
+        // work profile and multi user uris of the system carry a user id of their own
+        assertTrue(isTrusted("content://10@media/external/images/media/42"))
     }
 
     @Test
-    fun fileSchemeStaysRejected() {
-        assertFalse(isAccepted(Uri.parse("file:///data/data/x/shared_attachments/a.jpg")))
+    fun fileSchemeAndMissingAuthorityStayRejected() {
+        assertFalse(isTrusted("file:///data/data/x/shared_attachments/a.jpg"))
+        assertFalse(isTrusted("content:///shared_attachments/a.jpg"))
+    }
+
+    @Test
+    fun userIdPrefixDoesNotHideTheOwnAuthority() {
+        assertFalse(isTrusted("content://0@$own/logs/log.json"))
+        assertFalse(isTrusted("content://10@$own/photos/p.jpg"))
+        assertFalse(isTrusted("content://0%40$own/logs/log.json"))
+        assertFalse(isTrusted("content://0@${own.uppercase()}/logs/log.json"))
+        assertFalse(isTrusted("content://${own.uppercase()}/logs/log.json"))
+        // the prefix changes nothing for the allowed directory
+        assertTrue(isTrusted("content://0@$own/shared_attachments/a.pdf"))
+    }
+
+    @Test
+    fun traversalAndEmptySegmentsStayInsideTheSharedAttachments() {
+        assertFalse(isTrusted("content://$own/shared_attachments/%2E%2E/logs/log.json"))
+        assertFalse(isTrusted("content://$own/shared_attachments/../logs/log.json"))
+        assertFalse(isTrusted("content://$own/shared_attachments/%2E%2E%2Flogs%2Flog.json"))
+        assertFalse(isTrusted("content://$own/shared_attachments/a%2Fb"))
+        assertFalse(isTrusted("content://$own/shared_attachments//%2E%2E/logs/log.json"))
+        assertFalse(isTrusted("content://$own//logs/log.json"))
+        assertFalse(isTrusted("content://$own/shared_attachments"))
+        // an empty segment is dropped on both sides and names the same file
+        assertTrue(isTrusted("content://$own/shared_attachments//a.pdf"))
+    }
+
+    @Test
+    fun logDescriptionHasNoFileNameAndNoUserId() {
+        val ownText = FileUtils.describeShareUriForLog(Uri.parse("content://7@$own/logs/secret-name.json"), own)
+        assertEquals("content://$own userInfo=true firstSegment=logs", ownText)
+
+        val foreign = FileUtils.describeShareUriForLog(Uri.parse("content://media/external/Holiday.jpg"), own)
+        assertEquals("content://media userInfo=false firstSegment=-", foreign)
+
+        assertEquals("none", FileUtils.describeShareUriForLog(null, own))
+        assertEquals("none://none userInfo=false firstSegment=-", FileUtils.describeShareUriForLog(Uri.EMPTY, own))
     }
 }

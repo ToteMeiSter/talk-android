@@ -10,7 +10,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationManager
 import android.content.ActivityNotFoundException
-import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -1032,11 +1031,13 @@ class ConversationsListActivity : BaseActivity() {
     /** Shape of the share intent without file names or uri paths: enough to see why no file was accepted. */
     private fun describeShareIntent(): String {
         val clipData = intent.clipData
-        val clipUris = (0 until (clipData?.itemCount ?: 0)).mapNotNull { clipData?.getItemAt(it)?.uri }
-        val authorities = clipUris.map { "${it.scheme}://${it.authority}" }
-        val hasStream = intent.hasExtra(Intent.EXTRA_STREAM)
-        return "action=${intent.action} type=${intent.type} clipItems=${clipData?.itemCount} " +
-            "clipUris=$authorities hasExtraStream=$hasStream data=${intent.data?.scheme}://${intent.data?.authority}"
+        val clipUris = (0 until (clipData?.itemCount ?: 0)).map {
+            FileUtils.describeShareUriForLog(clipData?.getItemAt(it)?.uri, packageName)
+        }
+        return "action=${intent.action} type=${intent.type} clipItems=${clipData?.itemCount ?: "none"} " +
+            "clipUris=$clipUris hasExtraStream=${intent.hasExtra(Intent.EXTRA_STREAM)} " +
+            "hasExtraText=${intent.hasExtra(Intent.EXTRA_TEXT)} " +
+            "data=${FileUtils.describeShareUriForLog(intent.data, packageName)}"
     }
 
     private fun extractFilesFromClipData() {
@@ -1060,13 +1061,11 @@ class ConversationsListActivity : BaseActivity() {
     }
 
     private fun addFileToShareIfTrusted(uri: Uri?) {
-        val isTrusted = uri != null &&
-            ContentResolver.SCHEME_CONTENT == uri.scheme &&
-            (uri.authority != packageName || FileUtils.isSharedAttachmentProviderPath(cacheDir, uri.pathSegments))
-        if (isTrusted) {
+        if (uri != null && FileUtils.isTrustedShareUri(uri, packageName, cacheDir)) {
             filesToShare!!.add(uri.toString())
         } else {
-            Log.w(TAG, "Rejecting untrusted uri from share intent: $uri")
+            val shape = FileUtils.describeShareUriForLog(uri, packageName)
+            Log.w(TAG, "Rejecting untrusted uri from share intent: $shape")
         }
     }
 

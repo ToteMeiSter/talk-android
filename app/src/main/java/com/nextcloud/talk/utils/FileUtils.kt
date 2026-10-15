@@ -29,6 +29,7 @@ object FileUtils {
     private const val MD5_LENGTH: Int = 32
     private const val SHARED_ATTACHMENTS_DIRECTORY = "shared_attachments"
     private const val PARTIAL_SUFFIX = ".part"
+    private const val NONE = "none"
 
     /**
      * Returns the dedicated cache directory used for externally shared attachments.
@@ -75,6 +76,33 @@ object FileUtils {
             resolvedFile = resolvedFile?.let { resolveFileInDirectory(it, segment) }
         }
         return resolvedFile != null
+    }
+
+    /**
+     * Whether a uri that came in through a share intent may be read and uploaded. The intent comes from any app, so
+     * a uri of an own provider is accepted only inside the shared attachments directory, see
+     * [isSharedAttachmentProviderPath]. ContentResolver drops a "<userId>@" prefix of the authority before it looks
+     * the provider up, so the prefix must not hide an own authority: it is cut off, and compared without case.
+     */
+    fun isTrustedShareUri(uri: Uri, ownAuthority: String, cacheDir: File): Boolean {
+        val authority = uri.authority
+        if (ContentResolver.SCHEME_CONTENT != uri.scheme || authority.isNullOrEmpty()) return false
+        val isOwn = authority.substringAfterLast('@').equals(ownAuthority, ignoreCase = true)
+        return !isOwn || isSharedAttachmentProviderPath(cacheDir, uri.pathSegments)
+    }
+
+    /**
+     * Shape of a share uri for the log: scheme, authority without a user id, whether there was one and, for an own
+     * authority only, the first path segment (the directory of the provider). No file names.
+     */
+    fun describeShareUriForLog(uri: Uri?, ownAuthority: String): String {
+        if (uri == null) return NONE
+        val authority = uri.authority
+        val host = authority?.substringAfterLast('@') ?: NONE
+        val hasUserInfo = authority?.contains('@') == true
+        val isOwn = host.equals(ownAuthority, ignoreCase = true)
+        val firstSegment = if (isOwn) uri.pathSegments.firstOrNull() ?: NONE else "-"
+        return "${uri.scheme ?: NONE}://$host userInfo=$hasUserInfo firstSegment=$firstSegment"
     }
 
     /**
