@@ -876,8 +876,10 @@ class ConversationsListActivity : BaseActivity() {
 
     /**
      * Forwarding a file: after the confirmation the file is shared to the chosen conversation, with the share step the
-     * upload of attachments ends with. Nothing is uploaded again. The file comes from [PendingFileForward] by the key
-     * of the intent, never from the intent itself (this activity is exported); without an entry nothing is forwarded.
+     * upload of attachments ends with. Nothing is uploaded again, unless the server refuses the share (403: a file
+     * of another user that may not be shared again): then [ShareOperationWorker] forwards a copy. The file
+     * comes from [PendingFileForward] by the key of the intent, never from the intent itself (this activity is
+     * exported); without an entry nothing is forwarded.
      */
     private fun confirmForwardFile(key: String) {
         val conversation = selectedConversation ?: return
@@ -897,7 +899,24 @@ class ConversationsListActivity : BaseActivity() {
                 val confirmed = PendingFileForward.take(key) ?: return@setPositiveButton
                 val caption = confirmed.caption
                 val metaData = if (caption.isNotEmpty()) Gson().toJson(mapOf("caption" to caption)) else null
-                ShareOperationWorker.shareFile(conversation.token, currentUser, confirmed.remotePath, metaData)
+                val copySource = if (confirmed.fileId.isNotBlank() && confirmed.fileName.isNotBlank()) {
+                    ShareOperationWorker.CopySource(
+                        confirmed.fileId,
+                        confirmed.fileName,
+                        confirmed.fileSize,
+                        CapabilitiesUtil.getAttachmentFolder(currentUser.capabilities!!.spreedCapability!!)
+                    )
+                } else {
+                    null
+                }
+                ShareOperationWorker.shareFile(
+                    conversation.token,
+                    conversation.displayName,
+                    currentUser,
+                    confirmed.remotePath,
+                    metaData,
+                    copySource
+                )
                 intent.removeExtra(KEY_FORWARD_FILE_KEY)
                 forwardMessageState.value = false
                 openConversation()
