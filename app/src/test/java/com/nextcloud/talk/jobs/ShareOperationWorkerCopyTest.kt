@@ -39,6 +39,9 @@ import org.junit.runner.RunWith
 import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.doReturn
 import org.mockito.kotlin.mock
+import org.mockito.kotlin.never
+import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
@@ -53,9 +56,11 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 
 /**
- * Forwarding a file of another user: the share API answers 403 (no right to share it again) and Talk forwards a copy
- * of the file instead. Any other answer leaves the file alone. The worker, the real WorkManager and a stand-in for
- * the download are used; the upload of the copy is only checked to be queued.
+ * Forwarding a file of another user. The permissions of the file tell before the request whether it may be shared
+ * (share and update bits): then the share API is asked, and its 403 means "already shared" (no copy). A file without
+ * the right is copied at once, the share API is not asked. Without permissions the share API decides: 403 (no right
+ * to share it again) makes a copy, any other answer leaves the file alone. The worker, the real WorkManager and a
+ * stand-in for the download are used; the upload of the copy is only checked to be queued.
  */
 @Suppress("TooManyFunctions")
 @RunWith(RobolectricTestRunner::class)
@@ -276,6 +281,144 @@ class ShareOperationWorkerCopyTest {
         assertEquals(0, queuedUploads(workManager))
     }
 
+    @Test
+    fun `permissions with share and update and 403 mean already shared, no copy and no message`() {
+        refuseShare(403)
+        cacheFile()
+        val workManager = initWorkManager()
+
+        run(permissions = 27)
+
+        verifyShareRequests(1)
+        assertEquals(0, downloads)
+        assertEquals(0, queuedUploads(workManager))
+        assertNull(lastToastText())
+    }
+
+    @Test
+    fun `permissions with share and update and 403 without a copy source show no message`() {
+        refuseShare(403)
+        val workManager = initWorkManager()
+
+        run(withCopy = false, permissions = 19)
+
+        verifyShareRequests(1)
+        assertEquals(0, queuedUploads(workManager))
+        assertNull(lastToastText())
+    }
+
+    @Test
+    fun `permissions with share and update and an accepted share make no copy`() {
+        shareAnswers(Observable.just(GenericOverall()))
+        val workManager = initWorkManager()
+
+        run(permissions = 27)
+
+        verifyShareRequests(1)
+        assertEquals(0, queuedUploads(workManager))
+        assertNull(lastToastText())
+    }
+
+    @Test
+    fun `permissions with share and update and 500 show the common error`() {
+        refuseShare(500)
+        val workManager = initWorkManager()
+
+        run(permissions = 27)
+
+        assertEquals(0, queuedUploads(workManager))
+        assertEquals(R.string.nc_common_error_sorry, lastToastText())
+    }
+
+    @Test
+    fun `permissions 17 without update copy at once and ask no share`() {
+        refuseShare(403)
+        val cached = cacheFile()
+        val workManager = initWorkManager()
+
+        run(permissions = 17)
+
+        verifyShareRequests(0)
+        assertEquals(1, queuedUploads(workManager))
+        runQueuedUploads(workManager)
+        assertUploadOf(cached)
+    }
+
+    @Test
+    fun `permissions 1 read only copy at once and ask no share`() {
+        refuseShare(403)
+        val cached = cacheFile()
+        val workManager = initWorkManager()
+
+        run(permissions = 1)
+
+        verifyShareRequests(0)
+        assertEquals(1, queuedUploads(workManager))
+        runQueuedUploads(workManager)
+        assertUploadOf(cached)
+    }
+
+    @Test
+    fun `permissions 3 with update and without share copy at once`() {
+        refuseShare(403)
+        cacheFile()
+        val workManager = initWorkManager()
+
+        run(permissions = 3)
+
+        verifyShareRequests(0)
+        assertEquals(1, queuedUploads(workManager))
+    }
+
+    @Test
+    fun `permissions without share and a server that answers 404 copy and ask no share`() {
+        refuseShare(404)
+        cacheFile()
+        val workManager = initWorkManager()
+
+        run(permissions = 1)
+
+        verifyShareRequests(0)
+        assertEquals(1, queuedUploads(workManager))
+        assertNull(lastToastText())
+    }
+
+    @Test
+    fun `permissions without share download the file when it is not cached`() {
+        refuseShare(403)
+        val workManager = initWorkManager()
+
+        run(permissions = 17)
+
+        verifyShareRequests(0)
+        assertEquals(1, downloads)
+        assertEquals(1, queuedUploads(workManager))
+    }
+
+    @Test
+    fun `permissions without share and without a copy source tell the user and ask no share`() {
+        refuseShare(403)
+        val workManager = initWorkManager()
+
+        run(withCopy = false, permissions = 17)
+
+        verifyShareRequests(0)
+        assertEquals(0, queuedUploads(workManager))
+        assertEquals(R.string.nc_file_share_not_allowed, lastToastText())
+    }
+
+    private fun verifyShareRequests(count: Int) {
+        verify(ncApi, if (count == 0) never() else times(count)).createRemoteShare(
+            anyOrNull(),
+            anyOrNull(),
+            anyOrNull(),
+            anyOrNull(),
+            anyOrNull(),
+            anyOrNull(),
+            anyOrNull()
+        )
+    }
+
     private fun assertUploadOf(cached: File) {
         val upload = uploadInputs.single()
         assertEquals(Uri.fromFile(cached).toString(), upload.getString("DEVICE_SOURCE_FILE"))
@@ -309,10 +452,17 @@ class ShareOperationWorkerCopyTest {
         return file
     }
 
-    private fun run(withCopy: Boolean = true, id: UUID = UUID.randomUUID()): ListenableWorker.Result =
-        worker(withCopy, id).doWork()
+    private fun run(
+        withCopy: Boolean = true,
+        id: UUID = UUID.randomUUID(),
+        permissions: Int? = null
+    ): ListenableWorker.Result = worker(withCopy, id, permissions).doWork()
 
-    private fun worker(withCopy: Boolean = true, id: UUID = UUID.randomUUID()): ShareOperationWorker {
+    private fun worker(
+        withCopy: Boolean = true,
+        id: UUID = UUID.randomUUID(),
+        permissions: Int? = null
+    ): ShareOperationWorker {
         val inputData = androidx.work.Data.Builder()
             .putLong("KEY_INTERNAL_USER_ID", ACCOUNT_ID)
             .putString("KEY_ROOM_TOKEN", "room")
@@ -322,6 +472,7 @@ class ShareOperationWorkerCopyTest {
             .let {
                 if (withCopy) ShareOperationWorker.CopySource(FILE_ID, FILE_NAME, 7L, "/Talk").putInto(it) else it
             }
+            .apply { permissions?.let { putInt("KEY_FILE_PERMISSIONS", it) } }
             .build()
         return TestListenableWorkerBuilder<ShareOperationWorker>(context())
             .setId(id)
