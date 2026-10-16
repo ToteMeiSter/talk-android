@@ -4476,7 +4476,8 @@ class ChatActivity :
             caption = caption,
             fileId = params.id,
             fileName = params.name,
-            fileSize = params.size ?: -1L
+            fileSize = params.size ?: -1L,
+            permissions = params.permissions
         )
         val key = PendingFileForward.put(entry)
         val intent = Intent(this, ConversationsListActivity::class.java)

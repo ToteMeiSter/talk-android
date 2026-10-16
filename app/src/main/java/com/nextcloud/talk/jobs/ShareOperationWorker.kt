@@ -60,6 +60,10 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
     private val metaData: String? = workerParams.inputData.getString(KEY_META_DATA)
     private val filesArray: MutableList<String?> = ArrayList()
     private val copySource: CopySource? = CopySource.from(workerParams.inputData)
+
+    // the permissions of the file as the message tells them; null when it does not
+    private val filePermissions: Int? = workerParams.inputData.getInt(KEY_FILE_PERMISSIONS, NO_PERMISSIONS)
+        .takeIf { it != NO_PERMISSIONS }
     private lateinit var credentials: String
     private var baseUrl: String? = null
     private var lastRefusal: Throwable? = null
@@ -97,26 +101,41 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
         baseUrl = operationsUser.baseUrl
         credentials = ApiUtils.getCredentials(operationsUser.username, operationsUser.token)!!
 
-        val failed = filesArray.count { !tryCreateShare(it) }
-        if (failed > 0) {
-            // The work itself is not retried (the share was refused), so the user has to be told.
-            val source = copySource
-            if (isForbidden(lastRefusal) && source != null && roomToken != null) {
-                copyFile(source, roomToken)
-            } else if (isForbidden(lastRefusal)) {
-                showToast(R.string.nc_file_share_not_allowed)
-            } else {
-                showToast(R.string.nc_common_error_sorry)
+        // Known permissions without the right to share (or to update, which Talk needs for a share) decide before
+        // the request: the server would refuse, and 404 or 403 would not tell why.
+        val mayShare = filePermissions?.let { it and PERMISSION_SHARE != 0 && it and PERMISSION_UPDATE != 0 }
+        if (mayShare == false) {
+            copyOrTell()
+        } else {
+            val failed = filesArray.count { !tryCreateShare(it) }
+            if (failed > 0) {
+                // The work itself is not retried (the share was refused), so the user has to be told.
+                when {
+                    // the file may be shared, so 403 says "already shared": the server has posted it again
+                    mayShare == true && isForbidden(lastRefusal) -> Unit
+                    isForbidden(lastRefusal) -> copyOrTell()
+                    else -> showToast(R.string.nc_common_error_sorry)
+                }
             }
         }
         roomToken?.let { _shareCompletedFlow.tryEmit(it) }
         return Result.success()
     }
 
+    private fun copyOrTell() {
+        val source = copySource
+        if (source != null && roomToken != null) {
+            copyFile(source, roomToken)
+        } else {
+            showToast(R.string.nc_file_share_not_allowed)
+        }
+    }
+
     /**
-     * 403 is the answer for a file the user may not hand on: a file of another user shared without the right to
-     * share it again (a forwarded chat attachment). Talk then forwards a copy: the file from the cache of the
-     * media viewer, or downloaded now, goes through the normal upload of attachments of the conversation.
+     * Forwards a copy of a file the user may not hand on (a file of another user shared without the right to share
+     * it again): the permissions of the file say so, or, when they are unknown, the share API answered 403. The file
+     * from the cache of the media viewer, or downloaded now, goes through the normal upload of attachments of the
+     * conversation.
      */
     private fun copyFile(source: CopySource, room: String) {
         val cached = FileUtils.resolveSharedAttachmentFile(applicationContext.cacheDir, source.fileId, source.fileName)
@@ -264,6 +283,10 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
         private const val KEY_COPY_FILE_NAME = "KEY_COPY_FILE_NAME"
         private const val KEY_COPY_FILE_SIZE = "KEY_COPY_FILE_SIZE"
         private const val KEY_COPY_ATTACHMENT_FOLDER = "KEY_COPY_ATTACHMENT_FOLDER"
+        private const val KEY_FILE_PERMISSIONS = "KEY_FILE_PERMISSIONS"
+        private const val NO_PERMISSIONS = -1
+        private const val PERMISSION_UPDATE = 2
+        private const val PERMISSION_SHARE = 16
 
         private val _shareCompletedFlow: MutableSharedFlow<String> = MutableSharedFlow(extraBufferCapacity = 1)
         val shareCompletedFlow: SharedFlow<String> = _shareCompletedFlow
@@ -275,7 +298,8 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
             currentUser: User,
             remotePath: String,
             metaData: String?,
-            copySource: CopySource?
+            copySource: CopySource?,
+            permissions: Int? = null
         ) {
             val paths: MutableList<String> = ArrayList()
             paths.add(remotePath)
@@ -287,6 +311,7 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
                 .putString(KEY_META_DATA, metaData)
                 .putString(KEY_CONVERSATION_NAME, conversationName)
                 .apply { copySource?.putInto(this) }
+                .apply { permissions?.let { putInt(KEY_FILE_PERMISSIONS, it) } }
                 .build()
             val shareWorker = OneTimeWorkRequest.Builder(ShareOperationWorker::class.java)
                 .setInputData(data)
