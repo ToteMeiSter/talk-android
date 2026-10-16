@@ -101,6 +101,21 @@ class UploadWorkspaceTest {
         assertEquals(1, workspace().serverErrors())
     }
 
+    fun `a file named like a file of the workspace stays intact and is found again`() {
+        for (name in listOf("prepared", "lock", "restarted", "uploaded", "cancelled", "progress", "prepared.tmp", "file")) {
+            val ws = workspace(name)
+            val prepared = ws.prepareOnce { create(it, name, 1_000) }!!
+            ws.markRestarted()
+
+            assertEquals(SIZE.toLong(), prepared.file.length())
+            assertEquals(prepared, workspace(name).prepareOnce { null })
+            assertEquals(SIZE.toLong(), prepared.file.length())
+            assertTrue(workspace(name).isRestarted())
+            assertTrue(ws.tryLock())
+            ws.unlock()
+        }
+    }
+
     @Test
     fun `delete removes the file and the counters`() {
         val ws = workspace()

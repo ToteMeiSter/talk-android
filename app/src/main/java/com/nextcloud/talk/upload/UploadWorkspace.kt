@@ -88,14 +88,16 @@ class UploadWorkspace(private val dir: File) {
     /**
      * Returns the prepared file of an earlier run, or runs [prepare] once and keeps its result.
      * [prepare] gets an empty directory it may create files in, and returns null when the file cannot be prepared.
+     * The directory is a subdirectory of the workspace, so a file named like a file of the workspace itself
+     * ("prepared", "lock", "restarted", anything ending in ".tmp") cannot replace it.
      */
     fun prepareOnce(prepare: (File) -> PreparedUpload?): PreparedUpload? {
         stored()?.let { return it }
         resetFiles()
         // A new preparation is a new file: the chunks start from the beginning, the old progress means nothing.
         forgetProgress()
-        dir.mkdirs()
-        return prepare(dir)?.also { write(preparedFile, "${it.file.absolutePath}\n${it.fileName}") }
+        val filesDir = File(dir, FILES_DIR).apply { mkdirs() }
+        return prepare(filesDir)?.also { write(preparedFile, "${it.file.absolutePath}\n${it.fileName}") }
     }
 
     fun serverErrors(): Int = readLong(serverErrorsFile)?.toInt() ?: 0
@@ -256,6 +258,7 @@ class UploadWorkspace(private val dir: File) {
         private const val UPLOADED_PROGRESS = 101
         private const val DRAFT_MARK = "draft"
         private const val TMP_SUFFIX = ".tmp"
+        private const val FILES_DIR = "file"
 
         /** Not part of the prepared file: survive a new preparation. */
         private val KEPT_FILES = setOf(
