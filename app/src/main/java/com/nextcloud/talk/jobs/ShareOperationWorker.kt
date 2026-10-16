@@ -130,7 +130,7 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
 
     /**
      * Copies the file, or tells the user that it may not be shared when no copy is possible. Called when the
-     * permissions say so; with permissions that are out of date the share API's 403 may be missed, see [doWork].
+     * permissions deny the share, or, when they are unknown, after a 403 of the share API.
      */
     private fun copyOrTell() {
         val source = copySource
