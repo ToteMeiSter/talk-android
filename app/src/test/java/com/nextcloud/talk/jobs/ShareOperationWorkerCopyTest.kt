@@ -371,9 +371,9 @@ class ShareOperationWorkerCopyTest {
     }
 
     @Test
-    fun `permissions without share and a server that answers 404 copy and ask no share`() {
+    fun `permissions without share copy whatever the server would answer`() {
         refuseShare(404)
-        cacheFile()
+        val cached = cacheFile()
         val workManager = initWorkManager()
 
         run(permissions = 1)
@@ -381,6 +381,22 @@ class ShareOperationWorkerCopyTest {
         verifyShareRequests(0)
         assertEquals(1, queuedUploads(workManager))
         assertNull(lastToastText())
+        runQueuedUploads(workManager)
+        assertUploadOf(cached)
+    }
+
+    @Test
+    fun `unknown permissions and 404 ask the share four times, make no copy and show the common error`() {
+        refuseShare(404)
+        cacheFile()
+        val workManager = initWorkManager()
+
+        run()
+
+        verifyShareRequests(4)
+        assertEquals(0, downloads)
+        assertEquals(0, queuedUploads(workManager))
+        assertEquals(R.string.nc_common_error_sorry, lastToastText())
     }
 
     @Test

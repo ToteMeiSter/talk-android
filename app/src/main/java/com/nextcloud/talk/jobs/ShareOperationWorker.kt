@@ -91,6 +91,11 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
         }
     }
 
+    /**
+     * Known limitation: the permissions come from the message as of the last sync. If the owner has withdrawn the
+     * right to share since, the 403 "no right" is taken for "already shared": no copy and no error. The 403 is not
+     * told apart by its text, the server sends a localized hint (spreed RoomShareProvider.php:143).
+     */
     override fun doWork(): Result {
         // Invariant: dependencies that are already set (a test worker factory) are not overwritten.
         if (!::ncApi.isInitialized) {
@@ -112,6 +117,7 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
                 // The work itself is not retried (the share was refused), so the user has to be told.
                 when {
                     // the file may be shared, so 403 says "already shared": the server has posted it again
+                    // (known limitation: a right withdrawn after the sync is taken for this too, see doWork)
                     mayShare == true && isForbidden(lastRefusal) -> Unit
                     isForbidden(lastRefusal) -> copyOrTell()
                     else -> showToast(R.string.nc_common_error_sorry)
@@ -122,6 +128,10 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
         return Result.success()
     }
 
+    /**
+     * Copies the file, or tells the user that it may not be shared when no copy is possible. Called when the
+     * permissions say so; with permissions that are out of date the share API's 403 may be missed, see [doWork].
+     */
     private fun copyOrTell() {
         val source = copySource
         if (source != null && roomToken != null) {
