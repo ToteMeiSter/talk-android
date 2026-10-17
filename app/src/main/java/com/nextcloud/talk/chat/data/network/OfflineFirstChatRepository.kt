@@ -1285,7 +1285,7 @@ class OfflineFirstChatRepository @Inject constructor(
         }
 
         val entity = ChatMessageEntity(
-            internalId = "$internalConversationId@_temp_$currentTimeMillis",
+            internalId = "$internalConversationId@_temp_$referenceId",
             internalConversationId = internalConversationId,
             id = negativeTimeOfDayMillis,
             threadId = threadId,
