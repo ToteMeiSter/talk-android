@@ -102,7 +102,8 @@ class UploadWorkspaceTest {
     }
 
     fun `a file named like a file of the workspace stays intact and is found again`() {
-        for (name in listOf("prepared", "lock", "restarted", "uploaded", "cancelled", "progress", "prepared.tmp", "file")) {
+        val names = listOf("prepared", "lock", "restarted", "uploaded", "cancelled", "progress", "prepared.tmp", "file")
+        for (name in names) {
             val ws = workspace(name)
             val prepared = ws.prepareOnce { create(it, name, 1_000) }!!
             ws.markRestarted()
