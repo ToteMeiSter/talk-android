@@ -125,7 +125,7 @@ data class MessageActionsState(
     val showReplyPrivately: Boolean,
     val showOpenThread: Boolean,
     val showForward: Boolean,
-    /** Sending a file message on to another conversation; offered by the media viewer, not by the sheet. */
+    /** Sending a file message on to another conversation; offered by the media viewer, the sheet and the selection. */
     val showForwardFile: Boolean,
     /** Whether new content (e.g. a drawn copy of a photo) may be posted to this conversation. */
     val canSendToConversation: Boolean,
@@ -142,7 +142,11 @@ data class MessageActionsState(
     val showSave: Boolean,
     val showOpenInFiles: Boolean,
     val showDelete: Boolean
-)
+) {
+    /** Whether Forward is offered at all: for the sheet of one message and for the toolbar of a selection. */
+    val canForward: Boolean
+        get() = showForward || showForwardFile
+}
 
 @Suppress("LongParameterList", "CyclomaticComplexMethod", "LongMethod")
 internal fun buildMessageActionsState(
@@ -253,8 +257,7 @@ internal fun buildMessageActionsState(
             !message.isDeleted &&
             isOnline &&
             !isClassifiedRoom &&
-            conversation?.remoteServer.isNullOrEmpty() &&
-            !message.fileParameters.path.isNullOrBlank(),
+            conversation?.remoteServer.isNullOrEmpty(),
         canSendToConversation = hasChatPermission && !isConversationReadOnly,
         showEdit = isMessageEditable,
         showCopy = !message.isDeleted,
@@ -457,7 +460,7 @@ internal fun MessageActionsSheetContent(
                     }
                 )
             }
-            if (actionsState.showForward) {
+            if (actionsState.canForward) {
                 MessageActionItem(
                     iconRes = R.drawable.forward_24,
                     text = stringResource(R.string.nc_forward_message),
