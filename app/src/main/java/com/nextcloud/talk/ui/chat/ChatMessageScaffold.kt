@@ -1090,6 +1090,29 @@ fun EnrichedText(
     maxLines: Int = Int.MAX_VALUE,
     highlightSearchTerm: String? = null
 ) {
+    val context = LocalContext.current
+    val templates = LocalForwardedNoteTemplates.current ?: remember(context) { forwardedNoteTemplates(context) }
+    val split = remember(message.plainMessage, templates) { splitForwardedNote(message.plainMessage, templates) }
+    if (split == null) {
+        EnrichedBody(message, modifier, maxLines, highlightSearchTerm)
+        return
+    }
+    val rest = message.message.substringAfter('\n', "")
+    Column(modifier) {
+        Text(text = split.note, style = forwardedNoteStyle, color = colorScheme.onSurface)
+        if (split.body.isNotBlank()) {
+            EnrichedBody(
+                message.copy(message = rest, plainMessage = split.body),
+                Modifier,
+                maxLines,
+                highlightSearchTerm
+            )
+        }
+    }
+}
+
+@Composable
+private fun EnrichedBody(message: ChatMessageUi, modifier: Modifier, maxLines: Int, highlightSearchTerm: String?) {
     val isInspectionMode = LocalInspectionMode.current
     val isSingleEmoji = !isInspectionMode &&
         message.messageParameters.isEmpty() &&
