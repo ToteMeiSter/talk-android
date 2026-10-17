@@ -285,6 +285,7 @@
     <string name="nc_chat_selected_count">Выбрано: %1$d</string>
     <string name="nc_chat_forward_nothing">Выбранные сообщения нельзя переслать: среди них нет текстовых сообщений и файлов</string>
     <string name="nc_chat_forward_some_skipped">Часть выбранных сообщений нельзя переслать, они пропущены</string>
+    <string name="nc_chat_forwarded_from">Переслано от %1$s</string>
     <string name="nc_forward_confirm_text_count">Текстовых сообщений: %1$d</string>
     <string name="nc_forward_to_three_dots">Вперёд к …</string>
     <string name="nc_gallery">Галерея</string>

@@ -155,6 +155,8 @@ import com.nextcloud.talk.chat.ui.model.MessageTypeContent
 import com.nextcloud.talk.chat.viewmodels.ChatViewModel
 import com.nextcloud.talk.chat.viewmodels.MessageInputViewModel
 import com.nextcloud.talk.chat.viewmodels.ForwardOutcome
+import com.nextcloud.talk.chat.viewmodels.forwardedCaption
+import com.nextcloud.talk.chat.viewmodels.forwardedText
 import com.nextcloud.talk.chat.viewmodels.planForward
 import com.nextcloud.talk.conversationinfo.ConversationInfoActivity
 import com.nextcloud.talk.conversationinfo.viewmodel.ConversationInfoViewModel
@@ -4433,8 +4435,11 @@ class ChatActivity :
     }
 
     fun forwardMessage(message: ChatMessage?) {
-        forwardText(message?.message)
+        forwardText(message?.let { forwardedText(it, forwardedFromNote(it)) })
     }
+
+    private fun forwardedFromNote(message: ChatMessage): String =
+        getString(R.string.nc_chat_forwarded_from, message.getNullsafeActorDisplayName())
 
     private suspend fun loadSelectedMessages(ids: Set<Int>): List<ChatMessage> =
         ids.mapNotNull { loadMessageOrNull(it.toLong()) }.sortedBy { it.jsonMessageId }
@@ -4444,9 +4449,10 @@ class ChatActivity :
         lifecycleScope.launch {
             val messages = loadSelectedMessages(session.chatViewModel.messageSelection.ids.value)
             val isOnline = networkMonitor.isOnline.value
-            val plan = planForward(messages) { actionsStateFor(it, isOnline).showForward }
+            val plan = planForward(messages, { actionsStateFor(it, isOnline).showForward }, ::forwardedFromNote)
             val files = messages.filter { actionsStateFor(it, isOnline).showForwardFile }
             val fileEntries = files.mapNotNull(::fileForwardEntry)
+            logForwardPlan(messages, isOnline, plan.texts.size, fileEntries.size)
             if (session !== roomSession) {
                 return@launch
             }
@@ -4460,6 +4466,16 @@ class ChatActivity :
             }
             forward(null, ArrayList(plan.texts), ArrayList(fileEntries.map(PendingFileForward::put)))
         }
+    }
+
+    /** Names, for every selected message, why it is or is not forwarded; no texts, names or file names. */
+    private fun logForwardPlan(messages: List<ChatMessage>, isOnline: Boolean, texts: Int, files: Int) {
+        val rows = messages.joinToString { m ->
+            val state = actionsStateFor(m, isOnline)
+            "${m.jsonMessageId}:${m.getCalculateMessageType()}" +
+                ",text=${state.showForward},file=${state.showForwardFile},blank=${m.message.isNullOrBlank()}"
+        }
+        Log.d(TAG, "forward selection: ${messages.size} loaded, $texts texts, $files files; $rows")
     }
 
     private fun copySelectedMessages() {
@@ -4562,7 +4578,10 @@ class ChatActivity :
         return PendingFileForward.Entry(
             userId = conversationUserId,
             remotePath = remoteSharePath(path),
-            caption = message.message?.takeIf { it != "{file}" }.orEmpty(),
+            caption = forwardedCaption(
+                forwardedFromNote(message),
+                message.message?.takeIf { it != "{file}" }.orEmpty()
+            ),
             fileId = params.id,
             fileName = params.name,
             fileSize = params.size ?: -1L,
