@@ -133,15 +133,17 @@ import com.nextcloud.talk.chat.ui.ChatToolbarAvatarType
 import com.nextcloud.talk.chat.ui.ChatToolbarCallbacks
 import com.nextcloud.talk.chat.ui.ChatToolbarState
 import com.nextcloud.talk.chat.ui.MessageActionsBottomSheet
+import com.nextcloud.talk.chat.ui.MessageActionsState
 import com.nextcloud.talk.chat.ui.ProfileModalBottomSheet
 import com.nextcloud.talk.chat.ui.ShowReactionsModalBottomSheet
 import com.nextcloud.talk.chat.ui.TempMessageActionsBottomSheet
 import com.nextcloud.talk.chat.ui.TypingIndicatorBanner
-import com.nextcloud.talk.chat.ui.MessageActionsState
 import com.nextcloud.talk.chat.ui.buildMessageActionsState
 import com.nextcloud.talk.chat.ui.model.MessageTypeContent
 import com.nextcloud.talk.chat.viewmodels.ChatViewModel
 import com.nextcloud.talk.chat.viewmodels.MessageInputViewModel
+import com.nextcloud.talk.chat.viewmodels.ForwardOutcome
+import com.nextcloud.talk.chat.viewmodels.planForward
 import com.nextcloud.talk.conversationinfo.ConversationInfoActivity
 import com.nextcloud.talk.conversationinfo.viewmodel.ConversationInfoViewModel
 import com.nextcloud.talk.conversationlist.ConversationsListActivity
@@ -445,6 +447,7 @@ class ChatActivity :
 
     private val filesToUpload: MutableList<String> = ArrayList()
     lateinit var sharedText: String
+    private var forwardedTexts: List<String> = emptyList()
     private var sharedFilePaths: List<String> = emptyList()
 
     private val _participantPermissionsFlow = MutableStateFlow<ParticipantPermissions?>(null)
@@ -533,6 +536,10 @@ class ChatActivity :
 
     private val onBackPressedCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
+            if (chatViewModel.messageSelection.consumeBack()) {
+                return
+            }
+
             if (chatViewModel.chatMode.value == ChatViewModel.ChatMode.SEARCH_MODE) {
                 chatViewModel.exitSearchMode()
                 chatToolbarState = chatToolbarState.copy(isSearchMode = false, searchQuery = "")
@@ -712,6 +719,9 @@ class ChatActivity :
 
         messageInputFragment = getMessageInputFragment()
         messageInputViewModel.setData(chatViewModel.getChatRepository())
+        if (savedInstanceState == null) {
+            sendForwardedMessages()
+        }
 
         initObservers()
         resumeRecordingAfterRecreation()
@@ -959,6 +969,7 @@ class ChatActivity :
                     val overflowHeightDp = with(LocalDensity.current) {
                         overflowContainerHeightPx.intValue.toDp()
                     }
+                    val selectedMessageIds by chatViewModel.messageSelection.ids.collectAsStateWithLifecycle()
                     ChatView(
                         state = ChatViewState(
                             chatItems = uiState.items,
@@ -970,7 +981,8 @@ class ChatActivity :
                             markedAsUnreadByUser = uiState.markedAsUnreadByUser,
                             hasChatPermission = participantPermissions?.hasChatPermission() == true,
                             downloadingFileState = downloadingFileState.value,
-                            stickyHeaderTopOffset = overflowHeightDp
+                            stickyHeaderTopOffset = overflowHeightDp,
+                            selectedMessageIds = selectedMessageIds
                         ),
                         callbacks = ChatViewCallbacks(
                             onLoadMore = { messageId, direction -> loadMoreMessages(messageId, direction) },
@@ -980,6 +992,7 @@ class ChatActivity :
                             onLoadQuotedMessageClick = { messageId -> onLoadQuotedMessage(messageId) },
                             messageCallbacks = ChatMessageCallbacks(
                                 onLongClick = { openMessageActionsDialog(it) },
+                                onSelectionToggle = { chatViewModel.messageSelection.toggle(it) },
                                 onSwipeReply = { handleSwipeToReply(it) },
                                 onFileClick = { downloadAndOpenFile(it, openWhenDownloadState, downloadingFileState) },
                                 onPollClick = { pollId, pollName -> openPollDialog(pollId, pollName) },
@@ -1441,8 +1454,27 @@ class ChatActivity :
         runPendingMediaRequest()
     }
 
+    /** Sends every forwarded message on its own, in chat order; the send queue keeps that order. */
+    private fun sendForwardedMessages() {
+        val user = conversationUser ?: return
+        forwardedTexts.forEach { text ->
+            messageInputViewModel.sendChatMessage(
+                userId = user.id!!,
+                roomToken = roomToken,
+                message = text,
+                displayName = user.displayName ?: "",
+                replyTo = 0,
+                sendWithoutNotification = false,
+                threadTitle = null
+            )
+        }
+        forwardedTexts = emptyList()
+    }
+
     private fun handleIntent(intent: Intent) {
         val extras: Bundle? = intent.extras
+        forwardedTexts = extras?.getStringArrayList(BundleKeys.KEY_SHARED_MSG_TEXTS).orEmpty()
+        intent.removeExtra(BundleKeys.KEY_SHARED_MSG_TEXTS)
 
         openedViaNotification = extras?.getBoolean(KEY_OPENED_VIA_NOTIFICATION) ?: false
 
@@ -1837,7 +1869,9 @@ class ChatActivity :
                     removeUnreadMessagesMarker()
                 }
 
-                is MessageInputViewModel.SendChatMessageErrorState -> {}
+                is MessageInputViewModel.SendChatMessageErrorState -> {
+                    Toast.makeText(this, R.string.nc_common_error_sorry, Toast.LENGTH_LONG).show()
+                }
 
                 else -> {}
             }
@@ -2210,9 +2244,21 @@ class ChatActivity :
         binding.chatToolbarComposeView.setContent {
             MaterialTheme(colorScheme = viewThemeUtils.getColorScheme(this@ChatActivity)) {
                 CompositionLocalProvider(LocalViewThemeUtils provides viewThemeUtils) {
+                    val selectedMessageIds by chatViewModel.messageSelection.ids.collectAsStateWithLifecycle()
+                    val canForwardSelection by produceState(false, selectedMessageIds) {
+                        value = loadSelectedMessages(selectedMessageIds).any {
+                            actionsStateFor(it, networkMonitor.isOnline.value).showForward
+                        }
+                    }
                     ChatToolbar(
-                        state = chatToolbarState,
+                        state = chatToolbarState.copy(
+                            selectedCount = selectedMessageIds.size,
+                            canForwardSelection = canForwardSelection
+                        ),
                         callbacks = ChatToolbarCallbacks(
+                            onSelectionClose = { chatViewModel.messageSelection.clear() },
+                            onSelectionForward = { forwardSelectedMessages() },
+                            onSelectionCopy = { copySelectedMessages() },
                             onNavigateUp = { onBackPressedDispatcher.onBackPressed() },
                             onTitleClick = { showConversationInfoScreen() },
                             onVoiceCall = { startACall(true, false) },
@@ -3962,9 +4008,52 @@ class ChatActivity :
     }
 
     fun forwardMessage(message: ChatMessage?) {
+        forwardText(message?.message)
+    }
+
+    private suspend fun loadSelectedMessages(ids: Set<Int>): List<ChatMessage> =
+        ids.map { chatViewModel.getMessageById(it.toLong()).first() }.sortedBy { it.jsonMessageId }
+
+    private fun forwardSelectedMessages() {
+        lifecycleScope.launch {
+            val plan = planForward(loadSelectedMessages(chatViewModel.messageSelection.ids.value)) {
+                actionsStateFor(it, networkMonitor.isOnline.value).showForward
+            }
+            if (plan.outcome != ForwardOutcome.ALL) {
+                Toast.makeText(this@ChatActivity, R.string.nc_chat_forward_text_only, Toast.LENGTH_LONG).show()
+            }
+            if (plan.outcome == ForwardOutcome.NOTHING_TO_FORWARD) {
+                return@launch
+            }
+            chatViewModel.messageSelection.clear()
+            forwardTexts(plan.texts)
+        }
+    }
+
+    private fun copySelectedMessages() {
+        lifecycleScope.launch {
+            val messages = loadSelectedMessages(chatViewModel.messageSelection.ids.value).filterNot { it.isDeleted }
+            if (messages.isEmpty()) {
+                return@launch
+            }
+            copyText(messages.joinToString("\n") { it.getRichText().orEmpty() })
+            chatViewModel.messageSelection.clear()
+        }
+    }
+
+    private fun forwardText(text: String?) {
+        forward(text, null)
+    }
+
+    private fun forwardTexts(texts: List<String>) {
+        forward(null, ArrayList(texts))
+    }
+
+    private fun forward(text: String?, texts: ArrayList<String>?) {
         val bundle = Bundle()
         bundle.putBoolean(BundleKeys.KEY_FORWARD_MSG_FLAG, true)
-        bundle.putString(BundleKeys.KEY_FORWARD_MSG_TEXT, message?.message)
+        bundle.putString(BundleKeys.KEY_FORWARD_MSG_TEXT, text)
+        bundle.putStringArrayList(BundleKeys.KEY_FORWARD_MSG_TEXTS, texts)
         bundle.putString(BundleKeys.KEY_FORWARD_HIDE_SOURCE_ROOM, roomToken)
 
         val intent = Intent(this, ConversationsListActivity::class.java)
@@ -4146,11 +4235,15 @@ class ChatActivity :
     }
 
     fun copyMessage(message: ChatMessage?) {
+        copyText(message?.getRichText())
+    }
+
+    private fun copyText(text: String?) {
         val clipboardManager =
             getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         val clipData = ClipData.newPlainText(
             resources?.getString(R.string.nc_app_product_name),
-            message?.getRichText()
+            text
         )
         clipboardManager.setPrimaryClip(clipData)
     }
