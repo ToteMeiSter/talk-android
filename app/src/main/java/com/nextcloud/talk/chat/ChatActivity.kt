@@ -145,11 +145,11 @@ import com.nextcloud.talk.chat.ui.ChatToolbarAvatarType
 import com.nextcloud.talk.chat.ui.ChatToolbarCallbacks
 import com.nextcloud.talk.chat.ui.ChatToolbarState
 import com.nextcloud.talk.chat.ui.MessageActionsBottomSheet
+import com.nextcloud.talk.chat.ui.MessageActionsState
 import com.nextcloud.talk.chat.ui.ProfileModalBottomSheet
 import com.nextcloud.talk.chat.ui.ShowReactionsModalBottomSheet
 import com.nextcloud.talk.chat.ui.TempMessageActionsBottomSheet
 import com.nextcloud.talk.chat.ui.TypingIndicatorBanner
-import com.nextcloud.talk.chat.ui.MessageActionsState
 import com.nextcloud.talk.chat.ui.buildMessageActionsState
 import com.nextcloud.talk.chat.ui.model.MessageTypeContent
 import com.nextcloud.talk.chat.viewmodels.ChatViewModel
@@ -567,6 +567,10 @@ class ChatActivity :
 
     private val onBackPressedCallback = object : OnBackPressedCallback(true) {
         override fun handleOnBackPressed() {
+            if (roomSession?.chatViewModel?.messageSelection?.consumeBack() == true) {
+                return
+            }
+
             if (chatViewModel.chatMode.value == ChatViewModel.ChatMode.SEARCH_MODE) {
                 chatViewModel.exitSearchMode()
                 chatToolbarState = chatToolbarState.copy(isSearchMode = false, searchQuery = "")
@@ -1225,6 +1229,7 @@ class ChatActivity :
                         val overflowHeightDp = with(LocalDensity.current) {
                             overflowContainerHeightPx.intValue.toDp()
                         }
+                        val selectedMessageIds by chatViewModel.messageSelection.ids.collectAsStateWithLifecycle()
                         ChatView(
                             state = ChatViewState(
                                 chatItems = uiState.items,
@@ -1236,7 +1241,8 @@ class ChatActivity :
                                 markedAsUnreadByUser = uiState.markedAsUnreadByUser,
                                 hasChatPermission = participantPermissions?.hasChatPermission() == true,
                                 downloadingFileState = downloadingFileState.value,
-                                stickyHeaderTopOffset = overflowHeightDp
+                                stickyHeaderTopOffset = overflowHeightDp,
+                                selectedMessageIds = selectedMessageIds
                             ),
                             callbacks = ChatViewCallbacks(
                                 onLoadMore = { messageId, direction -> loadMoreMessages(messageId, direction) },
@@ -1246,6 +1252,7 @@ class ChatActivity :
                                 onLoadQuotedMessageClick = { messageId -> onLoadQuotedMessage(messageId) },
                                 messageCallbacks = ChatMessageCallbacks(
                                     onLongClick = { openMessageActionsDialog(it) },
+                                    onSelectionToggle = { chatViewModel.messageSelection.toggle(it) },
                                     onSwipeReply = { handleSwipeToReply(it) },
                                     onFileClick = {
                                         downloadAndOpenFile(it, openWhenDownloadState, downloadingFileState)
@@ -2536,9 +2543,22 @@ class ChatActivity :
         binding.chatToolbarComposeView.setContent {
             MaterialTheme(colorScheme = viewThemeUtils.getColorScheme(this@ChatActivity)) {
                 CompositionLocalProvider(LocalViewThemeUtils provides viewThemeUtils) {
+                    val selectionIds = roomSession?.chatViewModel?.messageSelection?.ids ?: NO_SELECTION
+                    val selectedMessageIds by selectionIds.collectAsStateWithLifecycle()
+                    val canForwardSelection by produceState(false, selectedMessageIds) {
+                        value = loadSelectedMessages(selectedMessageIds).any {
+                            actionsStateFor(it, networkMonitor.isOnline.value).showForward
+                        }
+                    }
                     ChatToolbar(
-                        state = chatToolbarState,
+                        state = chatToolbarState.copy(
+                            selectedCount = selectedMessageIds.size,
+                            canForwardSelection = canForwardSelection
+                        ),
                         callbacks = ChatToolbarCallbacks(
+                            onSelectionClose = { roomSession?.chatViewModel?.messageSelection?.clear() },
+                            onSelectionForward = { forwardSelectedMessages() },
+                            onSelectionCopy = { copySelectedMessages() },
                             onNavigateUp = { onBackPressedDispatcher.onBackPressed() },
                             onTitleClick = { showConversationInfoScreen() },
                             onVoiceCall = { startACall(true, false) },
@@ -4388,9 +4408,42 @@ class ChatActivity :
     }
 
     fun forwardMessage(message: ChatMessage?) {
+        forwardText(message?.message)
+    }
+
+    private suspend fun loadSelectedMessages(ids: Set<Int>): List<ChatMessage> =
+        ids.mapNotNull { loadMessageOrNull(it.toLong()) }.sortedBy { it.jsonMessageId }
+
+    private fun forwardSelectedMessages() {
+        val session = roomSession ?: return
+        lifecycleScope.launch {
+            val messages = loadSelectedMessages(session.chatViewModel.messageSelection.ids.value)
+                .filter { actionsStateFor(it, networkMonitor.isOnline.value).showForward }
+            if (session !== roomSession || messages.isEmpty()) {
+                return@launch
+            }
+            session.chatViewModel.messageSelection.clear()
+            forwardText(messages.joinToString("\n") { it.message.orEmpty() })
+        }
+    }
+
+    private fun copySelectedMessages() {
+        val session = roomSession ?: return
+        lifecycleScope.launch {
+            val messages = loadSelectedMessages(session.chatViewModel.messageSelection.ids.value)
+                .filterNot { it.isDeleted }
+            if (session !== roomSession || messages.isEmpty()) {
+                return@launch
+            }
+            copyText(messages.joinToString("\n") { it.getRichText().orEmpty() })
+            session.chatViewModel.messageSelection.clear()
+        }
+    }
+
+    private fun forwardText(text: String?) {
         val bundle = Bundle()
         bundle.putBoolean(BundleKeys.KEY_FORWARD_MSG_FLAG, true)
-        bundle.putString(BundleKeys.KEY_FORWARD_MSG_TEXT, message?.message)
+        bundle.putString(BundleKeys.KEY_FORWARD_MSG_TEXT, text)
         bundle.putString(BundleKeys.KEY_FORWARD_HIDE_SOURCE_ROOM, roomToken)
 
         val intent = Intent(this, ConversationsListActivity::class.java)
@@ -4576,11 +4629,15 @@ class ChatActivity :
     }
 
     fun copyMessage(message: ChatMessage?) {
+        copyText(message?.getRichText())
+    }
+
+    private fun copyText(text: String?) {
         val clipboardManager =
             getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
         val clipData = ClipData.newPlainText(
             resources?.getString(R.string.nc_app_product_name),
-            message?.getRichText()
+            text
         )
         clipboardManager.setPrimaryClip(clipData)
     }
@@ -5156,6 +5213,8 @@ class ChatActivity :
     }
 
     companion object {
+        private val NO_SELECTION = MutableStateFlow<Set<Int>>(emptySet())
+
         private const val VIDEO_PREVIEW_MAX_WIDTH_FRACTION = 0.75f
         val TAG = ChatActivity::class.java.simpleName
 

@@ -42,5 +42,9 @@ data class ChatToolbarState(
     val supportsSilentCall: Boolean = false,
     val isClassified: Boolean = false,
     /** False when the chat is shown next to the conversation list, where there is nothing to navigate up to. */
-    val showNavigateUp: Boolean = true
+    val showNavigateUp: Boolean = true,
+    /** Number of selected messages; the toolbar shows the selection actions instead of the conversation while > 0. */
+    val selectedCount: Int = 0,
+    /** Whether at least one selected message can be forwarded. */
+    val canForwardSelection: Boolean = false
 )

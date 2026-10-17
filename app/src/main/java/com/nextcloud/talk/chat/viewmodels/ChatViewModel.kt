@@ -584,6 +584,8 @@ class ChatViewModel @AssistedInject constructor(
         _messageActionsMessageId.value = null
     }
 
+    val messageSelection = MessageSelection()
+
     val getLastCommonReadFlow = chatRepository.lastCommonReadFlow
 
     val isLoadingFlow = chatRepository.isLoadingFlow

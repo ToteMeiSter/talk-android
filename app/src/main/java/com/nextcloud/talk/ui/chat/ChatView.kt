@@ -111,7 +111,8 @@ data class ChatViewState(
     val highlightedSearchTerm: String? = null,
     val markedAsUnreadByUser: Boolean = false,
     val downloadingFileState: List<String> = listOf(),
-    val stickyHeaderTopOffset: Dp = 0.dp
+    val stickyHeaderTopOffset: Dp = 0.dp,
+    val selectedMessageIds: Set<Int> = emptySet()
 )
 
 data class ChatViewCallbacks(
@@ -431,7 +432,8 @@ fun ChatView(
                                     isOneToOneConversation = state.isOneToOneConversation,
                                     conversationThreadId = state.conversationThreadId,
                                     hasChatPermission = state.hasChatPermission,
-                                    downloadingFileState = state.downloadingFileState
+                                    downloadingFileState = state.downloadingFileState,
+                                    selectionActive = state.selectedMessageIds.isNotEmpty()
                                 ),
                                 callbacks = ChatMessageCallbacks(
                                     onLongClick = callbacks.messageCallbacks.onLongClick,
@@ -447,7 +449,8 @@ fun ChatView(
                                     onQuotedMessageClick = handleQuotedMessageClick,
                                     onSystemMessageExpandClick = callbacks.messageCallbacks.onSystemMessageExpandClick,
                                     onAvatarClick = callbacks.messageCallbacks.onAvatarClick,
-                                    onCancelUpload = callbacks.messageCallbacks.onCancelUpload
+                                    onCancelUpload = callbacks.messageCallbacks.onCancelUpload,
+                                    onSelectionToggle = callbacks.messageCallbacks.onSelectionToggle
                                 )
                             )
                         }
@@ -461,11 +464,13 @@ fun ChatView(
                         ) {
                             MediaGroupMessage(
                                 messages = chatItem.messages,
+                                isChecked = chatItem.messages.last().id in state.selectedMessageIds,
                                 context = ChatMessageContext(
                                     isOneToOneConversation = state.isOneToOneConversation,
                                     conversationThreadId = state.conversationThreadId,
                                     hasChatPermission = state.hasChatPermission,
-                                    downloadingFileState = state.downloadingFileState
+                                    downloadingFileState = state.downloadingFileState,
+                                    selectionActive = state.selectedMessageIds.isNotEmpty()
                                 ),
                                 callbacks = ChatMessageCallbacks(
                                     onLongClick = callbacks.messageCallbacks.onLongClick,
@@ -476,7 +481,8 @@ fun ChatView(
                                     onOpenThreadClick = callbacks.messageCallbacks.onOpenThreadClick,
                                     onQuotedMessageClick = handleQuotedMessageClick,
                                     onAvatarClick = callbacks.messageCallbacks.onAvatarClick,
-                                    onCancelUpload = callbacks.messageCallbacks.onCancelUpload
+                                    onCancelUpload = callbacks.messageCallbacks.onCancelUpload,
+                                    onSelectionToggle = callbacks.messageCallbacks.onSelectionToggle
                                 )
                             )
                         }
