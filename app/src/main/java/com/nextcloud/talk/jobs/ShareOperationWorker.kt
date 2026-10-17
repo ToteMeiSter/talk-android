@@ -16,6 +16,7 @@ import android.net.Uri
 import androidx.annotation.StringRes
 import androidx.work.WorkInfo
 import androidx.work.Data
+import androidx.work.ExistingWorkPolicy
 import androidx.work.OneTimeWorkRequest
 import com.nextcloud.talk.utils.setExpeditedIfSupported
 import androidx.work.WorkManager
@@ -309,7 +310,8 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
             remotePath: String,
             metaData: String?,
             copySource: CopySource?,
-            permissions: Int? = null
+            permissions: Int? = null,
+            queueName: String? = null
         ) {
             val paths: MutableList<String> = ArrayList()
             paths.add(remotePath)
@@ -327,7 +329,13 @@ class ShareOperationWorker(context: Context, workerParams: WorkerParameters) : W
                 .setInputData(data)
                 .setExpeditedIfSupported()
                 .build()
-            WorkManager.getInstance().enqueue(shareWorker)
+            // A queue name puts the share behind the earlier ones of that queue, so files forwarded together stay in order.
+            if (queueName == null) {
+                WorkManager.getInstance().enqueue(shareWorker)
+            } else {
+                WorkManager.getInstance()
+                    .enqueueUniqueWork(queueName, ExistingWorkPolicy.APPEND_OR_REPLACE, shareWorker)
+            }
         }
     }
 }

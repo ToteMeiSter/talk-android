@@ -226,6 +226,6 @@ class SendMessageWorker(context: Context, workerParams: WorkerParameters) : Coro
             workManager.getWorkInfosForUniqueWorkFlow(sendQueueName(internalConversationId)).first()
                 .any { !it.state.isFinished }
 
-        private fun sendQueueName(internalConversationId: String) = "send_message_queue_$internalConversationId"
+        fun sendQueueName(internalConversationId: String) = "send_message_queue_$internalConversationId"
     }
 }

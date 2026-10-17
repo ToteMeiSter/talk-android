@@ -4439,21 +4439,23 @@ class ChatActivity :
     private fun forwardSelectedMessages() {
         val session = roomSession ?: return
         lifecycleScope.launch {
-            val plan = planForward(loadSelectedMessages(session.chatViewModel.messageSelection.ids.value)) {
-                actionsStateFor(it, networkMonitor.isOnline.value).showForward
-            }
+            val messages = loadSelectedMessages(session.chatViewModel.messageSelection.ids.value)
+            val isOnline = networkMonitor.isOnline.value
+            val plan = planForward(messages) { actionsStateFor(it, isOnline).showForward }
+            val files = messages.filter { actionsStateFor(it, isOnline).showForwardFile }
+            val fileEntries = files.mapNotNull(::fileForwardEntry)
             if (session !== roomSession) {
                 return@launch
             }
-            if (plan.texts.isEmpty()) {
-                Toast.makeText(this@ChatActivity, R.string.nc_chat_forward_text_only, Toast.LENGTH_LONG).show()
+            if (plan.texts.isEmpty() && fileEntries.isEmpty()) {
+                Toast.makeText(this@ChatActivity, R.string.nc_chat_forward_nothing, Toast.LENGTH_LONG).show()
                 return@launch
             }
             session.chatViewModel.messageSelection.clear()
-            if (plan.skipped > 0) {
-                Toast.makeText(this@ChatActivity, R.string.nc_chat_forward_text_only, Toast.LENGTH_LONG).show()
+            if (messages.size > plan.texts.size + fileEntries.size) {
+                Toast.makeText(this@ChatActivity, R.string.nc_chat_forward_some_skipped, Toast.LENGTH_LONG).show()
             }
-            forwardTexts(plan.texts)
+            forward(null, ArrayList(plan.texts), ArrayList(fileEntries.map(PendingFileForward::put)))
         }
     }
 
@@ -4474,15 +4476,12 @@ class ChatActivity :
         forward(text, null)
     }
 
-    private fun forwardTexts(texts: List<String>) {
-        forward(null, ArrayList(texts))
-    }
-
-    private fun forward(text: String?, texts: ArrayList<String>?) {
+    private fun forward(text: String?, texts: ArrayList<String>?, fileKeys: ArrayList<String>? = null) {
         val bundle = Bundle()
         bundle.putBoolean(BundleKeys.KEY_FORWARD_MSG_FLAG, true)
         bundle.putString(BundleKeys.KEY_FORWARD_MSG_TEXT, text)
         bundle.putStringArrayList(BundleKeys.KEY_FORWARD_MSG_TEXTS, texts)
+        bundle.putStringArrayList(BundleKeys.KEY_FORWARD_FILE_KEYS, fileKeys)
         bundle.putString(BundleKeys.KEY_FORWARD_HIDE_SOURCE_ROOM, roomToken)
 
         val intent = Intent(this, ConversationsListActivity::class.java)
@@ -4550,27 +4549,34 @@ class ChatActivity :
         showFileAttachmentPreview(mutableListOf(uri.toString()), startDrawing = true)
     }
 
-    /**
-     * Forwards the file of [message] to a conversation to be picked. The path comes from the message in the database
-     * and goes to the conversation list as the key of an entry in [PendingFileForward], never as a path in an intent.
-     */
-    private fun forwardFile(message: ChatMessage) {
-        val path = message.fileParameters.path
-        if (path.isNullOrBlank()) {
-            Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
-            return
-        }
-        val caption = message.message?.takeIf { it != "{file}" }.orEmpty()
+    /** The file of [message] as it is forwarded, or null when the message does not tell where the file lies. */
+    private fun fileForwardEntry(message: ChatMessage): PendingFileForward.Entry? {
         val params = message.fileParameters
-        val entry = PendingFileForward.Entry(
+        val path = params.path
+        if (path.isNullOrBlank()) {
+            return null
+        }
+        return PendingFileForward.Entry(
             userId = conversationUserId,
             remotePath = remoteSharePath(path),
-            caption = caption,
+            caption = message.message?.takeIf { it != "{file}" }.orEmpty(),
             fileId = params.id,
             fileName = params.name,
             fileSize = params.size ?: -1L,
             permissions = params.permissions
         )
+    }
+
+    /**
+     * Forwards the file of [message] to a conversation to be picked. The path comes from the message in the database
+     * and goes to the conversation list as the key of an entry in [PendingFileForward], never as a path in an intent.
+     */
+    private fun forwardFile(message: ChatMessage) {
+        val entry = fileForwardEntry(message)
+        if (entry == null) {
+            Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
+            return
+        }
         val key = PendingFileForward.put(entry)
         val intent = Intent(this, ConversationsListActivity::class.java)
         intent.putExtra(BundleKeys.KEY_FORWARD_MSG_FLAG, true)
