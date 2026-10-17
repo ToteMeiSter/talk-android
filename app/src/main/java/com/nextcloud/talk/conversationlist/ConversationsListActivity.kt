@@ -1310,6 +1310,7 @@ class ConversationsListActivity : BaseActivity() {
 
         // Two-pane: the chat is already shown next to the list, don't recreate it (would kill its session)
         if (textToPaste.isNullOrEmpty() &&
+            messagesToSend.isNullOrEmpty() &&
             filesToShare.isNullOrEmpty() &&
             selectedMessageId == null &&
             !CallActivity.active &&
