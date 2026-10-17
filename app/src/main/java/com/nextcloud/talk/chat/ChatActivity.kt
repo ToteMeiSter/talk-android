@@ -154,6 +154,7 @@ import com.nextcloud.talk.chat.ui.buildMessageActionsState
 import com.nextcloud.talk.chat.ui.model.MessageTypeContent
 import com.nextcloud.talk.chat.viewmodels.ChatViewModel
 import com.nextcloud.talk.chat.viewmodels.MessageInputViewModel
+import com.nextcloud.talk.chat.viewmodels.planForward
 import com.nextcloud.talk.conversationinfo.ConversationInfoActivity
 import com.nextcloud.talk.conversationinfo.viewmodel.ConversationInfoViewModel
 import com.nextcloud.talk.conversationlist.ConversationsListActivity
@@ -479,6 +480,7 @@ class ChatActivity :
 
     private val filesToUpload: MutableList<String> = ArrayList()
     lateinit var sharedText: String
+    private var forwardedTexts: List<String> = emptyList()
     private var sharedFilePaths: List<String> = emptyList()
 
     private val _participantPermissionsFlow = MutableStateFlow<ParticipantPermissions?>(null)
@@ -839,6 +841,7 @@ class ChatActivity :
 
         messageInputFragment = getMessageInputFragment()
         messageInputViewModel.setData(chatViewModel.getChatRepository())
+        sendForwardedMessages()
 
         initObservers()
         resumeRecordingAfterRecreation()
@@ -1731,8 +1734,27 @@ class ChatActivity :
         runPendingMediaRequest()
     }
 
+    /** Sends every forwarded message on its own, in chat order; the send queue keeps that order. */
+    private fun sendForwardedMessages() {
+        val user = conversationUser ?: return
+        forwardedTexts.forEach { text ->
+            messageInputViewModel.sendChatMessage(
+                userId = user.id!!,
+                roomToken = roomToken,
+                message = text,
+                displayName = user.displayName ?: "",
+                replyTo = 0,
+                sendWithoutNotification = false,
+                threadTitle = null
+            )
+        }
+        forwardedTexts = emptyList()
+    }
+
     private fun handleIntent(intent: Intent) {
         val extras: Bundle? = intent.extras
+        forwardedTexts = extras?.getStringArrayList(BundleKeys.KEY_SHARED_MSG_TEXTS).orEmpty()
+        intent.removeExtra(BundleKeys.KEY_SHARED_MSG_TEXTS)
 
         openedViaNotification = extras?.getBoolean(KEY_OPENED_VIA_NOTIFICATION) ?: false
 
@@ -4417,13 +4439,21 @@ class ChatActivity :
     private fun forwardSelectedMessages() {
         val session = roomSession ?: return
         lifecycleScope.launch {
-            val messages = loadSelectedMessages(session.chatViewModel.messageSelection.ids.value)
-                .filter { actionsStateFor(it, networkMonitor.isOnline.value).showForward }
-            if (session !== roomSession || messages.isEmpty()) {
+            val plan = planForward(loadSelectedMessages(session.chatViewModel.messageSelection.ids.value)) {
+                actionsStateFor(it, networkMonitor.isOnline.value).showForward
+            }
+            if (session !== roomSession) {
+                return@launch
+            }
+            if (plan.texts.isEmpty()) {
+                Toast.makeText(this@ChatActivity, R.string.nc_chat_forward_text_only, Toast.LENGTH_LONG).show()
                 return@launch
             }
             session.chatViewModel.messageSelection.clear()
-            forwardText(messages.joinToString("\n") { it.message.orEmpty() })
+            if (plan.skipped > 0) {
+                Toast.makeText(this@ChatActivity, R.string.nc_chat_forward_text_only, Toast.LENGTH_LONG).show()
+            }
+            forwardTexts(plan.texts)
         }
     }
 
@@ -4441,9 +4471,18 @@ class ChatActivity :
     }
 
     private fun forwardText(text: String?) {
+        forward(text, null)
+    }
+
+    private fun forwardTexts(texts: List<String>) {
+        forward(null, ArrayList(texts))
+    }
+
+    private fun forward(text: String?, texts: ArrayList<String>?) {
         val bundle = Bundle()
         bundle.putBoolean(BundleKeys.KEY_FORWARD_MSG_FLAG, true)
         bundle.putString(BundleKeys.KEY_FORWARD_MSG_TEXT, text)
+        bundle.putStringArrayList(BundleKeys.KEY_FORWARD_MSG_TEXTS, texts)
         bundle.putString(BundleKeys.KEY_FORWARD_HIDE_SOURCE_ROOM, roomToken)
 
         val intent = Intent(this, ConversationsListActivity::class.java)

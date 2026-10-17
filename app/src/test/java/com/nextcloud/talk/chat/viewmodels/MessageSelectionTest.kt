@@ -7,6 +7,7 @@
 
 package com.nextcloud.talk.chat.viewmodels
 
+import com.nextcloud.talk.chat.data.model.ChatMessage
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -60,5 +61,38 @@ class MessageSelectionTest {
     @Test
     fun `back without a selection is not handled`() {
         assertFalse(selection.consumeBack())
+    }
+}
+
+class ForwardPlanTest {
+
+    private fun message(id: Int, text: String?): ChatMessage =
+        ChatMessage().apply {
+            jsonMessageId = id
+            message = text
+        }
+
+    @Test
+    fun `each forwardable message is its own text in chat order`() {
+        val plan = planForward(listOf(message(30, "c"), message(10, "a"), message(20, "b"))) { true }
+
+        assertEquals(listOf("a", "b", "c"), plan.texts)
+        assertEquals(0, plan.skipped)
+    }
+
+    @Test
+    fun `messages that cannot be forwarded are counted as skipped`() {
+        val plan = planForward(listOf(message(1, "a"), message(2, "{file}"), message(3, "c"))) { it.jsonMessageId != 2 }
+
+        assertEquals(listOf("a", "c"), plan.texts)
+        assertEquals(1, plan.skipped)
+    }
+
+    @Test
+    fun `nothing forwardable gives no texts`() {
+        val plan = planForward(listOf(message(1, "{file}"))) { false }
+
+        assertTrue(plan.texts.isEmpty())
+        assertEquals(1, plan.skipped)
     }
 }

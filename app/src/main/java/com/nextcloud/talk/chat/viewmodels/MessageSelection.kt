@@ -7,6 +7,7 @@
 
 package com.nextcloud.talk.chat.viewmodels
 
+import com.nextcloud.talk.chat.data.model.ChatMessage
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -38,4 +39,16 @@ class MessageSelection {
         clear()
         return true
     }
+}
+
+/** What a forward of selected messages sends: one text per message in chat order, and how many were left out. */
+data class ForwardPlan(val texts: List<String>, val skipped: Int)
+
+/** Plans the forward of [messages] (any order): each forwardable message becomes its own text, ordered by id. */
+fun planForward(messages: List<ChatMessage>, canForward: (ChatMessage) -> Boolean): ForwardPlan {
+    val texts = messages.sortedBy { it.jsonMessageId }
+        .filter(canForward)
+        .map { it.message.orEmpty() }
+        .filter { it.isNotBlank() }
+    return ForwardPlan(texts, messages.size - texts.size)
 }
