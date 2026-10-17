@@ -95,4 +95,24 @@ class ForwardPlanTest {
         assertTrue(plan.texts.isEmpty())
         assertEquals(1, plan.skipped)
     }
+
+    @Test
+    fun `everything forwardable is sent without a notice`() {
+        assertEquals(ForwardOutcome.ALL, planForward(listOf(message(1, "a"), message(2, "b"))) { true }.outcome)
+    }
+
+    @Test
+    fun `left out messages give the skipped notice and the rest is sent`() {
+        val plan = planForward(listOf(message(1, "a"), message(2, "{file}"))) { it.jsonMessageId == 1 }
+
+        assertEquals(ForwardOutcome.SOME_SKIPPED, plan.outcome)
+        assertEquals(listOf("a"), plan.texts)
+    }
+
+    @Test
+    fun `an empty plan is reported and not silent`() {
+        assertEquals(ForwardOutcome.NOTHING_TO_FORWARD, planForward(listOf(message(1, "a"))) { false }.outcome)
+        assertEquals(ForwardOutcome.NOTHING_TO_FORWARD, planForward(emptyList()) { true }.outcome)
+        assertEquals(ForwardOutcome.NOTHING_TO_FORWARD, planForward(listOf(message(1, "  "))) { true }.outcome)
+    }
 }

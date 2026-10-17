@@ -297,6 +297,26 @@ class OfflineFirstChatRepositoryTest {
         }
 
     @Test
+    fun `addTemporaryMessage works before the conversation is loaded`() =
+        runTest {
+            // a forwarded message is sent while the chat opens, before the conversation came from the database
+
+            val result = repository.addTemporaryMessage(
+                message = "forwarded",
+                displayName = "Me",
+                replyTo = 0,
+                sendWithoutNotification = false,
+                referenceId = "ref-early"
+            ).toList().single()
+
+            assertTrue(result.isSuccess)
+            val entityCaptor = argumentCaptor<ChatMessageEntity>()
+            verifyBlocking(chatDao) { upsertChatMessage(entityCaptor.capture()) }
+            assertEquals(ROOM_TOKEN, entityCaptor.firstValue.token)
+            assertEquals("forwarded", entityCaptor.firstValue.message)
+        }
+
+    @Test
     fun `addTemporaryMessage tolerates a collector that stops after the first value`() =
         runTest {
             // first()/take(1) cancel the flow right after receiving one value, which used to

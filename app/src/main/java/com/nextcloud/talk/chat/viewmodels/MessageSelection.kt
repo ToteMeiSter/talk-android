@@ -42,7 +42,17 @@ class MessageSelection {
 }
 
 /** What a forward of selected messages sends: one text per message in chat order, and how many were left out. */
-data class ForwardPlan(val texts: List<String>, val skipped: Int)
+data class ForwardPlan(val texts: List<String>, val skipped: Int) {
+    /** What the user is told: nothing to forward stops the forward, left out messages are named, all sent is silent. */
+    val outcome: ForwardOutcome
+        get() = when {
+            texts.isEmpty() -> ForwardOutcome.NOTHING_TO_FORWARD
+            skipped > 0 -> ForwardOutcome.SOME_SKIPPED
+            else -> ForwardOutcome.ALL
+        }
+}
+
+enum class ForwardOutcome { ALL, SOME_SKIPPED, NOTHING_TO_FORWARD }
 
 /** Plans the forward of [messages] (any order): each forwardable message becomes its own text, ordered by id. */
 fun planForward(messages: List<ChatMessage>, canForward: (ChatMessage) -> Boolean): ForwardPlan {

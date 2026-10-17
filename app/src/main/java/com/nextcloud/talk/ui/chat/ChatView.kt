@@ -427,6 +427,7 @@ fun ChatView(
                                     ?.takeIf { it.messageId == chatItem.uiMessage.id }
                                     ?.nonce,
                                 isSelected = state.highlightedMessageId == chatItem.uiMessage.id,
+                                isChecked = chatItem.isChecked(state.selectedMessageIds),
                                 highlightSearchTerm = state.highlightedSearchTerm,
                                 context = ChatMessageContext(
                                     isOneToOneConversation = state.isOneToOneConversation,
@@ -464,7 +465,7 @@ fun ChatView(
                         ) {
                             MediaGroupMessage(
                                 messages = chatItem.messages,
-                                isChecked = chatItem.messages.last().id in state.selectedMessageIds,
+                                isChecked = chatItem.isChecked(state.selectedMessageIds),
                                 context = ChatMessageContext(
                                     isOneToOneConversation = state.isOneToOneConversation,
                                     conversationThreadId = state.conversationThreadId,

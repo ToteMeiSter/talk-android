@@ -154,6 +154,7 @@ import com.nextcloud.talk.chat.ui.buildMessageActionsState
 import com.nextcloud.talk.chat.ui.model.MessageTypeContent
 import com.nextcloud.talk.chat.viewmodels.ChatViewModel
 import com.nextcloud.talk.chat.viewmodels.MessageInputViewModel
+import com.nextcloud.talk.chat.viewmodels.ForwardOutcome
 import com.nextcloud.talk.chat.viewmodels.planForward
 import com.nextcloud.talk.conversationinfo.ConversationInfoActivity
 import com.nextcloud.talk.conversationinfo.viewmodel.ConversationInfoViewModel
@@ -2133,7 +2134,9 @@ class ChatActivity :
                     removeUnreadMessagesMarker()
                 }
 
-                is MessageInputViewModel.SendChatMessageErrorState -> {}
+                is MessageInputViewModel.SendChatMessageErrorState -> {
+                    Toast.makeText(this, R.string.nc_common_error_sorry, Toast.LENGTH_LONG).show()
+                }
 
                 else -> {}
             }
@@ -4447,7 +4450,7 @@ class ChatActivity :
             if (session !== roomSession) {
                 return@launch
             }
-            if (plan.texts.isEmpty() && fileEntries.isEmpty()) {
+            if (plan.outcome == ForwardOutcome.NOTHING_TO_FORWARD && fileEntries.isEmpty()) {
                 Toast.makeText(this@ChatActivity, R.string.nc_chat_forward_nothing, Toast.LENGTH_LONG).show()
                 return@launch
             }
