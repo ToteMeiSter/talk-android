@@ -20,6 +20,7 @@ import java.util.concurrent.atomic.AtomicReference
  * delivers messages addressed to a session no matter which room that session is in, so sessions of other rooms
  * must neither receive our typing messages nor be trusted as the sender of a typing message.
  */
+@Suppress("TooManyFunctions")
 class RoomSessionRegistryTest {
 
     private fun user(sessionId: String?, userId: String, name: String): Map<String, Any> {
