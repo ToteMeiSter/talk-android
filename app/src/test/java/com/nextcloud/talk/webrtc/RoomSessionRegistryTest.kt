@@ -90,33 +90,55 @@ class RoomSessionRegistryTest {
         assertTrue("no join is accepted after the answer to the leave", registry.sessionIdsExcept(null).isEmpty())
     }
 
-    @Test
-    fun resetDuringJoinDoesNotLeaveSessionOfTheLeftRoom() {
-        val registry = RoomSessionRegistry()
-        registry.enterRoom("roomA", user("s-alice", "alice", "Alice"))
+    /**
+     * Pauses onJoin() of [lateSession] right after its check of the room (before it stores the session) and runs
+     * [change] on another thread meanwhile. Without a common lock [change] finishes while onJoin() is paused and
+     * onJoin() stores the session afterwards; with it, [change] waits for onJoin().
+     */
+    private fun RoomSessionRegistry.joinPausedWhile(lateSession: String, change: RoomSessionRegistry.() -> Unit) {
         val insideJoin = CountDownLatch(1)
-        val resetMayRun = CountDownLatch(1)
+        val changeMayRun = CountDownLatch(1)
         // The map hands the thread over right after onJoin passed its check of the room, before it stores the session.
-        val pausingEvent = object : HashMap<String, Any>(guest("s-late")) {
+        val pausingEvent = object : HashMap<String, Any>(guest(lateSession)) {
             override fun get(key: String): Any? {
                 insideJoin.countDown()
-                resetMayRun.await(5, TimeUnit.SECONDS)
+                changeMayRun.await(5, TimeUnit.SECONDS)
                 return super.get(key)
             }
         }
         val executor = Executors.newFixedThreadPool(2)
-        val joined = executor.submit { registry.onJoin(listOf(pausingEvent)) }
+        val joined = executor.submit { onJoin(listOf(pausingEvent)) }
         assertTrue(insideJoin.await(5, TimeUnit.SECONDS))
-        val reset = executor.submit { registry.reset() }
-        // Without a common lock reset() finishes while onJoin() is paused; with it, reset() waits for onJoin().
-        runCatching { reset.get(500, TimeUnit.MILLISECONDS) }
-        resetMayRun.countDown()
+        val changed = executor.submit { change() }
+        runCatching { changed.get(500, TimeUnit.MILLISECONDS) }
+        changeMayRun.countDown()
         joined.get(5, TimeUnit.SECONDS)
-        reset.get(5, TimeUnit.SECONDS)
+        changed.get(5, TimeUnit.SECONDS)
         executor.shutdownNow()
+    }
+
+    @Test
+    fun resetDuringJoinDoesNotLeaveSessionOfTheLeftRoom() {
+        val registry = RoomSessionRegistry()
+        registry.enterRoom("roomA", user("s-alice", "alice", "Alice"))
+
+        registry.joinPausedWhile("s-late") { reset() }
 
         assertFalse("session stored by a join which raced with reset() stays", registry.contains("s-late"))
         assertTrue(registry.sessionIdsExcept(null).isEmpty())
+    }
+
+    @Test
+    fun roomResponseDuringJoinDoesNotLeaveSessionOfThePreviousRoom() {
+        val registry = RoomSessionRegistry()
+        registry.enterRoom("roomA", user("s-alice", "alice", "Alice"))
+
+        registry.joinPausedWhile("s-late") { onRoomResponse("roomB") }
+
+        assertFalse("session of room A stored after the answer for room B", registry.contains("s-late"))
+        assertTrue(registry.sessionIdsExcept(null).isEmpty())
+        registry.onJoin(listOf(user("s-bob-b", "bob", "Bob")))
+        assertEquals(listOf("s-bob-b"), registry.sessionIdsExcept(null))
     }
 
     @Test
