@@ -44,6 +44,7 @@ class AudioFocusRequestManager(
     private val musicSilenceGate = MusicSilenceGate(audioManager::isMusicActive)
     private val audioFocusChangeListener: AudioManager.OnAudioFocusChangeListener =
         AudioManager.OnAudioFocusChangeListener { flag ->
+            log("focus change: $flag (duration $duration)")
             when (flag) {
                 AudioManager.AUDIOFOCUS_LOSS -> {
                     isPausedDueToBecomingNoisy = false
@@ -94,6 +95,7 @@ class AudioFocusRequestManager(
                 audioManager.abandonAudioFocusRequest(focusRequest)
             }
 
+        log("focus ${if (shouldRequestFocus) "request" else "abandon"}: result $isGranted (duration $duration)")
         if (isGranted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED) {
             if (shouldRequestFocus && waitForOtherAudio) {
                 musicSilenceGate.whenSilent(onGranted)
@@ -102,6 +104,10 @@ class AudioFocusRequestManager(
             }
             handleBecomingNoisyBroadcast(shouldRequestFocus)
         }
+    }
+
+    private fun log(message: String) {
+        NextcloudTalkApplication.sharedApplication?.logger?.i(TAG, message)
     }
 
     private fun handleBecomingNoisyBroadcast(register: Boolean) {

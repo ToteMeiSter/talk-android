@@ -11,6 +11,9 @@ import android.content.Context
 import android.media.AudioManager
 import androidx.lifecycle.Observer
 import androidx.media3.common.Player
+import com.nextcloud.talk.application.NextcloudTalkApplication
+
+private const val TAG = "PlaybackAudioFocus"
 
 /**
  * Whether a player needs the audio focus: while it plays or is about to play, not while it is paused, idle or at the
@@ -44,6 +47,8 @@ class PlaybackAudioFocus(context: Context, private val player: Player) : Player.
     private fun update() {
         val needed = playerNeedsAudioFocus(player.playWhenReady, player.playbackState)
         if (needed != held) {
+            NextcloudTalkApplication.sharedApplication?.logger
+                ?.i(TAG, "playback needs focus: $needed (state ${player.playbackState})")
             held = needed
             focusManager.audioFocusRequest(needed) {}
         }
