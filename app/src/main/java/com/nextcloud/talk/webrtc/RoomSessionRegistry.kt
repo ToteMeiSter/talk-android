@@ -19,7 +19,9 @@ import java.util.concurrent.ConcurrentHashMap
  * otherwise typing messages are sent to sessions of other rooms and typing messages of such sessions are accepted
  * (the server delivers messages addressed to a session no matter which room that session is in).
  *
- * Written from the OkHttp thread, read from the UI thread.
+ * Written from the OkHttp thread and from the UI thread ([reset] on leaving a room), read from the UI thread.
+ * The changes of the room and of the sessions ([onRoomResponse], [reset], [onJoin]) share one lock, so a join cannot
+ * store a session after a [reset] cleared the registry.
  */
 class RoomSessionRegistry {
     private val sessions = ConcurrentHashMap<String, ParticipantDto>()
@@ -33,6 +35,7 @@ class RoomSessionRegistry {
      * unchanged join) keeps its sessions. After [reset] the room is unknown, so the answer to a leave (empty room)
      * clears as well: it drops what late events of the left room added in between.
      */
+    @Synchronized
     fun onRoomResponse(newRoomToken: String?) {
         val token = newRoomToken ?: ""
         if (token != roomToken) {
@@ -45,6 +48,7 @@ class RoomSessionRegistry {
      * The connection leaves the room, got a new signaling session (hello without resume) or lost it
      * (no_such_session, no_such_room). Nothing is known about the room any more.
      */
+    @Synchronized
     fun reset() {
         sessions.clear()
         roomToken = null
@@ -57,6 +61,7 @@ class RoomSessionRegistry {
      * Ignored while no room is known (after [reset] or the answer to a leave): the server sends the answer to a join
      * before the list of the sessions, so a join arriving without a room is a late event of a room which was left.
      */
+    @Synchronized
     fun onJoin(joinEvents: List<Map<String, Any>>?) {
         if (roomToken.isNullOrEmpty()) return
 
