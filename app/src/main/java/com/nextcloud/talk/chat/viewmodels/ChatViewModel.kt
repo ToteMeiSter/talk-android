@@ -2353,7 +2353,7 @@ class ChatViewModel @AssistedInject constructor(
 
     fun startAudioRecording(context: Context, currentConversation: ConversationModel) {
         activeRecordingMode = RecordInputMode.VOICE
-        audioFocusRequestManager.audioFocusRequest(true) {
+        audioFocusRequestManager.audioFocusRequest(true, waitForOtherAudio = true) {
             Log.d(TAG, "Recording Started")
             mediaRecorderManager.start(context, currentConversation)
             _getVoiceRecordingInProgress.postValue(true)
@@ -2369,9 +2369,11 @@ class ChatViewModel @AssistedInject constructor(
     }
 
     fun stopAndSendAudioRecording(roomToken: String = "", replyToMessageId: Int? = null, displayName: String) {
+        // a recording that was released before the wait for the music of another app was over never started
+        val wasRecording = mediaRecorderManager.mediaRecorderState == MediaRecorderManager.MediaRecorderState.RECORDING
         stopAudioRecording()
 
-        if (mediaRecorderManager.mediaRecorderState != MediaRecorderManager.MediaRecorderState.ERROR) {
+        if (wasRecording && mediaRecorderManager.mediaRecorderState != MediaRecorderManager.MediaRecorderState.ERROR) {
             val uri = Uri.fromFile(File(mediaRecorderManager.currentVoiceRecordFile))
             Log.d(TAG, "File uploaded")
             uploadFile(

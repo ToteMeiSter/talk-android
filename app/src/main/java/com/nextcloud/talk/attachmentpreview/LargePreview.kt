@@ -65,6 +65,7 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.ui.PlayerView
 import com.nextcloud.talk.R
+import com.nextcloud.talk.chat.data.io.PlaybackAudioFocus
 
 private const val LARGE_ICON_SIZE_DP = 96
 private const val LARGE_OTHER_BORDER_WIDTH_DP = 1
@@ -186,10 +187,14 @@ private fun PlayButtonOverlay(onClick: () -> Unit, modifier: Modifier = Modifier
 @Composable
 private fun VideoPlayerCard(uri: String, onStopped: () -> Unit, modifier: Modifier = Modifier) {
     val context = LocalContext.current
-    val exoPlayer = remember(uri) { ExoPlayer.Builder(context).build() }
+    val exoPlayer = remember(uri) { ExoPlayer.Builder(context).setHandleAudioBecomingNoisy(true).build() }
 
     DisposableEffect(exoPlayer) {
-        onDispose { exoPlayer.release() }
+        val playbackAudioFocus = PlaybackAudioFocus(context, exoPlayer)
+        onDispose {
+            playbackAudioFocus.release()
+            exoPlayer.release()
+        }
     }
 
     // A still-active hardware video decoder competing with e.g. the system camera's own hardware
