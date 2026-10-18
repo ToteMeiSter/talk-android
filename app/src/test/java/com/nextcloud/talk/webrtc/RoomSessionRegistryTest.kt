@@ -107,14 +107,18 @@ class RoomSessionRegistryTest {
             }
         }
         val executor = Executors.newFixedThreadPool(2)
-        val joined = executor.submit { onJoin(listOf(pausingEvent)) }
-        assertTrue(insideJoin.await(5, TimeUnit.SECONDS))
-        val changed = executor.submit { change() }
-        runCatching { changed.get(500, TimeUnit.MILLISECONDS) }
-        changeMayRun.countDown()
-        joined.get(5, TimeUnit.SECONDS)
-        changed.get(5, TimeUnit.SECONDS)
-        executor.shutdownNow()
+        try {
+            val joined = executor.submit { onJoin(listOf(pausingEvent)) }
+            assertTrue(insideJoin.await(5, TimeUnit.SECONDS))
+            val changed = executor.submit { change() }
+            runCatching { changed.get(500, TimeUnit.MILLISECONDS) }
+            changeMayRun.countDown()
+            joined.get(5, TimeUnit.SECONDS)
+            changed.get(5, TimeUnit.SECONDS)
+        } finally {
+            changeMayRun.countDown()
+            executor.shutdownNow()
+        }
     }
 
     @Test
