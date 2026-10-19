@@ -606,12 +606,13 @@ class ChatActivity :
             is ChatViewModel.LeaveRoomSuccessState -> {
                 logConversationInfos("leaveRoom#onNext")
 
-                isLeavingRoom = false
-
-                if (getRoomInfoTimerHandler != null) {
+                // a return to the chat during the leave resets isLeavingRoom and starts the room timer again
+                if (isLeavingRoom) {
                     getRoomInfoTimerHandler?.removeCallbacksAndMessages(null)
                 }
+                isLeavingRoom = false
 
+                // the join of a return to the chat waits for the leave, so it sets the holder again after this
                 if (!isAnotherRoomCurrent()) {
                     ApplicationWideCurrentRoomHolder.getInstance().clear()
                 }
