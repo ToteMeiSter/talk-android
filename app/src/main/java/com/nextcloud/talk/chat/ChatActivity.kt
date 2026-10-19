@@ -611,11 +611,6 @@ class ChatActivity :
                     getRoomInfoTimerHandler?.removeCallbacksAndMessages(null)
                 }
                 isLeavingRoom = false
-
-                // the join of a return to the chat waits for the leave, so it sets the holder again after this
-                if (!isAnotherRoomCurrent()) {
-                    ApplicationWideCurrentRoomHolder.getInstance().clear()
-                }
             }
 
             else -> {}
@@ -3871,13 +3866,11 @@ class ChatActivity :
             webSocketInstance?.joinRoomWithRoomTokenAndSession("", sessionIdAfterRoomJoined)
         }
         sessionIdAfterRoomJoined = "0"
-        // The room session dies with the DELETE below, but the holder is cleared only when that answers. A chat which
-        // opens meanwhile would take the dead session from the holder and join the signaling room with it, which
-        // the backend answers with no_such_room.
-        if (isNotInCall() &&
-            ApplicationWideCurrentRoomHolder.getInstance().isCurrentRoom(roomToken, conversationUser.id)
-        ) {
-            ApplicationWideCurrentRoomHolder.getInstance().session = ""
+        // The room session dies with the DELETE below, so a chat which opens before it is answered must not reuse the
+        // session of the holder: it would skip the join, or join the signaling room with it and get no_such_room.
+        // The leave runs only without an active call and must not clear the holder of another current room.
+        if (isNotInCall() && !isAnotherRoomCurrent()) {
+            ApplicationWideCurrentRoomHolder.getInstance().clear()
         }
 
         // FIXME Fix API checking with guests?
