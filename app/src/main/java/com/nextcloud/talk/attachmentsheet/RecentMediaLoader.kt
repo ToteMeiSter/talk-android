@@ -98,39 +98,28 @@ object RecentMediaLoader {
         }
         val result = mutableListOf<RecentMedia>()
         try {
-            readRows(resolver, uri, projection, isVideo, limit, result)
+            openCursor(resolver, uri, projection, limit)?.use { cursor ->
+                val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
+                val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
+                val durationColumn = if (isVideo) {
+                    cursor.getColumnIndexOrThrow(MediaStore.Video.VideoColumns.DURATION)
+                } else {
+                    -1
+                }
+                while (cursor.moveToNext()) {
+                    currentCoroutineContext().ensureActive()
+                    result += RecentMedia(
+                        id = cursor.getLong(idColumn),
+                        isVideo = isVideo,
+                        dateAddedSeconds = cursor.getLong(dateColumn),
+                        durationMs = if (durationColumn >= 0) cursor.getLong(durationColumn) else 0L
+                    )
+                }
+            }
         } catch (e: SecurityException) {
             Log.w(TAG, "recent ${if (isVideo) "videos" else "photos"} not readable", e)
             result.clear()
         }
         return result
-    }
-
-    private suspend fun readRows(
-        resolver: ContentResolver,
-        uri: Uri,
-        projection: Array<String>,
-        isVideo: Boolean,
-        limit: Int,
-        result: MutableList<RecentMedia>
-    ) {
-        openCursor(resolver, uri, projection, limit)?.use { cursor ->
-            val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
-            val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
-            val durationColumn = if (isVideo) {
-                cursor.getColumnIndexOrThrow(MediaStore.Video.VideoColumns.DURATION)
-            } else {
-                -1
-            }
-            while (cursor.moveToNext()) {
-                currentCoroutineContext().ensureActive()
-                result += RecentMedia(
-                    id = cursor.getLong(idColumn),
-                    isVideo = isVideo,
-                    dateAddedSeconds = cursor.getLong(dateColumn),
-                    durationMs = if (durationColumn >= 0) cursor.getLong(durationColumn) else 0L
-                )
-            }
-        }
     }
 }
