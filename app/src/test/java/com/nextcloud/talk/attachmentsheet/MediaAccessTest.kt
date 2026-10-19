@@ -63,6 +63,29 @@ class MediaAccessTest {
     }
 
     @Test
+    fun android13WithPhotosOnlyOrBothTypesIsFull() {
+        assertEquals(MediaAccess.FULL, resolveMediaAccess(Build.VERSION_CODES.TIRAMISU, setOf(images)))
+        assertEquals(MediaAccess.FULL, resolveMediaAccess(Build.VERSION_CODES.TIRAMISU, setOf(images, video)))
+    }
+
+    @Test
+    fun android14UserSelectedNextToOneMediaTypeIsFullButOffersSelectMore() {
+        val sdk = Build.VERSION_CODES.UPSIDE_DOWN_CAKE
+        listOf(setOf(images, selected), setOf(video, selected)).forEach {
+            assertEquals(MediaAccess.FULL, resolveMediaAccess(sdk, it))
+            assertTrue(canSelectMoreMedia(sdk, it))
+        }
+        assertFalse(canSelectMoreMedia(sdk, setOf(images, video, selected)))
+    }
+
+    @Test
+    fun android13AndOlderNeverOfferSelectMore() {
+        assertFalse(canSelectMoreMedia(Build.VERSION_CODES.TIRAMISU, setOf(images, video)))
+        assertFalse(canSelectMoreMedia(Build.VERSION_CODES.TIRAMISU, emptySet()))
+        assertFalse(canSelectMoreMedia(Build.VERSION_CODES.S, emptySet()))
+    }
+
+    @Test
     fun grantingEveryRequestedPermissionGivesFullAccess() {
         listOf(Build.VERSION_CODES.S, Build.VERSION_CODES.TIRAMISU, Build.VERSION_CODES.UPSIDE_DOWN_CAKE).forEach {
             val requested = mediaPermissionsToRequest(it).toSet()

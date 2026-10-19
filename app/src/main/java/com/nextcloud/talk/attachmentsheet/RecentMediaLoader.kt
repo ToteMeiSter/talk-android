@@ -21,8 +21,10 @@ import kotlinx.coroutines.ensureActive
 import java.io.IOException
 
 /**
- * Reads the newest photos and videos from MediaStore. Without read access (or with partial access) the system
- * returns only what the app may see, so no permission check happens here.
+ * Reads the newest photos and videos from MediaStore. On AOSP a query without read access (or with partial access)
+ * returns only the files of the app itself, so both types are always asked for and no permission check happens
+ * here. A provider of a device may refuse instead; the refusal of one type must not drop the other one, because
+ * the caller has no catch.
  */
 object RecentMediaLoader {
     private val TAG = RecentMediaLoader::class.java.simpleName
@@ -95,6 +97,23 @@ object RecentMediaLoader {
             arrayOf(MediaStore.MediaColumns._ID, MediaStore.MediaColumns.DATE_ADDED)
         }
         val result = mutableListOf<RecentMedia>()
+        try {
+            readRows(resolver, uri, projection, isVideo, limit, result)
+        } catch (e: SecurityException) {
+            Log.w(TAG, "recent ${if (isVideo) "videos" else "photos"} not readable", e)
+            result.clear()
+        }
+        return result
+    }
+
+    private suspend fun readRows(
+        resolver: ContentResolver,
+        uri: Uri,
+        projection: Array<String>,
+        isVideo: Boolean,
+        limit: Int,
+        result: MutableList<RecentMedia>
+    ) {
         openCursor(resolver, uri, projection, limit)?.use { cursor ->
             val idColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns._ID)
             val dateColumn = cursor.getColumnIndexOrThrow(MediaStore.MediaColumns.DATE_ADDED)
@@ -113,6 +132,5 @@ object RecentMediaLoader {
                 )
             }
         }
-        return result
     }
 }
