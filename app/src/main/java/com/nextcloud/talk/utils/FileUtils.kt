@@ -92,17 +92,15 @@ object FileUtils {
     }
 
     /**
-     * Shape of a share uri for the log: scheme, authority without a user id, whether there was one and, for an own
-     * authority only, the first path segment (the directory of the provider). No file names.
+     * Shape of a share uri for the log: scheme, authority without a user id and whether there was one. Neither
+     * path nor query, as they hold file names.
      */
-    fun describeShareUriForLog(uri: Uri?, ownAuthority: String): String {
+    fun describeShareUriForLog(uri: Uri?): String {
         if (uri == null) return NONE
         val authority = uri.authority
         val host = authority?.substringAfterLast('@') ?: NONE
         val hasUserInfo = authority?.contains('@') == true
-        val isOwn = host.equals(ownAuthority, ignoreCase = true)
-        val firstSegment = if (isOwn) uri.pathSegments.firstOrNull() ?: NONE else "-"
-        return "${uri.scheme ?: NONE}://$host userInfo=$hasUserInfo firstSegment=$firstSegment"
+        return "${uri.scheme ?: NONE}://$host userInfo=$hasUserInfo"
     }
 
     /**
