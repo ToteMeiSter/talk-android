@@ -155,6 +155,7 @@ import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingConfirmStop
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingErrorState
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartedState
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartingState
+import com.nextcloud.talk.webrtc.NetworkSwitchRecovery
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper.PeerConnectionObserver
 import com.nextcloud.talk.webrtc.WebRTCUtils
@@ -3292,13 +3293,22 @@ class CallActivity : CallBaseActivity() {
             Log.d(TAG, "Network switched, nothing to recover in call status $currentCallStatus")
             return
         }
-        if (hasMCU && webSocketClient != null) {
-            Log.d(TAG, "Network switched, joining the call again with a new session")
-            rejoinCallWithNewSession()
-            return
-        }
-        Log.d(TAG, "Network switched, reconnecting signaling")
-        webSocketClient?.restartWebSocket()
+        val useMcu = hasMCU && webSocketClient != null
+        Log.d(
+            TAG,
+            if (useMcu) {
+                "Network switched, joining the call again with a new session"
+            } else {
+                "Network switched, reconnecting signaling and restarting ICE"
+            }
+        )
+        val wrappers = synchronized(remoteAudioPlayoutLock) { ArrayList(peerConnectionWrapperList) }
+        NetworkSwitchRecovery.recover(
+            hasMcu = useMcu,
+            rejoinWithNewSession = ::rejoinCallWithNewSession,
+            reconnectSignaling = { webSocketClient?.restartWebSocket() },
+            peerConnectionWrappers = wrappers
+        )
     }
 
     private inner class CallActivitySelfPeerConnectionObserver : PeerConnectionObserver {
