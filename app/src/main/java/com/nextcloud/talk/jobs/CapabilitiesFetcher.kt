@@ -64,7 +64,7 @@ class CapabilitiesFetcher(
             try {
                 return ncApi.getCapabilities(ApiUtils.getCredentials(user.username, user.token), url)
             } catch (e: Exception) {
-                Log.w(TAG, "Fetching capabilities for ${user.username} failed (attempt ${attempt + 1})", e)
+                Log.w(TAG, "Fetching capabilities for ${user.id} failed (attempt ${attempt + 1})", e)
             }
         }
         return null
@@ -75,7 +75,7 @@ class CapabilitiesFetcher(
     suspend fun updateUser(capabilitiesOverall: CapabilitiesOverall, user: User): Boolean {
         val capabilities = capabilitiesOverall.ocs?.data?.capabilities
         if (capabilities == null) {
-            Log.w(TAG, "Capabilities response for ${user.username} contained no capabilities data")
+            Log.w(TAG, "Capabilities response for ${user.id} contained no capabilities data")
             postCapabilitiesFetchResult(user, success = false)
             return false
         }

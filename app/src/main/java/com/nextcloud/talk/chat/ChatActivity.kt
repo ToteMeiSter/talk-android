@@ -105,6 +105,7 @@ import androidx.work.Data
 import androidx.work.OneTimeWorkRequest
 import com.nextcloud.talk.dagger.modules.ViewModelFactoryWithParams
 import com.nextcloud.talk.dagger.modules.assistedViewModels
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.setExpeditedIfSupported
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -1383,7 +1384,7 @@ class ChatActivity :
 
             durationLong / ONE_SECOND_IN_MILLIS
         } catch (e: IllegalArgumentException) {
-            logger.e(TAG, "Failed to read audio duration for $audioFilePath", e)
+            logger.e(TAG, "Failed to read audio duration of ${LogDescriptions.describeFile(audioFilePath)}", e)
             0L
         } finally {
             retriever.release()
@@ -3391,7 +3392,7 @@ class ChatActivity :
         lifecycleScope.launch {
             val file = runProviderCall(
                 onFailure = { e ->
-                    logger.e(TAG, "Failed to read contact $contactUri", e)
+                    logger.e(TAG, "Failed to read contact ${LogDescriptions.describeUri(contactUri)}", e)
                     withContext(Dispatchers.Main) {
                         Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
                     }
@@ -3424,7 +3425,7 @@ class ChatActivity :
             val fileName = ContactUtils.getDisplayNameFromDeviceContact(context, id) + ".vcf"
             val file = FileUtils.resolveSharedAttachmentFile(context.cacheDir, fileName)
             if (file == null) {
-                logger.e(TAG, "Refused to save contact with unsafe name: $fileName")
+                logger.e(TAG, "Refused to save contact with unsafe name: ${LogDescriptions.describeFile(fileName)}")
                 withContext(Dispatchers.Main) {
                     Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
                 }
@@ -4704,7 +4705,11 @@ class ChatActivity :
     fun share(message: ChatMessage) {
         val sharedFile = FileUtils.resolveSharedAttachmentFile(applicationContext.cacheDir, message.fileParameters.name)
         if (sharedFile == null) {
-            logger.e(TAG, "Refused to share file with unsafe name: ${message.fileParameters.name}")
+            logger.e(
+                TAG,
+                "Refused to share file with unsafe name: " +
+                    LogDescriptions.describeFile(message.fileParameters.name)
+            )
             Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
             return
         }
@@ -4727,7 +4732,11 @@ class ChatActivity :
     fun checkIfSharable(message: ChatMessage) {
         val file = FileUtils.resolveSharedAttachmentFile(context.cacheDir, message.fileParameters.name)
         if (file == null) {
-            logger.e(TAG, "Refused to check sharability of file with unsafe name: ${message.fileParameters.name}")
+            logger.e(
+                TAG,
+                "Refused to check sharability of file with unsafe name: " +
+                    LogDescriptions.describeFile(message.fileParameters.name)
+            )
             Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
             return
         }
@@ -4754,7 +4763,11 @@ class ChatActivity :
     fun checkIfSaveable(message: ChatMessage) {
         val file = FileUtils.resolveSharedAttachmentFile(context.cacheDir, message.fileParameters.name)
         if (file == null) {
-            logger.e(TAG, "Refused to check saveability of file with unsafe name: ${message.fileParameters.name}")
+            logger.e(
+                TAG,
+                "Refused to check saveability of file with unsafe name: " +
+                    LogDescriptions.describeFile(message.fileParameters.name)
+            )
             Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
             return
         }
@@ -4794,7 +4807,11 @@ class ChatActivity :
                 if (message.hasFileAttachment) {
                     val file = FileUtils.resolveSharedAttachmentFile(context.cacheDir, message.fileParameters.name)
                     if (file == null) {
-                        logger.e(TAG, "Refused to share to notes file with unsafe name: ${message.fileParameters.name}")
+                        logger.e(
+                            TAG,
+                            "Refused to share to notes file with unsafe name: " +
+                                LogDescriptions.describeFile(message.fileParameters.name)
+                        )
                         Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
                         return@launch
                     }
@@ -4867,7 +4884,12 @@ class ChatActivity :
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: Exception) {
-                        Log.w(TAG, "File corresponding to the uri does not exist $shareUri", e)
+                        Log.w(
+                            TAG,
+                            "File corresponding to the uri does not exist: " +
+                                LogDescriptions.describeUri(shareUri),
+                            e
+                        )
                         downloadFileToCache(message, false) {
                             uploadFile(
                                 fileUri = shareUri.toString(),
@@ -5173,7 +5195,6 @@ class ChatActivity :
         Log.d(TAG, " | method: $methodName")
         Log.d(TAG, " | ChatActivity: " + System.identityHashCode(this).toString())
         Log.d(TAG, " | roomToken: $roomToken")
-        Log.d(TAG, " | currentConversation?.displayName: ${currentConversation?.displayName}")
         Log.d(TAG, " | sessionIdAfterRoomJoined: $sessionIdAfterRoomJoined")
         Log.d(TAG, " |-----------------------------------------------")
     }

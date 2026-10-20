@@ -63,7 +63,7 @@ public class WebsocketConnectionsWorker extends Worker {
                 !TextUtils.isEmpty(user.getExternalSignalingServer().getExternalSignalingServer()) &&
                 !TextUtils.isEmpty(user.getExternalSignalingServer().getExternalSignalingTicket())) {
 
-                Log.d(TAG, "trying to getExternalSignalingInstanceForServer for user " + user.getDisplayName());
+                Log.d(TAG, "trying to getExternalSignalingInstanceForServer for user " + user.getId());
 
                 WebSocketConnectionHelper.getExternalSignalingInstanceForServer(
                     user.getExternalSignalingServer().getExternalSignalingServer(),
@@ -71,7 +71,7 @@ public class WebsocketConnectionsWorker extends Worker {
                     user.getExternalSignalingServer().getExternalSignalingTicket(),
                     false);
             } else {
-                Log.d(TAG, "skipped to getExternalSignalingInstanceForServer for user " + user.getDisplayName());
+                Log.d(TAG, "skipped to getExternalSignalingInstanceForServer for user " + user.getId());
             }
         }
 

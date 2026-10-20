@@ -97,6 +97,7 @@ import com.nextcloud.talk.utils.ClosedInterfaceImpl
 import com.nextcloud.talk.utils.ConversationUtils
 import com.nextcloud.talk.utils.ConversationUtils.checkIfVoiceRoom
 import com.nextcloud.talk.utils.FileUtils
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.Mimetype
 import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.ParticipantPermissions
@@ -1130,12 +1131,12 @@ class ConversationsListActivity : BaseActivity() {
     private fun describeShareIntent(): String {
         val clipData = intent.clipData
         val clipUris = (0 until (clipData?.itemCount ?: 0)).map {
-            FileUtils.describeShareUriForLog(clipData?.getItemAt(it)?.uri)
+            LogDescriptions.describeUri(clipData?.getItemAt(it)?.uri)
         }
         return "action=${intent.action} type=${intent.type} clipItems=${clipData?.itemCount ?: "none"} " +
             "clipUris=$clipUris hasExtraStream=${intent.hasExtra(Intent.EXTRA_STREAM)} " +
             "hasExtraText=${intent.hasExtra(Intent.EXTRA_TEXT)} " +
-            "data=${FileUtils.describeShareUriForLog(intent.data)}"
+            "data=${LogDescriptions.describeUri(intent.data)}"
     }
 
     private fun extractFilesFromClipData() {
@@ -1162,7 +1163,7 @@ class ConversationsListActivity : BaseActivity() {
         if (uri != null && FileUtils.isTrustedShareUri(uri, packageName, cacheDir)) {
             filesToShare!!.add(uri.toString())
         } else {
-            val shape = FileUtils.describeShareUriForLog(uri)
+            val shape = LogDescriptions.describeUri(uri)
             Log.w(TAG, "Rejecting untrusted uri from share intent: $shape")
         }
     }

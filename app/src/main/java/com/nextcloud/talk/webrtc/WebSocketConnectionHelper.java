@@ -60,10 +60,10 @@ public class WebSocketConnectionHelper {
         WebSocketInstance webSocketInstance = webSocketInstanceMap.get(user.getId());
 
         if (webSocketInstance == null) {
-            Log.d(TAG, "No webSocketInstance found for user " + user.getDisplayName() +
+            Log.d(TAG, "No webSocketInstance found for user" +
                 " (userId:" + user.getId() + ")");
         } else {
-            Log.d(TAG, "Existing webSocketInstance found for user " + user.getDisplayName() +
+            Log.d(TAG, "Existing webSocketInstance found for user" +
                 " (userId:" + user.getId() + ")");
         }
 

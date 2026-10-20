@@ -132,7 +132,7 @@ class FileViewerUtils(private val context: Context, private val user: User) {
         if (safeFile == null) {
             NextcloudTalkApplication.sharedApplication?.logger?.e(
                 TAG,
-                "Refused to open file with unsafe name: ${fileInfo.fileName}"
+                "Refused to open file with unsafe name: ${LogDescriptions.describeFile(fileInfo.fileName)}"
             )
             Snackbar.make(View(context), R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
             return
@@ -176,7 +176,7 @@ class FileViewerUtils(private val context: Context, private val user: User) {
         if (file == null) {
             NextcloudTalkApplication.sharedApplication?.logger?.e(
                 TAG,
-                "Refused to open file with unsafe name: ${fileInfo.fileName}"
+                "Refused to open file with unsafe name: ${LogDescriptions.describeFile(fileInfo.fileName)}"
             )
             Snackbar.make(View(context), R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
             return
@@ -212,7 +212,7 @@ class FileViewerUtils(private val context: Context, private val user: User) {
         if (file == null) {
             NextcloudTalkApplication.sharedApplication?.logger?.e(
                 TAG,
-                "Refused to share file with unsafe name: $fileName"
+                "Refused to share file with unsafe name: ${LogDescriptions.describeFile(fileName)}"
             )
             Snackbar.make(View(context), R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
             return
@@ -386,7 +386,7 @@ class FileViewerUtils(private val context: Context, private val user: User) {
                 } else {
                     Log.d(
                         TAG,
-                        "file " + fileName +
+                        "file " + LogDescriptions.describeFile(fileName) +
                             " was downloaded but it's not opened because view is not shown on screen or " +
                             "openWhenDownloaded is false"
                     )
