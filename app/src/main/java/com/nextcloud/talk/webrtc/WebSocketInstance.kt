@@ -15,7 +15,6 @@ import com.bluelinelabs.logansquare.LoganSquare
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.application.NextcloudTalkApplication.Companion.sharedApplication
 import com.nextcloud.talk.data.user.model.User
-import com.nextcloud.talk.events.NetworkEvent
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
 import com.nextcloud.talk.models.json.participants.ParticipantDto
 import com.nextcloud.talk.models.json.participants.ParticipantDto.ActorType
@@ -39,8 +38,6 @@ import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
 import org.greenrobot.eventbus.EventBus
-import org.greenrobot.eventbus.Subscribe
-import org.greenrobot.eventbus.ThreadMode
 import java.io.IOException
 import java.lang.Thread.sleep
 import java.util.concurrent.TimeUnit
@@ -91,7 +88,6 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
         webSocketConnectionHelper = WebSocketConnectionHelper()
         usersHashMap = HashMap()
         isConnected = false
-        eventBus!!.register(this)
         restartWebSocket()
     }
 
@@ -492,15 +488,6 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
             }
         }
         return ""
-    }
-
-    @Subscribe(threadMode = ThreadMode.BACKGROUND)
-    fun onMessageEvent(networkEvent: NetworkEvent) {
-        if (networkEvent.networkConnectionEvent == NetworkEvent.NetworkConnectionEvent.NETWORK_CONNECTED &&
-            !isConnected
-        ) {
-            restartWebSocket()
-        }
     }
 
     fun getSignalingMessageReceiver(): SignalingMessageReceiver = signalingMessageReceiver
