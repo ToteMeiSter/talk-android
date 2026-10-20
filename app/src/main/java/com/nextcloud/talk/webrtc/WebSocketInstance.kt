@@ -10,6 +10,7 @@ package com.nextcloud.talk.webrtc
 import android.content.Context
 import android.text.TextUtils
 import android.util.Log
+import androidx.annotation.VisibleForTesting
 import autodagger.AutoInjector
 import com.bluelinelabs.logansquare.LoganSquare
 import com.nextcloud.talk.application.NextcloudTalkApplication
@@ -44,12 +45,23 @@ import org.greenrobot.eventbus.ThreadMode
 import java.io.IOException
 import java.lang.Thread.sleep
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import javax.inject.Inject
 
 @AutoInjector(NextcloudTalkApplication::class)
 @Suppress("TooManyFunctions")
-class WebSocketInstance internal constructor(conversationUser: User, connectionUrl: String, webSocketTicket: String) :
-    WebSocketListener() {
+class WebSocketInstance
+@JvmOverloads
+@VisibleForTesting
+internal constructor(
+    conversationUser: User,
+    connectionUrl: String,
+    webSocketTicket: String,
+    // Test seam: when the client and the bus are given, dependency injection via the application component is skipped.
+    testOkHttpClient: OkHttpClient? = null,
+    testEventBus: EventBus? = null,
+    testConnectionHelper: WebSocketConnectionHelper? = null
+) : WebSocketListener() {
     @JvmField
     @Inject
     var okHttpClient: OkHttpClient? = null
@@ -77,6 +89,9 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
     private var currentNormalBackendSession: String? = null
     private var currentFederation: FederationSettingsDto? = null
     private var reconnecting = false
+
+    // Failures of the socket in a row since the last hello: the pause before the next restart grows with it.
+    private val consecutiveFailures = AtomicInteger(0)
     private val usersHashMap: HashMap<String?, ParticipantDto>
     private var messagesQueue: MutableList<String> = ArrayList()
     private val signalingMessageReceiver = ExternalSignalingMessageReceiver()
@@ -84,11 +99,19 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
     private val signalingHttpClient: OkHttpClient by lazy { createSignalingHttpClient(okHttpClient!!) }
 
     init {
-        sharedApplication!!.componentApplication.inject(this)
+        require((testOkHttpClient == null) == (testEventBus == null)) {
+            "testOkHttpClient and testEventBus must be given together"
+        }
+        if (testOkHttpClient != null && testEventBus != null) {
+            okHttpClient = testOkHttpClient
+            eventBus = testEventBus
+        } else {
+            sharedApplication!!.componentApplication.inject(this)
+        }
         this.connectionUrl = connectionUrl
         this.conversationUser = conversationUser
         this.webSocketTicket = webSocketTicket
-        webSocketConnectionHelper = WebSocketConnectionHelper()
+        webSocketConnectionHelper = testConnectionHelper ?: WebSocketConnectionHelper()
         usersHashMap = HashMap()
         isConnected = false
         eventBus!!.register(this)
@@ -136,7 +159,10 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
         }
         isConnected = false
         messagesQueue = ArrayList()
-        sleep(ONE_SECOND)
+        val failures = consecutiveFailures.incrementAndGet()
+        val pauseMs = WebSocketReconnectPolicy.delayMs(failures)
+        Log.w(TAG, "Reconnecting webSocket in $pauseMs ms (failure $failures in a row)")
+        sleep(pauseMs)
         restartWebSocket()
     }
 
@@ -338,6 +364,7 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
     private fun processHelloMessage(webSocket: WebSocket, text: String) {
         isConnected = true
         reconnecting = false
+        consecutiveFailures.set(0)
         val oldResumeId = resumeId
         val (_, helloResponseWebSocketMessage1) = LoganSquare.parse(
             text,
@@ -543,7 +570,6 @@ class WebSocketInstance internal constructor(conversationUser: User, connectionU
     companion object {
         private const val TAG = "WebSocketInstance"
         private const val NORMAL_CLOSURE = 1000
-        private const val ONE_SECOND: Long = 1000
         private const val PING_INTERVAL_SECONDS: Long = 30
 
         // Dedicated client with pings, so half-open WebSocket connections
