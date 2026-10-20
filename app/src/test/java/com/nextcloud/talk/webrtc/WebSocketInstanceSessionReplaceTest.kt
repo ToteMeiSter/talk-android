@@ -15,10 +15,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import org.greenrobot.eventbus.ThreadMode
@@ -62,8 +62,8 @@ class WebSocketInstanceSessionReplaceTest {
     fun setUp() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-                if (request.path != path) {
-                    return MockResponse().setResponseCode(HTTP_NOT_FOUND)
+                if (request.url.encodedPath != path) {
+                    return MockResponse(code = HTTP_NOT_FOUND)
                 }
                 val connection = connectionCount.incrementAndGet()
                 if (connection == 2) {
@@ -74,7 +74,7 @@ class WebSocketInstanceSessionReplaceTest {
                         Thread.sleep(POLL_MILLIS)
                     }
                 }
-                return MockResponse().withWebSocketUpgrade(RecordingServerListener("c$connection"))
+                return MockResponse.Builder().webSocketUpgrade(RecordingServerListener("c$connection")).build()
             }
         }
         server.start()
@@ -85,7 +85,7 @@ class WebSocketInstanceSessionReplaceTest {
     fun tearDown() {
         instance?.let { eventBus.unregister(it) }
         eventBus.unregister(roomJoinedSubscriber)
-        server.shutdown()
+        server.close()
     }
 
     @Test

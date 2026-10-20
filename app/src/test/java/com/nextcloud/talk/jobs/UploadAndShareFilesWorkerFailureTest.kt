@@ -41,10 +41,10 @@ import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import okhttp3.OkHttpClient
 import okhttp3.ResponseBody.Companion.toResponseBody
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -116,7 +116,7 @@ class UploadAndShareFilesWorkerFailureTest {
 
     @After
     fun tearDown() {
-        runCatching { server.shutdown() }
+        runCatching { server.close() }
     }
 
     @Test
@@ -321,7 +321,7 @@ class UploadAndShareFilesWorkerFailureTest {
         assertEquals(SendStatus.FAILED, rows[REFERENCE_ID]?.sendStatus)
         val request = server.takeRequest(REQUEST_WAIT_SECONDS, TimeUnit.SECONDS)
         assertEquals("DELETE", request?.method)
-        assertEquals("/remote.php/dav/files/alice/Talk/draft/id-photo.jpg", request?.path)
+        assertEquals("/remote.php/dav/files/alice/Talk/draft/id-photo.jpg", request?.url?.encodedPath)
     }
 
     @Test
@@ -360,7 +360,7 @@ class UploadAndShareFilesWorkerFailureTest {
 
     private fun startServer(): MockWebServer {
         server.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest) = MockResponse().setResponseCode(NO_CONTENT)
+            override fun dispatch(request: RecordedRequest) = MockResponse(code = NO_CONTENT)
         }
         server.start()
         whenever(user.baseUrl).thenReturn(server.url("/").toString().trimEnd('/'))

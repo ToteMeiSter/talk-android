@@ -15,10 +15,10 @@ import okhttp3.OkHttpClient
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
 import org.greenrobot.eventbus.EventBus
 import org.junit.After
 import org.junit.Assert.assertTrue
@@ -51,11 +51,11 @@ class WebSocketInstanceQueuedMessagesTest {
     fun setUp() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse {
-                val connection = if (request.path == path) connectionCount.incrementAndGet() else 0
+                val connection = if (request.url.encodedPath == path) connectionCount.incrementAndGet() else 0
                 return when (connection) {
-                    0 -> MockResponse().setResponseCode(HTTP_NOT_FOUND)
-                    FAILING_CONNECTION -> MockResponse().setResponseCode(HTTP_UNAVAILABLE)
-                    else -> MockResponse().withWebSocketUpgrade(RecordingServerListener("c$connection"))
+                    0 -> MockResponse(code = HTTP_NOT_FOUND)
+                    FAILING_CONNECTION -> MockResponse(code = HTTP_UNAVAILABLE)
+                    else -> MockResponse.Builder().webSocketUpgrade(RecordingServerListener("c$connection")).build()
                 }
             }
         }
@@ -64,7 +64,7 @@ class WebSocketInstanceQueuedMessagesTest {
 
     @After
     fun tearDown() {
-        server.shutdown()
+        server.close()
     }
 
     @Test

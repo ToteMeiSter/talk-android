@@ -14,10 +14,10 @@ import com.nextcloud.talk.models.json.capabilities.SpreedCapabilityDto
 import okhttp3.OkHttpClient
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
 import org.greenrobot.eventbus.EventBus
 import org.greenrobot.eventbus.Subscribe
 import org.junit.After
@@ -59,10 +59,10 @@ class WebSocketInstanceAlreadyJoinedTest {
         eventBus.register(eventCollector)
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse =
-                if (request.path == path) {
-                    MockResponse().withWebSocketUpgrade(ServerListener())
+                if (request.url.encodedPath == path) {
+                    MockResponse.Builder().webSocketUpgrade(ServerListener()).build()
                 } else {
-                    MockResponse().setResponseCode(HTTP_NOT_FOUND)
+                    MockResponse(code = HTTP_NOT_FOUND)
                 }
         }
         server.start()
@@ -71,7 +71,7 @@ class WebSocketInstanceAlreadyJoinedTest {
     @After
     fun tearDown() {
         eventBus.unregister(eventCollector)
-        server.shutdown()
+        server.close()
     }
 
     @Test

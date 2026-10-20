@@ -64,7 +64,7 @@ class FileAttachmentPreviewViewModelTest {
         viewModel.resolveMimeTypes()
         testScope.advanceUntilIdle()
 
-        viewModel.removeFile("content://a/1.txt")
+        viewModel.files.remove("content://a/1.txt")
         viewModel.resolveMimeTypes()
         testScope.advanceUntilIdle()
 

@@ -14,10 +14,10 @@ import com.nextcloud.talk.signaling.SignalingMessageReceiver
 import okhttp3.OkHttpClient
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
 import org.greenrobot.eventbus.EventBus
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -66,10 +66,10 @@ class WebSocketInstanceRoomSessionsTest {
     fun setUp() {
         server.dispatcher = object : Dispatcher() {
             override fun dispatch(request: RecordedRequest): MockResponse =
-                if (request.path == path) {
-                    MockResponse().withWebSocketUpgrade(ServerListener("c${serverSockets.size + 1}"))
+                if (request.url.encodedPath == path) {
+                    MockResponse.Builder().webSocketUpgrade(ServerListener("c${serverSockets.size + 1}")).build()
                 } else {
-                    MockResponse().setResponseCode(HTTP_NOT_FOUND)
+                    MockResponse(code = HTTP_NOT_FOUND)
                 }
         }
         server.start()
@@ -78,7 +78,7 @@ class WebSocketInstanceRoomSessionsTest {
     @After
     fun tearDown() {
         instances.forEach { eventBus.unregister(it) }
-        server.shutdown()
+        server.close()
     }
 
     @Test

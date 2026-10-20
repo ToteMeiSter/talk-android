@@ -11,8 +11,8 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -40,18 +40,18 @@ class WebSocketInstanceIdleSocketTest {
     @Before
     fun setUp() {
         server.enqueue(
-            MockResponse().withWebSocketUpgrade(object : WebSocketListener() {
+            MockResponse.Builder().webSocketUpgrade(object : WebSocketListener() {
                 override fun onOpen(webSocket: WebSocket, response: Response) {
                     webSocket.send("hello")
                 }
-            })
+            }).build()
         )
         server.start()
     }
 
     @After
     fun tearDown() {
-        server.shutdown()
+        server.close()
     }
 
     @Test

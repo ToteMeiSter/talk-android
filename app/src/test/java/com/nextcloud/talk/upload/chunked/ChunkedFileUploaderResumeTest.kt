@@ -16,11 +16,11 @@ import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
-import okhttp3.mockwebserver.Dispatcher
-import okhttp3.mockwebserver.MockResponse
-import okhttp3.mockwebserver.MockWebServer
-import okhttp3.mockwebserver.RecordedRequest
-import okhttp3.mockwebserver.SocketPolicy
+import mockwebserver3.Dispatcher
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import mockwebserver3.RecordedRequest
+import mockwebserver3.SocketEffect
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -72,21 +72,21 @@ class ChunkedFileUploaderResumeTest {
                 requests.add(request)
                 return when (request.method) {
                     "PROPFIND" -> when {
-                        propfindDisconnects -> MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
-                        propfindResponseCode != null -> MockResponse().setResponseCode(propfindResponseCode!!)
-                        else -> propfindResponse(request.path!!)
+                        propfindDisconnects -> MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()
+                        propfindResponseCode != null -> MockResponse(code = propfindResponseCode!!)
+                        else -> propfindResponse(request.url.encodedPath)
                     }
-                    "MOVE" -> MockResponse().setResponseCode(
-                        if (moveResponseCodes.isEmpty()) CREATED else moveResponseCodes.removeAt(0)
+                    "MOVE" -> MockResponse(
+                        code = if (moveResponseCodes.isEmpty()) CREATED else moveResponseCodes.removeAt(0)
                     )
-                    "PUT" -> MockResponse().setResponseCode(putResponseCode)
-                    "MKCOL" -> MockResponse().setResponseCode(METHOD_NOT_ALLOWED)
+                    "PUT" -> MockResponse(code = putResponseCode)
+                    "MKCOL" -> MockResponse(code = METHOD_NOT_ALLOWED)
                     "DELETE" -> if (deleteDisconnects) {
-                        MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                        MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()
                     } else {
-                        MockResponse().setResponseCode(CREATED)
+                        MockResponse(code = CREATED)
                     }
-                    else -> MockResponse().setResponseCode(CREATED)
+                    else -> MockResponse(code = CREATED)
                 }
             }
         }
@@ -109,7 +109,7 @@ class ChunkedFileUploaderResumeTest {
 
     @After
     fun tearDown() {
-        server.shutdown()
+        server.close()
     }
 
     @Test
@@ -170,8 +170,8 @@ class ChunkedFileUploaderResumeTest {
         uploader.upload(file, null, "/Talk/video.mp4")
 
         val move = requests.single { it.method == "MOVE" }
-        assertEquals(FILE_SIZE.toString(), move.getHeader("OC-Total-Length"))
-        assertTrue(move.path!!.endsWith("/.file"))
+        assertEquals(FILE_SIZE.toString(), move.headers["OC-Total-Length"])
+        assertTrue(move.url.encodedPath.endsWith("/.file"))
     }
 
     @Test
@@ -211,7 +211,7 @@ class ChunkedFileUploaderResumeTest {
     fun `stop does not cancel calls of other clients built from the same base client`() {
         val hanging = MockWebServer()
         hanging.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest) = MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE)
+            override fun dispatch(request: RecordedRequest) = MockResponse.Builder().onResponseStart(SocketEffect.Stall).build()
         }
         hanging.start()
         try {
@@ -228,7 +228,7 @@ class ChunkedFileUploaderResumeTest {
             assertFalse(call.isCanceled())
             call.cancel()
         } finally {
-            hanging.shutdown()
+            hanging.close()
         }
     }
 
@@ -322,12 +322,12 @@ class ChunkedFileUploaderResumeTest {
         uploader.deleteUploadedFile("/Talk/video.mp4")
 
         val delete = requests.single { it.method == "DELETE" }
-        assertTrue(delete.path!!.endsWith("/files/alice/Talk/video.mp4"))
+        assertTrue(delete.url.encodedPath.endsWith("/files/alice/Talk/video.mp4"))
     }
 
     @Test
     fun `removing an uploaded file never throws`() {
-        server.shutdown()
+        server.close()
 
         uploader.deleteUploadedFile("/Talk/video.mp4")
     }
@@ -396,7 +396,7 @@ class ChunkedFileUploaderResumeTest {
         fresh.abortUpload(file) {}
 
         val delete = requests.single { it.method == "DELETE" }
-        assertTrue(delete.path!!.endsWith("/" + FileUtils.md5Sum(file)))
+        assertTrue(delete.url.encodedPath.endsWith("/" + FileUtils.md5Sum(file)))
     }
 
     @Test
@@ -440,7 +440,7 @@ class ChunkedFileUploaderResumeTest {
     }
 
     private fun putPaths(): List<String> =
-        requests.filter { it.method == "PUT" }.map { "/" + it.path!!.substringAfterLast('/') }
+        requests.filter { it.method == "PUT" }.map { "/" + it.url.encodedPath.substringAfterLast('/') }
 
     private fun propfindResponse(path: String): MockResponse {
         val folder = path.trimEnd('/')
@@ -462,10 +462,11 @@ class ChunkedFileUploaderResumeTest {
               </d:response>
               $members
             </d:multistatus>"""
-        return MockResponse()
-            .setResponseCode(MULTI_STATUS)
-            .setHeader("Content-Type", "application/xml; charset=utf-8")
-            .setBody(body)
+        return MockResponse(
+            code = MULTI_STATUS,
+            headers = okhttp3.Headers.headersOf("Content-Type", "application/xml; charset=utf-8"),
+            body = body
+        )
     }
 
     companion object {
