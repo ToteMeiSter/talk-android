@@ -2246,7 +2246,7 @@ class ChatActivity :
                     val selectedMessageIds by chatViewModel.messageSelection.ids.collectAsStateWithLifecycle()
                     val canForwardSelection by produceState(false, selectedMessageIds) {
                         value = loadSelectedMessages(selectedMessageIds).any {
-                            actionsStateFor(it, networkMonitor.isOnline.value).showForward
+                            actionsStateFor(it, networkMonitor.isOnline.value).canForward
                         }
                     }
                     ChatToolbar(
@@ -4007,6 +4007,10 @@ class ChatActivity :
     }
 
     fun forwardMessage(message: ChatMessage?) {
+        if (message?.getCalculateMessageType() == ChatMessage.MessageType.SINGLE_NC_ATTACHMENT_MESSAGE) {
+            forwardFile(message)
+            return
+        }
         forwardText(message?.message)
     }
 
@@ -4141,7 +4145,7 @@ class ChatActivity :
     private fun forwardFile(message: ChatMessage) {
         val entry = fileForwardEntry(message)
         if (entry == null) {
-            Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
+            Snackbar.make(binding.root, R.string.nc_forward_file_unavailable, Snackbar.LENGTH_LONG).show()
             return
         }
         val key = PendingFileForward.put(entry)

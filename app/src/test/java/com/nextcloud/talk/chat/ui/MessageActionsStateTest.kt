@@ -110,6 +110,24 @@ class MessageActionsStateTest {
     }
 
     @Test
+    fun canForward_trueForAFileMessageOfAnotherUser_soTheSelectionToolbarOffersForward() {
+        val foreign = fileMessage().apply {
+            actorId = "other"
+            actorType = "users"
+        }
+        val state = buildStateFor(foreign)
+        Assert.assertTrue(state.showForwardFile)
+        Assert.assertTrue(state.canForward)
+    }
+
+    @Test
+    fun canForward_trueForText_falseForDeletedOrOffline() {
+        Assert.assertTrue(buildStateFor(ChatMessage(jsonMessageId = 8, message = "hi")).canForward)
+        Assert.assertFalse(buildStateFor(fileMessage().apply { isDeleted = true }).canForward)
+        Assert.assertFalse(buildStateFor(fileMessage(), isOnline = false).canForward)
+    }
+
+    @Test
     fun showForwardFile_falseOfflineDeletedOrForText() {
         Assert.assertFalse(buildStateFor(fileMessage(), isOnline = false).showForwardFile)
         Assert.assertFalse(buildStateFor(fileMessage().apply { isDeleted = true }).showForwardFile)
@@ -117,7 +135,7 @@ class MessageActionsStateTest {
     }
 
     @Test
-    fun showForwardFile_falseWithoutThePathOfTheFile() {
+    fun showForwardFile_staysWithoutThePathOfTheFile() {
         val noPath = ChatMessage(
             jsonMessageId = 9,
             message = "{file}",
@@ -128,7 +146,8 @@ class MessageActionsStateTest {
             message = "{file}",
             messageParameters = hashMapOf("file" to hashMapOf("id" to "1", "name" to "a.jpg", "path" to "Talk/a.jpg"))
         )
-        Assert.assertFalse(buildStateFor(noPath).showForwardFile)
+        // the button stays: without the path Forward answers with a message instead of vanishing
+        Assert.assertTrue(buildStateFor(noPath).showForwardFile)
         Assert.assertTrue(buildStateFor(withPath).showForwardFile)
     }
 
