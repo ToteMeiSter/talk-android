@@ -55,6 +55,8 @@ public class WebRtcAudioManager {
     private final boolean useProximitySensor;
     private final AudioManager audioManager;
     private AudioManagerListener audioManagerListener;
+    @Nullable
+    private InterruptionListener interruptionListener;
     private AudioManagerState amState;
     private int savedAudioMode = AudioManager.MODE_INVALID;
     private boolean savedIsSpeakerPhoneOn = false;
@@ -235,7 +237,14 @@ public class WebRtcAudioManager {
      * when focus returns after a transient loss, see {@link AudioFocusState}.
      */
     void onAudioFocusChange(int focusChange) {
-        if (audioFocusState.handle(focusChange) && amState == AudioManagerState.RUNNING) {
+        boolean wasInterrupted = audioFocusState.hasTransientLoss();
+        boolean restore = audioFocusState.handle(focusChange);
+        boolean interrupted = audioFocusState.hasTransientLoss();
+        Log.d(TAG, "onAudioFocusChange: " + focusChange + ", interrupted=" + interrupted);
+        if (interrupted != wasInterrupted && interruptionListener != null) {
+            interruptionListener.onInterruptionChanged(interrupted);
+        }
+        if (restore && amState == AudioManagerState.RUNNING) {
             audioManager.setMode(AudioManager.MODE_IN_COMMUNICATION);
             bluetoothManager.reassertBluetoothAudioAfterFocusGain(bluetoothPreferredForCall, hasWiredHeadset);
             if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S
@@ -245,7 +254,18 @@ public class WebRtcAudioManager {
             }
             updateAudioDeviceState();
         }
-        Log.d(TAG, "onAudioFocusChange: " + focusChange);
+    }
+
+    /**
+     * Whether another app (the phone call, typically) holds the audio focus for a short time. The call is paused
+     * then, not over.
+     */
+    public boolean isInterrupted() {
+        return audioFocusState.hasTransientLoss();
+    }
+
+    public void setInterruptionListener(@Nullable InterruptionListener listener) {
+        interruptionListener = listener;
     }
 
     static AudioFocusRequest buildCallAudioFocusRequest(AudioManager.OnAudioFocusChangeListener listener) {
@@ -339,6 +359,7 @@ public class WebRtcAudioManager {
         powerManagerUtils.updatePhoneState(PowerManagerUtils.PhoneState.IDLE);
 
         audioManagerListener = null;
+        interruptionListener = null;
         Log.d(TAG, "AudioManager stopped");
     }
 
@@ -922,6 +943,11 @@ public class WebRtcAudioManager {
     /**
      * Selected audio device change event.
      */
+    public interface InterruptionListener {
+        // Called on the main thread when the audio focus is lost for a short time or comes back.
+        void onInterruptionChanged(boolean interrupted);
+    }
+
     public static interface AudioManagerListener {
         // Callback fired once audio device is changed or list of available audio devices changed.
         void onAudioDeviceChanged(
