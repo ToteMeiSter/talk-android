@@ -157,6 +157,7 @@ import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartedStat
 import com.nextcloud.talk.viewmodels.CallRecordingViewModel.RecordingStartingState
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper.PeerConnectionObserver
+import com.nextcloud.talk.webrtc.PublisherRejoinPolicy
 import com.nextcloud.talk.webrtc.WebRTCUtils
 import com.nextcloud.talk.webrtc.WebRtcAudioManager
 import com.nextcloud.talk.webrtc.WebRtcAudioManager.AudioDevice
@@ -197,6 +198,7 @@ import org.webrtc.SurfaceTextureHelper
 import org.webrtc.VideoCapturer
 import org.webrtc.VideoSource
 import org.webrtc.VideoTrack
+import retrofit2.HttpException
 import java.io.IOException
 import java.util.Objects
 import java.util.concurrent.CopyOnWriteArrayList
@@ -331,6 +333,17 @@ class CallActivity : CallBaseActivity() {
     // Whether onCreate() got past its early exits, so onDestroy() has a call to clean up.
     private var isCallSetUp = false
     private var handler: Handler? = null
+
+    // Own handler for the delayed rejoin: "handler" drops all its callbacks on every call state change.
+    private val rejoinHandler = Handler(Looper.getMainLooper())
+    private val publisherRejoinPolicy = PublisherRejoinPolicy()
+    private var isRejoinPaused = false
+    private val rejoinRunnable = Runnable {
+        isRejoinPaused = false
+        if (!isDestroyed && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
+            initiateCall()
+        }
+    }
 
     private val callingTimeoutRunnable = Runnable { setCallState(CallStatus.CALLING_TIMEOUT) }
 
@@ -1571,6 +1584,7 @@ class CallActivity : CallBaseActivity() {
 
     public override fun onDestroy() {
         Log.d(TAG, "onDestroy: currentCallStatus=$currentCallStatus")
+        rejoinHandler.removeCallbacksAndMessages(null)
 
         if (isCallSetUp) {
             // The call cannot survive the activity being destroyed (WebRTC connections, local stream and
@@ -1933,6 +1947,13 @@ class CallActivity : CallBaseActivity() {
 
                 override fun onError(e: Throwable) {
                     logger.e(TAG, "Failed to join call", e)
+                    if (webSocketClient != null && shouldRetryRejoin(currentCallStatus, e)) {
+                        // A rejoin that fails on a bad network must not end the call: the user would find the call
+                        // screen gone and join again by hand.
+                        Log.w(TAG, "Joining the call failed during a rejoin, rejoining again", e)
+                        rejoinCallWithNewSession(publisherRejoinPolicy.onPublisherFailed())
+                        return
+                    }
                     Snackbar.make(binding!!.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
                     hangup(true, false)
                 }
@@ -2229,11 +2250,12 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private fun hangup(shutDownView: Boolean, endCallForAll: Boolean) {
+    private fun hangup(shutDownView: Boolean, endCallForAll: Boolean, rejoinDelayMillis: Long = 0L) {
         Log.d(TAG, "hangup! shutDownView=$shutDownView, endCallForAll=$endCallForAll")
         joinRoomInitiated = false
         if (shutDownView) {
             setCallState(CallStatus.LEAVING)
+            rejoinHandler.removeCallbacksAndMessages(null)
         }
         stopCallingSound()
         callTimeHandler.removeCallbacksAndMessages(null)
@@ -2271,7 +2293,7 @@ class CallActivity : CallBaseActivity() {
             CallForegroundService.stop(applicationContext)
         }
 
-        hangupNetworkCalls(shutDownView, endCallForAll)
+        hangupNetworkCalls(shutDownView, endCallForAll, rejoinDelayMillis)
     }
 
     private fun terminateAudioVideo() {
@@ -2316,7 +2338,7 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private fun hangupNetworkCalls(shutDownView: Boolean, endCallForAll: Boolean) {
+    private fun hangupNetworkCalls(shutDownView: Boolean, endCallForAll: Boolean, rejoinDelayMillis: Long = 0L) {
         Log.d(TAG, "hangupNetworkCalls. shutDownView=$shutDownView")
         if (!::conversationUser.isInitialized) {
             Log.w(TAG, "hangupNetworkCalls: conversationUser not initialized, skipping network calls")
@@ -2362,9 +2384,16 @@ class CallActivity : CallBaseActivity() {
             finish()
         } else if (shutDownView) {
             finish()
-        } else if (currentCallStatus === CallStatus.RECONNECTING ||
-            currentCallStatus === CallStatus.PUBLISHER_FAILED
-        ) {
+        } else if (currentCallStatus === CallStatus.PUBLISHER_FAILED) {
+            rejoinHandler.removeCallbacks(rejoinRunnable)
+            isRejoinPaused = rejoinDelayMillis > 0
+            if (rejoinDelayMillis > 0) {
+                Log.d(TAG, "Rejoining the call in $rejoinDelayMillis ms")
+                rejoinHandler.postDelayed(rejoinRunnable, rejoinDelayMillis)
+            } else {
+                initiateCall()
+            }
+        } else if (currentCallStatus === CallStatus.RECONNECTING) {
             initiateCall()
         }
     }
@@ -3275,16 +3304,25 @@ class CallActivity : CallBaseActivity() {
     }
 
     // Same recovery as the web client for a failed connection to the MCU: join the call again with a new session.
-    private fun rejoinCallWithNewSession() {
+    private fun rejoinCallWithNewSession(rejoinDelayMillis: Long = 0L) {
         setCallState(CallStatus.PUBLISHER_FAILED)
         webSocketClient!!.clearResumeId()
-        hangup(false, false)
+        hangup(false, false, rejoinDelayMillis)
     }
 
     // The connections are bound to the address of the old network, so recover now instead of waiting for ICE to fail.
     // Joins again also in the background: the connection is dead for sure, not just paused by a stopped activity.
     // A switch while joining again is not repeated; if that attempt fails, the ICE failure handling recovers it.
     private fun onNetworkSwitched() {
+        if (currentCallStatus === CallStatus.PUBLISHER_FAILED && isRejoinPaused) {
+            // The pause is meant for a network that keeps failing; a new network starts over without a pause.
+            Log.d(TAG, "Network switched during the rejoin pause, rejoining at once")
+            rejoinHandler.removeCallbacks(rejoinRunnable)
+            isRejoinPaused = false
+            publisherRejoinPolicy.reset()
+            initiateCall()
+            return
+        }
         if (currentCallStatus !== CallStatus.IN_CONVERSATION && currentCallStatus !== CallStatus.JOINED) {
             Log.d(TAG, "Network switched, nothing to recover in call status $currentCallStatus")
             return
@@ -3317,7 +3355,13 @@ class CallActivity : CallBaseActivity() {
                         Log.d(TAG, "ICE FAILED while backgrounded, skipping hangup (will recover on resume)")
                         return@runOnUiThread
                     }
-                    rejoinCallWithNewSession()
+                    // Only this ICE handler counts failures and sets a pause. Other callers of the same
+                    // rejoin path rejoin at once.
+                    rejoinCallWithNewSession(publisherRejoinPolicy.onPublisherFailed())
+                } else if (iceConnectionState == IceConnectionState.CONNECTED ||
+                    iceConnectionState == IceConnectionState.COMPLETED
+                ) {
+                    publisherRejoinPolicy.reset()
                 }
             }
         }
@@ -3644,6 +3688,26 @@ class CallActivity : CallBaseActivity() {
 
         internal fun shouldRefreshRoomSession(callStatus: CallStatus?, refreshesDone: Int): Boolean =
             callStatus !== CallStatus.IN_CONVERSATION && refreshesDone < MAX_ROOM_JOIN_REFRESHES
+
+        private const val HTTP_NOT_FOUND = 404
+        private const val HTTP_REQUEST_TIMEOUT = 408
+        private const val HTTP_TOO_MANY_REQUESTS = 429
+        private const val HTTP_CLIENT_ERROR_MIN = 400
+        private const val HTTP_CLIENT_ERROR_MAX = 499
+
+        /**
+         * Whether a failed join of the call is tried again with a new session instead of ending the call: only
+         * while the call is rejoined, and not for a refusal of the server (403 and the like), which a new session
+         * would not change. 404 means the session is gone, which a new session does fix.
+         */
+        internal fun shouldRetryRejoin(callStatus: CallStatus?, error: Throwable): Boolean {
+            if (callStatus !== CallStatus.PUBLISHER_FAILED && callStatus !== CallStatus.RECONNECTING) {
+                return false
+            }
+            val code = (error as? HttpException)?.code() ?: return true
+            val retryable = setOf(HTTP_NOT_FOUND, HTTP_REQUEST_TIMEOUT, HTTP_TOO_MANY_REQUESTS)
+            return code !in HTTP_CLIENT_ERROR_MIN..HTTP_CLIENT_ERROR_MAX || code in retryable
+        }
 
         private const val DELAY_ON_ERROR_STOP_THRESHOLD: Int = 16
 
