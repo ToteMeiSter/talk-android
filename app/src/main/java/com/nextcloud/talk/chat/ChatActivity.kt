@@ -907,12 +907,8 @@ class ChatActivity :
             )
         }
         leaveRoom { retired?.let(store::clearRetired) }
-        // Nobody waits for the leave to finish, as the new room is independent of the old one. What its success
-        // would do in leaveRoomObserver is done here, as the observer is removed with the old view model.
+        // Nobody waits for the leave to finish, as the new room is independent of the old one.
         isLeavingRoom = false
-        if (!isAnotherRoomCurrent()) {
-            ApplicationWideCurrentRoomHolder.getInstance().clear()
-        }
 
         chatViewModel.leaveRoomViewState.removeObserver(leaveRoomObserver)
         roomLifecycle.close()
