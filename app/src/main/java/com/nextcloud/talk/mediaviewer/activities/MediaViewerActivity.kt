@@ -32,6 +32,7 @@ import com.nextcloud.talk.mediaviewer.model.MediaViewerItem
 import com.nextcloud.talk.mediaviewer.viewmodels.MediaViewerViewModel
 import com.nextcloud.talk.ui.dialog.SaveToStorageDialogFragment
 import com.nextcloud.talk.utils.FileUtils
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.Mimetype.IMAGE_PREFIX_GENERIC
 import com.nextcloud.talk.utils.Mimetype.VIDEO_PREFIX_GENERIC
 import com.nextcloud.talk.utils.bundle.BundleKeys
@@ -127,7 +128,7 @@ class MediaViewerActivity : BaseActivity() {
     private fun showSaveDialog(item: MediaViewerItem, localPath: String) {
         val safeFile = FileUtils.resolveSharedAttachmentFile(cacheDir, File(localPath).name)
         if (safeFile == null) {
-            logger.e(TAG, "Refused to save file with unsafe name: ${File(localPath).name}")
+            logger.e(TAG, "Refused to save file with unsafe name: ${LogDescriptions.describeFile(localPath)}")
             Snackbar.make(window.decorView, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
             return
         }
