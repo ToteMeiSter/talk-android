@@ -77,6 +77,19 @@ object FileUtils {
     }
 
     /**
+     * Whether a uri that came in through a share intent may be read and uploaded. The intent comes from any app, so
+     * a uri of an own provider is accepted only inside the shared attachments directory, see
+     * [isSharedAttachmentProviderPath]. ContentResolver drops a "<userId>@" prefix of the authority before it looks
+     * the provider up, so the prefix must not hide an own authority: it is cut off, and compared without case.
+     */
+    fun isTrustedShareUri(uri: Uri, ownAuthority: String, cacheDir: File): Boolean {
+        val authority = uri.authority
+        if (ContentResolver.SCHEME_CONTENT != uri.scheme || authority.isNullOrEmpty()) return false
+        val isOwn = authority.substringAfterLast('@').equals(ownAuthority, ignoreCase = true)
+        return !isOwn || isSharedAttachmentProviderPath(cacheDir, uri.pathSegments)
+    }
+
+    /**
      * Resolves an untrusted file name inside [baseDirectory] and rejects traversal attempts.
      */
     fun resolveFileInDirectory(baseDirectory: File, untrustedFileName: String?): File? {

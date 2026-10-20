@@ -10,7 +10,6 @@ import android.Manifest
 import android.annotation.SuppressLint
 import android.app.NotificationManager
 import android.content.ActivityNotFoundException
-import android.content.ContentResolver
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -1042,10 +1041,7 @@ class ConversationsListActivity : BaseActivity() {
     }
 
     private fun addFileToShareIfTrusted(uri: Uri?) {
-        val isTrusted = uri != null &&
-            ContentResolver.SCHEME_CONTENT == uri.scheme &&
-            (uri.authority != packageName || FileUtils.isSharedAttachmentProviderPath(cacheDir, uri.pathSegments))
-        if (isTrusted) {
+        if (uri != null && FileUtils.isTrustedShareUri(uri, packageName, cacheDir)) {
             filesToShare!!.add(uri.toString())
         } else {
             Log.w(TAG, "Rejecting untrusted uri from share intent: $uri")
