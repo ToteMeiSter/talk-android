@@ -2083,6 +2083,10 @@ class CallActivity : CallBaseActivity() {
         } else {
             if (webSocketClient!!.isConnected && currentCallStatus === CallStatus.PUBLISHER_FAILED) {
                 webSocketClient!!.restartWebSocketWithNewSession()
+                // The "bye" of the old signaling session removes its room session at the server. The call joins
+                // with a fresh one (participants/active) and POST /call follows only after the room join answer.
+                Log.w(TAG, "Signaling session replaced, dropping the room session for the rejoin")
+                ApplicationWideCurrentRoomHolder.getInstance().session = ""
             }
         }
         joinRoomAndCall()
@@ -2128,6 +2132,9 @@ class CallActivity : CallBaseActivity() {
                     if (!webSocketCommunicationEvent.getHashMap()!!.containsKey("oldResumeId")) {
                         if (currentCallStatus === CallStatus.RECONNECTING) {
                             hangup(false, false)
+                        } else if (currentCallStatus === CallStatus.PUBLISHER_FAILED) {
+                            // The rejoin opened this session itself and joins the room and the call on it.
+                            Log.d(TAG, "hello with a new session while rejoining, the rejoin is under way")
                         } else {
                             setCallState(CallStatus.RECONNECTING)
                             runOnUiThread { initiateCall() }
