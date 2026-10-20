@@ -34,6 +34,7 @@ import androidx.core.net.toUri
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.repeatOnLifecycle
+import androidx.window.embedding.ActivityEmbeddingController
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequest
 import com.nextcloud.talk.dagger.modules.assistedViewModels
@@ -941,6 +942,11 @@ class ConversationsListActivity : BaseActivity() {
         }
     }
 
+    private fun isChatShownNextToList(token: String): Boolean =
+        !CallActivity.active &&
+            ActivityEmbeddingController.getInstance(this).isActivityEmbedded(this) &&
+            ApplicationWideCurrentRoomHolder.getInstance().isCurrentRoom(token, currentUser.id)
+
     private fun clearIntentAction() {
         intent.action = ""
     }
@@ -1175,6 +1181,16 @@ class ConversationsListActivity : BaseActivity() {
             !ApplicationWideCurrentRoomHolder.getInstance().isCurrentRoom(selectedConversation!!.token, currentUser.id)
         ) {
             showSnackbar(context.getString(R.string.restrict_join_other_room_while_call))
+            return
+        }
+
+        // Two-pane: the chat is already shown next to the list, don't recreate it (would kill its session)
+        if (textToPaste.isNullOrEmpty() &&
+            filesToShare.isNullOrEmpty() &&
+            selectedMessageId == null &&
+            isChatShownNextToList(selectedConversation!!.token)
+        ) {
+            clearIntentAction()
             return
         }
 
