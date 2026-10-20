@@ -66,31 +66,52 @@ class MessageSelectionTest {
 
 class ForwardPlanTest {
 
-    private fun message(id: Int, text: String?): ChatMessage =
+    private fun message(id: Int, text: String?, author: String = "Me"): ChatMessage =
         ChatMessage().apply {
             jsonMessageId = id
             message = text
+            actorDisplayName = author
         }
+
+    private fun plan(messages: List<ChatMessage>, canForward: (ChatMessage) -> Boolean = { true }) =
+        planForward(messages, canForward) { "From ${it.actorDisplayName}" }
 
     @Test
     fun `each forwardable message is its own text in chat order`() {
-        val plan = planForward(listOf(message(30, "c"), message(10, "a"), message(20, "b"))) { true }
+        val plan = plan(listOf(message(30, "c"), message(10, "a"), message(20, "b")))
 
-        assertEquals(listOf("a", "b", "c"), plan.texts)
+        assertEquals(listOf("From Me\na", "From Me\nb", "From Me\nc"), plan.texts)
         assertEquals(0, plan.skipped)
     }
 
     @Test
-    fun `messages that cannot be forwarded are counted as skipped`() {
-        val plan = planForward(listOf(message(1, "a"), message(2, "{file}"), message(3, "c"))) { it.jsonMessageId != 2 }
+    fun `own and foreign messages are forwarded alike, each with its own author`() {
+        val plan = plan(listOf(message(3, "own two"), message(2, "theirs", "Bob"), message(1, "own one")))
 
-        assertEquals(listOf("a", "c"), plan.texts)
+        assertEquals(listOf("From Me\nown one", "From Bob\ntheirs", "From Me\nown two"), plan.texts)
+        assertEquals(0, plan.skipped)
+    }
+
+    @Test
+    fun `a mention of a foreign message is forwarded by the name it shows`() {
+        val mention = message(2, "Hi {mention-user1}", "Bob").apply {
+            messageParameters = hashMapOf("mention-user1" to hashMapOf("type" to "user", "name" to "Alice"))
+        }
+
+        assertEquals(listOf("From Bob\nHi @Alice"), plan(listOf(mention)).texts)
+    }
+
+    @Test
+    fun `messages that cannot be forwarded are counted as skipped`() {
+        val plan = plan(listOf(message(1, "a"), message(2, "{file}"), message(3, "c"))) { it.jsonMessageId != 2 }
+
+        assertEquals(listOf("From Me\na", "From Me\nc"), plan.texts)
         assertEquals(1, plan.skipped)
     }
 
     @Test
     fun `nothing forwardable gives no texts`() {
-        val plan = planForward(listOf(message(1, "{file}"))) { false }
+        val plan = plan(listOf(message(1, "{file}"))) { false }
 
         assertTrue(plan.texts.isEmpty())
         assertEquals(1, plan.skipped)
@@ -98,21 +119,21 @@ class ForwardPlanTest {
 
     @Test
     fun `everything forwardable is sent without a notice`() {
-        assertEquals(ForwardOutcome.ALL, planForward(listOf(message(1, "a"), message(2, "b"))) { true }.outcome)
+        assertEquals(ForwardOutcome.ALL, plan(listOf(message(1, "a"), message(2, "b"))).outcome)
     }
 
     @Test
     fun `left out messages give the skipped notice and the rest is sent`() {
-        val plan = planForward(listOf(message(1, "a"), message(2, "{file}"))) { it.jsonMessageId == 1 }
+        val plan = plan(listOf(message(1, "a"), message(2, "{file}"))) { it.jsonMessageId == 1 }
 
         assertEquals(ForwardOutcome.SOME_SKIPPED, plan.outcome)
-        assertEquals(listOf("a"), plan.texts)
+        assertEquals(listOf("From Me\na"), plan.texts)
     }
 
     @Test
     fun `an empty plan is reported and not silent`() {
-        assertEquals(ForwardOutcome.NOTHING_TO_FORWARD, planForward(listOf(message(1, "a"))) { false }.outcome)
-        assertEquals(ForwardOutcome.NOTHING_TO_FORWARD, planForward(emptyList()) { true }.outcome)
-        assertEquals(ForwardOutcome.NOTHING_TO_FORWARD, planForward(listOf(message(1, "  "))) { true }.outcome)
+        assertEquals(ForwardOutcome.NOTHING_TO_FORWARD, plan(listOf(message(1, "a"))) { false }.outcome)
+        assertEquals(ForwardOutcome.NOTHING_TO_FORWARD, plan(emptyList()).outcome)
+        assertEquals(ForwardOutcome.NOTHING_TO_FORWARD, plan(listOf(message(1, "  "))).outcome)
     }
 }

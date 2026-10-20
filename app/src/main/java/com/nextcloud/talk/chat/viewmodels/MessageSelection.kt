@@ -54,11 +54,22 @@ data class ForwardPlan(val texts: List<String>, val skipped: Int) {
 
 enum class ForwardOutcome { ALL, SOME_SKIPPED, NOTHING_TO_FORWARD }
 
-/** Plans the forward of [messages] (any order): each forwardable message becomes its own text, ordered by id. */
-fun planForward(messages: List<ChatMessage>, canForward: (ChatMessage) -> Boolean): ForwardPlan {
+/**
+ * Plans the forward of [messages] (any order): each forwardable message becomes its own text, ordered by id. The text
+ * is what the message shows (a mention is its name), with the note of [noteOf] on the first line. A message without
+ * text is not forwarded as a text.
+ */
+fun planForward(
+    messages: List<ChatMessage>,
+    canForward: (ChatMessage) -> Boolean,
+    noteOf: (ChatMessage) -> String
+): ForwardPlan {
     val texts = messages.sortedBy { it.jsonMessageId }
         .filter(canForward)
-        .map { it.message.orEmpty() }
-        .filter { it.isNotBlank() }
+        .mapNotNull { forwardedText(it, noteOf(it)) }
     return ForwardPlan(texts, messages.size - texts.size)
 }
+
+/** The text a forward sends of [message]: [note] on the first line, then the text as shown; null without a text. */
+fun forwardedText(message: ChatMessage, note: String): String? =
+    message.getRichText().takeIf { it.isNotBlank() }?.let { "$note\n$it" }
