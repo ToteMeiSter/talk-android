@@ -1,0 +1,147 @@
+/*
+ * Nextcloud Talk - Android Client
+ *
+ * SPDX-FileCopyrightText: 2026 Nextcloud GmbH and Nextcloud contributors
+ * SPDX-License-Identifier: GPL-3.0-or-later
+ */
+package com.nextcloud.talk.jobs
+
+import com.nextcloud.talk.jobs.PushNotificationDecision.Stage1Route
+import com.nextcloud.talk.jobs.PushNotificationDecision.Stage2Failure
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+@Suppress("TooManyFunctions")
+class PushNotificationDecisionTest {
+
+    @Test
+    fun everyTypeThatNeedsTheServerWaitsForStageTwo() {
+        listOf("chat", "room", "recording", "reminder", "remote_talk_share", "call").forEach {
+            assertEquals(it, Stage1Route.SERVER, PushNotificationDecision.stage1Route(it))
+        }
+    }
+
+    @Test
+    fun unknownTypeGoesNowhere() {
+        assertEquals(Stage1Route.NONE, PushNotificationDecision.stage1Route("something_new"))
+        assertEquals(Stage1Route.NONE, PushNotificationDecision.stage1Route(null))
+    }
+
+    @Test
+    fun everyTypeThatStageOneHandsOverHasAStageTwoHandler() {
+        listOf("chat", "room", "recording", "reminder", "remote_talk_share", "call", "something_new", null).forEach {
+            val handedOver = PushNotificationDecision.stage1Route(it) != Stage1Route.NONE
+            val handled = PushNotificationDecision.stage2Handler(it) != PushNotificationDecision.Stage2Handler.NONE
+            assertEquals("$it", handedOver, handled)
+        }
+    }
+
+    @Test
+    fun stoppedStageRunsAgainWhateverTheError() {
+        listOf(null, 404, 500).forEach { code ->
+            assertEquals(Stage2Failure.RERUN, PushNotificationDecision.onStage2Failure(stopped = true, httpCode = code))
+        }
+    }
+
+    @Test
+    fun notFoundMeansTheServerDroppedTheNotification() {
+        assertEquals(
+            Stage2Failure.NO_SHOW,
+            PushNotificationDecision.onStage2Failure(stopped = false, httpCode = 404)
+        )
+    }
+
+    @Test
+    fun failedRequestFallsBackToTheSubject() {
+        listOf(null, 403, 500).forEach { code ->
+            assertEquals(
+                Stage2Failure.SUBJECT_FALLBACK,
+                PushNotificationDecision.onStage2Failure(stopped = false, httpCode = code)
+            )
+        }
+    }
+
+    @Test
+    fun stageTwoKeepsTheTimeOfStageOne() {
+        assertEquals(1_000L, PushNotificationDecision.pushTimestamp(stage1Time = 1_000L, now = 9_000L))
+        assertEquals(9_000L, PushNotificationDecision.pushTimestamp(stage1Time = 0L, now = 9_000L))
+    }
+
+    @Test
+    fun onlyARunThatJobSchedulerDidNotStartWaitsForAClosedNetwork() {
+        assertTrue(PushNotificationDecision.shouldWaitForNetwork(startedByJobScheduler = false, networkBlocked = true))
+        assertFalse(PushNotificationDecision.shouldWaitForNetwork(startedByJobScheduler = true, networkBlocked = true))
+        assertFalse(
+            PushNotificationDecision.shouldWaitForNetwork(startedByJobScheduler = false, networkBlocked = false)
+        )
+    }
+
+    /** A clock that only [sleep] moves. */
+    private class FakeClock {
+        var time = 0L
+        val sleeps = mutableListOf<Long>()
+        fun sleep(ms: Long) {
+            sleeps += ms
+            time += ms
+        }
+    }
+
+    @Test
+    fun waitEndsAsSoonAsTheNetworkOpens() {
+        val clock = FakeClock()
+        val result = PushNotificationDecision.waitForOpenNetwork(
+            isBlocked = { clock.time < 1_000L },
+            isStopped = { false },
+            now = { clock.time },
+            sleep = clock::sleep
+        )
+
+        assertEquals(PushNotificationDecision.NetworkWait(waitedMs = 1_000L, opened = true), result)
+    }
+
+    @Test
+    fun openNetworkIsNotWaitedFor() {
+        val clock = FakeClock()
+        val result = PushNotificationDecision.waitForOpenNetwork(
+            isBlocked = { false },
+            isStopped = { false },
+            now = { clock.time },
+            sleep = clock::sleep
+        )
+
+        assertEquals(PushNotificationDecision.NetworkWait(waitedMs = 0L, opened = true), result)
+        assertTrue(clock.sleeps.isEmpty())
+    }
+
+    @Test
+    fun waitIsBoundedAndNeverSleepsPastTheLimit() {
+        val clock = FakeClock()
+        val result = PushNotificationDecision.waitForOpenNetwork(
+            isBlocked = { true },
+            isStopped = { false },
+            now = { clock.time },
+            sleep = clock::sleep,
+            maxMs = 1_000L,
+            stepMs = 300L
+        )
+
+        assertEquals(PushNotificationDecision.NetworkWait(waitedMs = 1_000L, opened = false), result)
+        assertEquals(listOf(300L, 300L, 300L, 100L), clock.sleeps)
+    }
+
+    @Test
+    fun waitEndsWhenTheSystemStopsTheStage() {
+        val clock = FakeClock()
+        val result = PushNotificationDecision.waitForOpenNetwork(
+            isBlocked = { true },
+            isStopped = { clock.time >= 500L },
+            now = { clock.time },
+            sleep = clock::sleep,
+            stepMs = 250L
+        )
+
+        assertEquals(PushNotificationDecision.NetworkWait(waitedMs = 500L, opened = false), result)
+    }
+}
