@@ -24,6 +24,7 @@ import org.webrtc.MediaConstraints;
 import org.webrtc.MediaStream;
 import org.webrtc.MediaStreamTrack;
 import org.webrtc.PeerConnection;
+import org.webrtc.PeerConnectionDependencies;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RtpReceiver;
 import org.webrtc.RtpTransceiver;
@@ -124,7 +125,12 @@ public class PeerConnectionWrapper {
 
         PeerConnection.RTCConfiguration configuration = new PeerConnection.RTCConfiguration(iceServerList);
         configuration.sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN;
-        peerConnection = peerConnectionFactory.createPeerConnection(configuration, new InitialPeerConnectionObserver());
+        // WebRTC knows no ISRG (Let's Encrypt) roots; let the trust anchors of the app decide for TURNS.
+        PeerConnectionDependencies dependencies = PeerConnectionDependencies
+            .builder(new InitialPeerConnectionObserver())
+            .setSSLCertificateVerifier(SystemTrustSslCertificateVerifier.shared())
+            .createPeerConnectionDependencies();
+        peerConnection = peerConnectionFactory.createPeerConnection(configuration, dependencies);
 
         this.signalingMessageReceiver = signalingMessageReceiver;
         this.signalingMessageReceiver.addListener(webRtcMessageListener, sessionId, videoStreamType);

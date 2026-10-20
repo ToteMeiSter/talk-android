@@ -11,6 +11,7 @@ import com.nextcloud.talk.models.json.signaling.DataChannelMessageDto
 import com.nextcloud.talk.signaling.SignalingMessageReceiver
 import com.nextcloud.talk.signaling.SignalingMessageSender
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper.DataChannelMessageListener
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.mockito.ArgumentCaptor
@@ -30,7 +31,10 @@ import org.mockito.stubbing.Answer
 import org.webrtc.DataChannel
 import org.webrtc.MediaConstraints
 import org.webrtc.PeerConnection
+import org.webrtc.PeerConnectionDependencies
 import org.webrtc.PeerConnectionFactory
+import org.webrtc.observer
+import org.webrtc.sslCertificateVerifier
 import java.nio.ByteBuffer
 import java.util.HashMap
 import kotlin.concurrent.thread
@@ -91,7 +95,7 @@ class PeerConnectionWrapperTest {
         Mockito.`when`(
             mockedPeerConnectionFactory!!.createPeerConnection(
                 any(PeerConnection.RTCConfiguration::class.java),
-                any(PeerConnection.Observer::class.java)
+                any(PeerConnectionDependencies::class.java)
             )
         ).thenReturn(mockedPeerConnection)
 
@@ -124,8 +128,8 @@ class PeerConnectionWrapperTest {
 
     @Test
     fun testSendDataChannelMessageWithOpenRemoteDataChannel() {
-        val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnection.Observer> =
-            ArgumentCaptor.forClass(PeerConnection.Observer::class.java)
+        val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnectionDependencies> =
+            ArgumentCaptor.forClass(PeerConnectionDependencies::class.java)
 
         Mockito.`when`(
             mockedPeerConnectionFactory!!.createPeerConnection(
@@ -157,7 +161,7 @@ class PeerConnectionWrapperTest {
         val mockedRandomIdDataChannel = Mockito.mock(DataChannel::class.java)
         Mockito.`when`(mockedRandomIdDataChannel.label()).thenReturn("random-id")
         Mockito.`when`(mockedRandomIdDataChannel.state()).thenReturn(DataChannel.State.OPEN)
-        peerConnectionObserverArgumentCaptor.value.onDataChannel(mockedRandomIdDataChannel)
+        peerConnectionObserverArgumentCaptor.value.observer().onDataChannel(mockedRandomIdDataChannel)
 
         peerConnectionWrapper!!.send(DataChannelMessageDto("the-message-type"))
 
@@ -172,7 +176,7 @@ class PeerConnectionWrapperTest {
         Mockito.`when`(
             mockedPeerConnectionFactory!!.createPeerConnection(
                 any(PeerConnection.RTCConfiguration::class.java),
-                any(PeerConnection.Observer::class.java)
+                any(PeerConnectionDependencies::class.java)
             )
         ).thenReturn(mockedPeerConnection)
 
@@ -227,7 +231,7 @@ class PeerConnectionWrapperTest {
             Mockito.`when`(
                 mockedPeerConnectionFactory!!.createPeerConnection(
                     any(PeerConnection.RTCConfiguration::class.java),
-                    any(PeerConnection.Observer::class.java)
+                    any(PeerConnectionDependencies::class.java)
                 )
             ).thenReturn(mockedPeerConnection)
 
@@ -301,7 +305,7 @@ class PeerConnectionWrapperTest {
         Mockito.`when`(
             mockedPeerConnectionFactory!!.createPeerConnection(
                 any(PeerConnection.RTCConfiguration::class.java),
-                any(PeerConnection.Observer::class.java)
+                any(PeerConnectionDependencies::class.java)
             )
         ).thenReturn(mockedPeerConnection)
 
@@ -376,8 +380,8 @@ class PeerConnectionWrapperTest {
 
     @Test
     fun testReceiveDataChannelMessageWithOpenRemoteDataChannel() {
-        val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnection.Observer> =
-            ArgumentCaptor.forClass(PeerConnection.Observer::class.java)
+        val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnectionDependencies> =
+            ArgumentCaptor.forClass(PeerConnectionDependencies::class.java)
 
         Mockito.`when`(
             mockedPeerConnectionFactory!!.createPeerConnection(
@@ -420,7 +424,7 @@ class PeerConnectionWrapperTest {
         doNothing().`when`(mockedRandomIdDataChannel).registerObserver(
             randomIdDataChannelObserverArgumentCaptor.capture()
         )
-        peerConnectionObserverArgumentCaptor.value.onDataChannel(mockedRandomIdDataChannel)
+        peerConnectionObserverArgumentCaptor.value.observer().onDataChannel(mockedRandomIdDataChannel)
 
         val mockedDataChannelMessageListener = Mockito.mock(DataChannelMessageListener::class.java)
         peerConnectionWrapper!!.addListener(mockedDataChannelMessageListener)
@@ -442,8 +446,8 @@ class PeerConnectionWrapperTest {
 
     @Test
     fun testRemovePeerConnectionWithOpenRemoteDataChannel() {
-        val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnection.Observer> =
-            ArgumentCaptor.forClass(PeerConnection.Observer::class.java)
+        val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnectionDependencies> =
+            ArgumentCaptor.forClass(PeerConnectionDependencies::class.java)
 
         Mockito.`when`(
             mockedPeerConnectionFactory!!.createPeerConnection(
@@ -475,7 +479,7 @@ class PeerConnectionWrapperTest {
         val mockedRandomIdDataChannel = Mockito.mock(DataChannel::class.java)
         Mockito.`when`(mockedRandomIdDataChannel.label()).thenReturn("random-id")
         Mockito.`when`(mockedRandomIdDataChannel.state()).thenReturn(DataChannel.State.OPEN)
-        peerConnectionObserverArgumentCaptor.value.onDataChannel(mockedRandomIdDataChannel)
+        peerConnectionObserverArgumentCaptor.value.observer().onDataChannel(mockedRandomIdDataChannel)
 
         peerConnectionWrapper!!.removePeerConnection()
 
@@ -490,8 +494,8 @@ class PeerConnectionWrapperTest {
         // luck, but even if the test may wrongly pass sometimes it is better than nothing (although, in general, with
         // that number of reruns, it fails when it should).
         for (i in 1..1000) {
-            val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnection.Observer> =
-                ArgumentCaptor.forClass(PeerConnection.Observer::class.java)
+            val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnectionDependencies> =
+                ArgumentCaptor.forClass(PeerConnectionDependencies::class.java)
 
             Mockito.`when`(
                 mockedPeerConnectionFactory!!.createPeerConnection(
@@ -556,10 +560,10 @@ class PeerConnectionWrapperTest {
             val onDataChannelThread = thread {
                 // Add again "status" data channel to test that it is correctly disposed also in that case (which
                 // should not happen anyway even if it was added by the remote peer, but just in case)
-                peerConnectionObserverArgumentCaptor.value.onDataChannel(mockedStatusDataChannel)
+                peerConnectionObserverArgumentCaptor.value.observer().onDataChannel(mockedStatusDataChannel)
 
                 for (j in 0..<dataChannelCount) {
-                    peerConnectionObserverArgumentCaptor.value.onDataChannel(mockedRandomIdDataChannels[j])
+                    peerConnectionObserverArgumentCaptor.value.observer().onDataChannel(mockedRandomIdDataChannels[j])
 
                     // Call "onStateChange" on the registered observer to simulate that the data channel was opened.
                     dataChannelObservers[j]?.onStateChange()
@@ -599,8 +603,8 @@ class PeerConnectionWrapperTest {
         // luck, but even if the test may wrongly pass sometimes it is better than nothing (although, in general, with
         // that number of reruns, it fails when it should).
         for (i in 1..1000) {
-            val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnection.Observer> =
-                ArgumentCaptor.forClass(PeerConnection.Observer::class.java)
+            val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnectionDependencies> =
+                ArgumentCaptor.forClass(PeerConnectionDependencies::class.java)
 
             Mockito.`when`(
                 mockedPeerConnectionFactory!!.createPeerConnection(
@@ -676,8 +680,8 @@ class PeerConnectionWrapperTest {
         // luck, but even if the test may wrongly pass sometimes it is better than nothing (although, in general, with
         // that number of reruns, it fails when it should).
         for (i in 1..1000) {
-            val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnection.Observer> =
-                ArgumentCaptor.forClass(PeerConnection.Observer::class.java)
+            val peerConnectionObserverArgumentCaptor: ArgumentCaptor<PeerConnectionDependencies> =
+                ArgumentCaptor.forClass(PeerConnectionDependencies::class.java)
 
             Mockito.`when`(
                 mockedPeerConnectionFactory!!.createPeerConnection(
@@ -758,5 +762,35 @@ class PeerConnectionWrapperTest {
             Mockito.verify(mockedDataChannelMessageListener, atMostOnce()).onAudioOff()
             Mockito.verifyNoMoreInteractions(mockedDataChannelMessageListener)
         }
+    }
+
+    @Test
+    fun testPeerConnectionIsCreatedWithSystemTrustCertificateVerifier() {
+        val dependenciesCaptor: ArgumentCaptor<PeerConnectionDependencies> =
+            ArgumentCaptor.forClass(PeerConnectionDependencies::class.java)
+
+        Mockito.`when`(
+            mockedPeerConnectionFactory!!.createPeerConnection(
+                any(PeerConnection.RTCConfiguration::class.java),
+                dependenciesCaptor.capture()
+            )
+        ).thenReturn(mockedPeerConnection)
+
+        PeerConnectionWrapper(
+            mockedPeerConnectionFactory,
+            ArrayList(),
+            MediaConstraints(),
+            "the-session-id",
+            "the-local-session-id",
+            null,
+            false,
+            false,
+            "video",
+            mockedSignalingMessageReceiver,
+            mockedSignalingMessageSender
+        )
+
+        val verifier = dependenciesCaptor.value.sslCertificateVerifier()
+        assertTrue(verifier === SystemTrustSslCertificateVerifier.shared())
     }
 }
