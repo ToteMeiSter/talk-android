@@ -25,7 +25,6 @@ import android.content.pm.PackageManager
 import android.content.res.AssetFileDescriptor
 import android.database.Cursor
 import android.graphics.Outline
-import android.location.LocationManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build

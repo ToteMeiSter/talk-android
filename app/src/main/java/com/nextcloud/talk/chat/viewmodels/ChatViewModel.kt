@@ -7,7 +7,6 @@
  */
 package com.nextcloud.talk.chat.viewmodels
 
-import android.app.Activity
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
@@ -3010,6 +3009,7 @@ class ChatViewModel @AssistedInject constructor(
             conversationLastReadMessage: Int,
             newestOwnMessageId: Int?
         ): Int? = maxOf(localLastReadMessage, newestOwnMessageId ?: 0).takeIf { it > conversationLastReadMessage }
+
         /** Enough of the note to self to cover what a share of ours could have landed behind. */
         private const val SHARE_LOOKUP_LIMIT = 20
 

@@ -488,6 +488,7 @@ object NotificationUtils {
      * requesting account, so the same URL returns a different image per account on the same server.
      * Those avatars bypass the caches, which are keyed by URL only.
      */
+    @Suppress("LongParameterList")
     fun loadConversationAvatarBitmapSync(
         baseUrl: String?,
         roomToken: String,

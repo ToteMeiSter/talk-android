@@ -23,6 +23,7 @@ import org.robolectric.annotation.Config
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
+@Suppress("TooManyFunctions")
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [33])

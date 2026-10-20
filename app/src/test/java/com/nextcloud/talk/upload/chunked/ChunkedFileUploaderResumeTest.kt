@@ -72,7 +72,8 @@ class ChunkedFileUploaderResumeTest {
                 requests.add(request)
                 return when (request.method) {
                     "PROPFIND" -> when {
-                        propfindDisconnects -> MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()
+                        propfindDisconnects ->
+                            MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()
                         propfindResponseCode != null -> MockResponse(code = propfindResponseCode!!)
                         else -> propfindResponse(request.url.encodedPath)
                     }
@@ -211,7 +212,8 @@ class ChunkedFileUploaderResumeTest {
     fun `stop does not cancel calls of other clients built from the same base client`() {
         val hanging = MockWebServer()
         hanging.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest) = MockResponse.Builder().onResponseStart(SocketEffect.Stall).build()
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                MockResponse.Builder().onResponseStart(SocketEffect.Stall).build()
         }
         hanging.start()
         try {
