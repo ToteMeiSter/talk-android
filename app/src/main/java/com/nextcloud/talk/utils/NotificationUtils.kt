@@ -370,7 +370,7 @@ object NotificationUtils {
             .placeholder(R.drawable.account_circle_96dp)
             .listener(
                 onError = { _, result ->
-                    Log.w(TAG, "Can't load avatar for URL: $avatarUrl", result.throwable)
+                    Log.w(TAG, "Can't load avatar", result.throwable)
                 }
             )
             .target(

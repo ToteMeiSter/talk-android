@@ -88,6 +88,7 @@ import com.nextcloud.talk.mediaviewer.viewmodels.MediaViewerViewModel
 import com.nextcloud.talk.utils.DateConstants
 import com.nextcloud.talk.utils.DateUtils
 import com.nextcloud.talk.utils.DrawableUtils
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.Mimetype
 import com.nextcloud.talk.utils.MimetypeUtils
 import com.nextcloud.talk.ui.LocalImageAuthHeader
@@ -371,7 +372,7 @@ private fun ImagePage(localPath: String, onToggleControls: () -> Unit) {
         if (result is SuccessResult) {
             drawable = result.drawable
         } else {
-            Log.e(TAG, "image could not be decoded from path: $localPath")
+            Log.e(TAG, "image could not be decoded from path: ${LogDescriptions.describeFile(localPath)}")
         }
     }
 

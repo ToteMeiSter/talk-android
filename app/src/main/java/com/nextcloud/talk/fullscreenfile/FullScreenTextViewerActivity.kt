@@ -29,6 +29,7 @@ import com.nextcloud.talk.components.ColoredStatusBar
 import com.nextcloud.talk.ui.dialog.SaveToStorageDialogFragment
 import com.nextcloud.talk.utils.AccountUtils.canWeOpenFilesApp
 import com.nextcloud.talk.utils.FileUtils
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.Mimetype.TEXT_PREFIX_GENERIC
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_ACCOUNT
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_FILE_ID
@@ -54,7 +55,7 @@ class FullScreenTextViewerActivity : BaseActivity() {
         val username = user.username.orEmpty()
         val baseUrl = user.baseUrl.orEmpty()
         textFile = FileUtils.resolveSharedAttachmentFile(applicationContext.cacheDir, fileName) ?: run {
-            Log.e(TAG, "Invalid text filename: $fileName")
+            Log.e(TAG, "Invalid text filename: ${LogDescriptions.describeFile(fileName)}")
             finish()
             return
         }
@@ -63,7 +64,7 @@ class FullScreenTextViewerActivity : BaseActivity() {
             val text by produceState<String?>(null, textFile) {
                 value = withContext(Dispatchers.IO) { readTextFileOrNull(textFile) } ?: run {
                     // the system may clear the cache directory while the viewer is not on screen
-                    Log.e(TAG, "Could not read the text file: ${textFile.name}")
+                    Log.e(TAG, "Could not read the text file: ${LogDescriptions.describeFile(textFile.name)}")
                     Toast.makeText(this@FullScreenTextViewerActivity, R.string.nc_common_error_sorry, Toast.LENGTH_LONG)
                         .show()
                     finish()

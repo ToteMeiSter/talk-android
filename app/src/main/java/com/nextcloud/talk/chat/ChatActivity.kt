@@ -91,6 +91,7 @@ import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequest
 import com.nextcloud.talk.dagger.modules.assistedViewModels
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.setExpeditedIfSupported
 import androidx.work.WorkInfo
 import androidx.work.WorkManager
@@ -3948,7 +3949,12 @@ class ChatActivity :
                         )
                         showSnackBar(roomToken)
                     } catch (e: Exception) {
-                        Log.w(TAG, "File corresponding to the uri does not exist $shareUri", e)
+                        Log.w(
+                            TAG,
+                            "File corresponding to the uri does not exist: " +
+                                LogDescriptions.describeUri(shareUri),
+                            e
+                        )
                         downloadFileToCache(message, false) {
                             uploadFile(
                                 fileUri = shareUri.toString(),
@@ -4204,7 +4210,6 @@ class ChatActivity :
         Log.d(TAG, " | method: $methodName")
         Log.d(TAG, " | ChatActivity: " + System.identityHashCode(this).toString())
         Log.d(TAG, " | roomToken: $roomToken")
-        Log.d(TAG, " | currentConversation?.displayName: ${currentConversation?.displayName}")
         Log.d(TAG, " | sessionIdAfterRoomJoined: $sessionIdAfterRoomJoined")
         Log.d(TAG, " |-----------------------------------------------")
     }

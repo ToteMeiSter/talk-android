@@ -62,7 +62,7 @@ object ImageCompressor {
             compressedFile.writeBytes(bytes)
             compressedFile
         } catch (e: IOException) {
-            Log.e(TAG, "failed to write compressed image for ${sourceFile.name}", e)
+            Log.e(TAG, "failed to write compressed image for ${LogDescriptions.describeFile(sourceFile.name)}", e)
             null
         } finally {
             bitmap.recycle()
@@ -77,7 +77,7 @@ object ImageCompressor {
             requireSoftwareBitmap = true
         )
         if (bitmap == null) {
-            Log.w(TAG, "could not decode ${sourceFile.name} for compression")
+            Log.w(TAG, "could not decode ${LogDescriptions.describeFile(sourceFile.name)} for compression")
             return null
         }
         val output = ByteArrayOutputStream()

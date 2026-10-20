@@ -47,6 +47,7 @@ import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.CapabilitiesUtil
 import com.nextcloud.talk.utils.FileUtils
 import com.nextcloud.talk.utils.ImageCompressor
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.RemoteFileUtils
 import com.nextcloud.talk.utils.VideoCompressor
@@ -286,7 +287,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             )
             chunkedFileUploader!!.upload(file!!, mimeType, remotePath)
         } else {
-            Log.d(TAG, "starting normal upload (not chunked) of $fileName")
+            Log.d(TAG, "starting normal upload (not chunked) of ${LogDescriptions.describeFile(fileName)}")
             val observable = FileUploader(
                 okHttpClient,
                 context,

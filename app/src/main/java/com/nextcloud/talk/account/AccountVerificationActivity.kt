@@ -430,7 +430,7 @@ class AccountVerificationActivity : BaseActivity() {
         cookieManager.cookieStore.removeAll()
 
         val userToSetAsActive = getUser(internalAccountId)
-        Log.d(TAG, "userToSetAsActive: " + userToSetAsActive.username)
+        Log.d(TAG, "userToSetAsActive: " + userToSetAsActive.id)
 
         if (userManager.setUserAsActive(userToSetAsActive)) {
             if (getAllUsers().size > 1 && isAccountImport) {

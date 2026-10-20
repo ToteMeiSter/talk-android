@@ -396,8 +396,7 @@ class ContactAddressBookWorker(val context: Context, workerParameters: WorkerPar
 
                     Log.d(
                         TAG,
-                        "added new entry for contact $displayName (cloudId: $cloudId | lookupKey: $lookupKey" +
-                            " | id: $id)"
+                        "added new entry for a contact (id: $id)"
                     )
                 }
                 contactCursor.close()

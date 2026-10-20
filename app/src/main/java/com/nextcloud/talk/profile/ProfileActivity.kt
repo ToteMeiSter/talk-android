@@ -501,7 +501,7 @@ class ProfileActivity : BaseActivity() {
                         override fun onSubscribe(d: Disposable) = Unit
 
                         override fun onNext(userProfileOverall: GenericOverall) {
-                            Log.d(TAG, "Successfully saved: ${item.text} as ${item.field}")
+                            Log.d(TAG, "Successfully saved: ${item.field}")
                             if (item.field == Field.DISPLAYNAME) {
                                 profileUiState = profileUiState.copy(displayName = item.text.orEmpty())
                             }
@@ -515,7 +515,7 @@ class ProfileActivity : BaseActivity() {
                                 Snackbar.LENGTH_LONG
                             ).show()
                             syncFilteredItems()
-                            Log.e(TAG, "Failed to save: ${item.text} as ${item.field}", e)
+                            Log.e(TAG, "Failed to save: ${item.field}", e)
                         }
 
                         override fun onComplete() = Unit

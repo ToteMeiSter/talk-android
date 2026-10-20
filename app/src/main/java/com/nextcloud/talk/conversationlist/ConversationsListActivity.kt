@@ -92,6 +92,7 @@ import com.nextcloud.talk.utils.ClosedInterfaceImpl
 import com.nextcloud.talk.utils.ConversationUtils
 import com.nextcloud.talk.utils.ConversationUtils.checkIfVoiceRoom
 import com.nextcloud.talk.utils.FileUtils
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.Mimetype
 import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.ParticipantPermissions
@@ -1048,7 +1049,7 @@ class ConversationsListActivity : BaseActivity() {
         if (isTrusted) {
             filesToShare!!.add(uri.toString())
         } else {
-            Log.w(TAG, "Rejecting untrusted uri from share intent: ${FileUtils.describeShareUriForLog(uri)}")
+            Log.w(TAG, "Rejecting untrusted uri from share intent: ${LogDescriptions.describeUri(uri)}")
         }
     }
 

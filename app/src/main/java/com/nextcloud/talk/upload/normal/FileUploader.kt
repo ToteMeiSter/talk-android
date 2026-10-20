@@ -19,6 +19,7 @@ import com.nextcloud.talk.dagger.modules.RestModule
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.FileUtils
+import com.nextcloud.talk.utils.LogDescriptions
 import io.reactivex.Observable
 import io.reactivex.schedulers.Schedulers
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
@@ -128,7 +129,7 @@ class FileUploader(
             val bytes = context.contentResolver.openInputStream(sourceFileUri)!!.use { it.readBytes() }
             bytes.toRequestBody("application/octet-stream".toMediaTypeOrNull())
         } catch (e: Exception) {
-            Log.e(TAG, "failed to create RequestBody for $sourceFileUri", e)
+            Log.e(TAG, "failed to create RequestBody for ${LogDescriptions.describeUri(sourceFileUri)}", e)
             null
         }
 

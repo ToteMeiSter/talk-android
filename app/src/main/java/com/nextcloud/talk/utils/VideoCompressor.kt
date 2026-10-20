@@ -59,7 +59,7 @@ object VideoCompressor {
      */
     @Suppress("TooGenericExceptionCaught")
     fun readVideoInfo(sourceFile: File): VideoInfo? {
-        Log.d(TAG, "reading video info for ${sourceFile.name}")
+        Log.d(TAG, "reading video info for ${LogDescriptions.describeFile(sourceFile.name)}")
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(sourceFile.absolutePath)
@@ -72,7 +72,7 @@ object VideoCompressor {
                 VideoInfo(width, height, durationMs, sourceFile.length())
             }
         } catch (e: Exception) {
-            Log.w(TAG, "could not read video info for ${sourceFile.name}", e)
+            Log.w(TAG, "could not read video info for ${LogDescriptions.describeFile(sourceFile.name)}", e)
             null
         } finally {
             retriever.release()
@@ -84,7 +84,7 @@ object VideoCompressor {
      * target bitrate rather than a real (expensive) transcode.
      */
     fun estimateCompression(sourceFile: File): VideoInfo? {
-        Log.d(TAG, "estimating compression for ${sourceFile.name}")
+        Log.d(TAG, "estimating compression for ${LogDescriptions.describeFile(sourceFile.name)}")
         val original = readVideoInfo(sourceFile) ?: return null
         val (targetWidth, targetHeight) = scaledDimensions(original.width, original.height)
         val estimatedBytes = (TARGET_VIDEO_BITRATE_BPS + TARGET_AUDIO_BITRATE_BPS) / BITS_PER_BYTE *
@@ -100,7 +100,7 @@ object VideoCompressor {
      */
     @Suppress("ReturnCount")
     fun compress(context: Context, sourceFile: File, onProgress: (Int) -> Unit = {}): File? {
-        Log.d(TAG, "compressing ${sourceFile.name}")
+        Log.d(TAG, "compressing ${LogDescriptions.describeFile(sourceFile.name)}")
         val original = readVideoInfo(sourceFile) ?: return null
         if (minOf(original.width, original.height) <= TARGET_SHORT_SIDE) return null
 
@@ -133,7 +133,8 @@ object VideoCompressor {
         durationMs: Long,
         onProgress: (Int) -> Unit
     ): Boolean {
-        val handlerThread = HandlerThread("VideoCompressor-${sourceFile.name}").apply { start() }
+        val handlerThread = HandlerThread("VideoCompressor").apply { start() }
+        val fileForLog = LogDescriptions.describeFile(sourceFile.name)
         try {
             val latch = CountDownLatch(1)
             var success = false
@@ -141,7 +142,7 @@ object VideoCompressor {
             val handler = Handler(handlerThread.looper)
 
             handler.post {
-                Log.d(TAG, "starting video compression for ${sourceFile.name}")
+                Log.d(TAG, "starting video compression for $fileForLog")
                 val encoderFactory = DefaultEncoderFactory.Builder(context)
                     .setRequestedVideoEncoderSettings(
                         VideoEncoderSettings.Builder().setBitrate(TARGET_VIDEO_BITRATE_BPS.toInt()).build()
@@ -157,7 +158,7 @@ object VideoCompressor {
                     .addListener(object : Transformer.Listener {
                         override fun onCompleted(composition: Composition, exportResult: ExportResult) {
                             success = true
-                            Log.d(TAG, "video compression completed for ${sourceFile.name}")
+                            Log.d(TAG, "video compression completed for $fileForLog")
                             latch.countDown()
                         }
 
@@ -166,7 +167,7 @@ object VideoCompressor {
                             exportResult: ExportResult,
                             exportException: ExportException
                         ) {
-                            Log.e(TAG, "video compression failed for ${sourceFile.name}", exportException)
+                            Log.e(TAG, "video compression failed for $fileForLog", exportException)
                             latch.countDown()
                         }
                     })
@@ -190,7 +191,7 @@ object VideoCompressor {
             val timeoutMs = max(MIN_TIMEOUT_MS, durationMs * TIMEOUT_MULTIPLIER)
             val completedInTime = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
             if (!completedInTime) {
-                Log.w(TAG, "video compression timed out for ${sourceFile.name}")
+                Log.w(TAG, "video compression timed out for $fileForLog")
                 handler.post { transformerRef.get()?.cancel() }
             }
             return completedInTime && success

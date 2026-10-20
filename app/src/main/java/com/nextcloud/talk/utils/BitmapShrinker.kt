@@ -61,7 +61,7 @@ object BitmapShrinker {
                 }
             }
         } catch (e: IOException) {
-            Log.e(TAG, "Failed to decode bitmap from path: $path", e)
+            Log.e(TAG, "Failed to decode bitmap from path: ${LogDescriptions.describeFile(path)}", e)
             null
         }
 
@@ -85,7 +85,7 @@ object BitmapShrinker {
             val decodedBitmap = BitmapFactory.decodeFile(path, this)
 
             if (decodedBitmap == null) {
-                Log.e(TAG, "Failed to decode bitmap from path: $path")
+                Log.e(TAG, "Failed to decode bitmap from path: ${LogDescriptions.describeFile(path)}")
                 // This can occur when the file is empty or corrupted, bitmap is too large.
                 // function does not throw an exception, but returns null
             }
