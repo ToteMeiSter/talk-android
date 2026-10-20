@@ -40,7 +40,6 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.core.net.toUri
-import androidx.emoji2.text.EmojiCompat
 import androidx.work.Constraints
 import androidx.work.Data
 import androidx.work.ExistingWorkPolicy
@@ -50,7 +49,6 @@ import androidx.work.WorkManager
 import androidx.work.Worker
 import androidx.work.WorkerParameters
 import autodagger.AutoInjector
-import coil.executeBlocking
 import coil.imageLoader
 import coil.request.ImageRequest
 import com.bluelinelabs.logansquare.LoganSquare
@@ -70,7 +68,6 @@ import com.nextcloud.talk.logger.Logger
 import com.nextcloud.talk.models.domain.ConversationModel
 import com.nextcloud.talk.models.json.chat.ChatUtils.Companion.getParsedMessage
 import com.nextcloud.talk.models.json.conversations.ConversationEnums
-import com.nextcloud.talk.models.json.notifications.NotificationOverall
 import com.nextcloud.talk.models.json.participants.ParticipantDto
 import com.nextcloud.talk.models.json.participants.ParticipantsOverall
 import com.nextcloud.talk.models.json.push.DecryptedPushMessageDto
@@ -83,6 +80,7 @@ import com.nextcloud.talk.receivers.ShareRecordingToChatReceiver
 import com.nextcloud.talk.users.UserManager
 import com.nextcloud.talk.utils.ActorAvatar
 import com.nextcloud.talk.utils.ApiUtils
+import com.nextcloud.talk.utils.BoundedLoad
 import com.nextcloud.talk.utils.CapabilitiesUtil
 import com.nextcloud.talk.utils.CharacterAvatarUtils
 import com.nextcloud.talk.utils.ConversationUtils
@@ -94,6 +92,7 @@ import com.nextcloud.talk.utils.NotificationUtils.findNotificationForRoom
 import com.nextcloud.talk.utils.NotificationUtils.getCallRingtoneUri
 import com.nextcloud.talk.utils.NotificationUtils.loadAvatarSync
 import com.nextcloud.talk.utils.ParticipantPermissions
+import com.nextcloud.talk.utils.SafeEmoji
 import com.nextcloud.talk.utils.PushUtils
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_DISMISS_RECORDING_URL
@@ -125,6 +124,7 @@ import java.net.CookieManager
 import java.security.InvalidKeyException
 import java.security.NoSuchAlgorithmException
 import java.security.PrivateKey
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.TimeUnit
 import java.util.zip.CRC32
 import javax.crypto.BadPaddingException
@@ -167,6 +167,13 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     private lateinit var notificationManager: NotificationManagerCompat
     private var imagePreviewUrl: String? = null
     private var imageMimeType: String? = null
+
+    // a notification was written for this push; the one of a chat push was written from its subject
+    private var notified = false
+    private var subjectShown = false
+
+    // the subject of a chat push is the name of the sender: the name for messages the server gives no user for
+    private var firstTitle: String = ""
 
     override fun doWork(): Result {
         sharedApplication!!.componentApplication.inject(this)
@@ -222,6 +229,12 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         } else if (isTalkNotification()) {
             logger.d(TAG, "pushMessage.type: " + pushMessage.type)
             when (PushNotificationDecision.stage1Route(pushMessage.type)) {
+                PushNotificationDecision.Stage1Route.SUBJECT_THEN_SERVER -> {
+                    // a chat message is shown from the push subject at once, the server data only improves it
+                    showFromSubject(createMainActivityIntent())
+                    enqueueNetworkStage()
+                }
+
                 PushNotificationDecision.Stage1Route.SERVER -> enqueueNetworkStage()
                 PushNotificationDecision.Stage1Route.NONE -> Log.e(TAG, pushMessage.type + " is not handled")
             }
@@ -242,6 +255,11 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     private fun runNetworkStage() {
         initNcApiAndCredentials()
         waitForOpenNetwork()
+        subjectShown = inputData.getBoolean(BundleKeys.KEY_NOTIFICATION_SUBJECT_SHOWN, false)
+        notified = subjectShown
+        if (pushMessage.type == TYPE_CHAT) {
+            firstTitle = pushMessage.subject.substringBefore(LINEBREAK)
+        }
         when (PushNotificationDecision.stage2Handler(pushMessage.type)) {
             PushNotificationDecision.Stage2Handler.NOTIFICATION -> handleNonCallPushMessage()
             PushNotificationDecision.Stage2Handler.REMOTE_TALK_SHARE -> handleRemoteTalkSharePushMessage()
@@ -251,7 +269,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     }
 
     private fun enqueueNetworkStage() {
-        val request = networkStageRequest(inputData, user.id, pushMessage.timestamp)
+        val request = networkStageRequest(inputData, subjectShown, user.id, pushMessage.timestamp)
         val name = networkStageName(user.id, pushMessage.notificationId, pushMessage.timestamp)
         WorkManager.getInstance(applicationContext).enqueueUniqueWork(name, ExistingWorkPolicy.KEEP, request)
         logger.d(TAG, "stage 2 enqueued: type=${pushMessage.type}")
@@ -438,7 +456,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                     .setSubText(baseUrl)
                     .setShowWhen(true)
                     .setWhen(pushMessage.timestamp)
-                    .setContentTitle(EmojiCompat.get().process(pushMessage.subject))
+                    .setContentTitle(SafeEmoji.process(pushMessage.subject))
                     // auto cancel is set to false because notification (including sound) should continue while
                     // CallNotificationActivity is active
                     .setAutoCancel(false)
@@ -574,64 +592,145 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 user.baseUrl!!,
                 pushMessage.notificationId.toString()
             )
+        ).blockingSubscribe(
+            { notificationOverall ->
+                val update = prepareUpdate(intent, notificationOverall.ocs!!.notification)
+                if (update.ncNotification != null) {
+                    showNotification(intent, update.ncNotification, update)
+                    reportIncomingMessageShortcut(update.shortcutName)
+                    catchUpPushedRoom(update.threadId)
+                }
+            },
+            { e -> onNcNotificationFailed(intent, e) }
         )
-            .blockingSubscribe(object : Observer<NotificationOverall> {
-                override fun onSubscribe(d: Disposable) {
-                    // unused atm
-                }
+    }
 
-                override fun onNext(notificationOverall: NotificationOverall) {
-                    val ncNotification = notificationOverall.ocs!!.notification
-                    if (ncNotification != null) {
-                        enrichPushMessageByNcNotificationData(ncNotification)
+    private fun onNcNotificationFailed(intent: Intent, e: Throwable) {
+        val failure = PushNotificationDecision.onStage2Failure(
+            stopped = isStopped,
+            alreadyNotified = notified,
+            httpCode = (e as? HttpException)?.code()
+        )
+        when (failure) {
+            PushNotificationDecision.Stage2Failure.RERUN -> {
+                // the system took the network away: it starts stage 2 again when the network is back
+                Log.w(TAG, "Stage 2 stopped by the system, the request will run again", e)
+                return
+            }
 
-                        val threadId = parseThreadId(ncNotification.objectId)
-                        threadId?.let { intent.putExtra(KEY_THREAD_ID, it) }
+            PushNotificationDecision.Stage2Failure.SUBJECT_FALLBACK -> showSubjectFallback(intent)
 
-                        showNotification(intent, ncNotification)
-                        catchUpPushedRoom(threadId)
-                    }
-                }
+            PushNotificationDecision.Stage2Failure.NO_SHOW ->
+                Log.d(TAG, "Stage 2: nothing shown after the failed request")
+        }
 
-                override fun onError(e: Throwable) {
-                    val failure = PushNotificationDecision.onStage2Failure(
-                        stopped = isStopped,
-                        httpCode = (e as? HttpException)?.code()
+        // without the server notification the thread id is unknown — still catch up
+        // the room itself so the pushed message is cached for the main chat
+        catchUpPushedRoom(threadId = null)
+
+        Log.e(TAG, "Failed to get NC notification. Using decrypted data from push notification itself", e)
+        if (BuildConfig.DEBUG) {
+            Handler(Looper.getMainLooper()).post {
+                Toast.makeText(context, "Failed to get NC notification", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+
+    /** First notification of a chat push, from the subject alone. A failure must not stop the request. */
+    @Suppress("TooGenericExceptionCaught")
+    private fun showFromSubject(intent: Intent) {
+        try {
+            setContentsFromPushNotificationSubject()
+            firstTitle = pushMessage.subject
+            showNotification(intent, null)
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "Failed to show the notification from the push subject", e)
+        }
+    }
+
+    /** The repeat of the first show after a failed request must not throw out of the error handler. */
+    @Suppress("TooGenericExceptionCaught")
+    private fun showSubjectFallback(intent: Intent) {
+        try {
+            setContentsFromPushNotificationSubject()
+            showNotification(intent, null)
+        } catch (e: RuntimeException) {
+            Log.e(TAG, "Failed to show the notification from the push subject after a failed request", e)
+        }
+    }
+
+    private fun setContentsFromPushNotificationSubject() {
+        if (pushMessage.subject.contains(LINEBREAK)) {
+            pushMessage.text = pushMessage.subject.substringAfter(LINEBREAK)
+            pushMessage.subject = pushMessage.subject.substringBefore(LINEBREAK)
+        }
+    }
+
+    /** The server data of a push and everything loaded for it, outside of the room lock. */
+    private class PreparedUpdate(
+        val shortcutName: String,
+        val ncNotification: com.nextcloud.talk.models.json.notifications.NotificationDto?,
+        val threadId: Long?,
+        val senderAvatar: Bitmap?,
+        val conversationAvatar: Bitmap?,
+        val imageUri: Uri?
+    )
+
+    private fun prepareUpdate(
+        intent: Intent,
+        ncNotification: com.nextcloud.talk.models.json.notifications.NotificationDto?
+    ): PreparedUpdate {
+        if (ncNotification == null) return PreparedUpdate("", null, null, null, null, null)
+        enrichPushMessageByNcNotificationData(ncNotification)
+
+        val threadId = parseThreadId(ncNotification.objectId)
+        threadId?.let { intent.putExtra(KEY_THREAD_ID, it) }
+
+        // getLargeIcon() clears the subject of a one-to-one conversation: keep the name for the shortcut
+        val shortcutName = pushMessage.subject
+
+        var senderAvatar: Bitmap? = null
+        var conversationAvatar: Bitmap? = null
+        var imageUri: Uri? = null
+        if ((TYPE_CHAT == pushMessage.type || TYPE_REMINDER == pushMessage.type) &&
+            pushMessage.notificationUser != null
+        ) {
+            senderAvatar = loadSenderAvatar(pushMessage.notificationUser)
+            conversationAvatar = if ("one2one" == conversationType) {
+                senderAvatar
+            } else {
+                pushMessage.id?.let { loadConversationAvatar(it) } ?: senderAvatar
+            }
+            imageUri = imagePreviewUrl?.let { loadImageBitmapSync(it) }?.let {
+                NotificationUtils.saveBitmapToCache(
+                    context!!,
+                    it,
+                    "notification_preview_${pushMessage.id}.png"
+                )
+            }
+        }
+        return PreparedUpdate(shortcutName, ncNotification, threadId, senderAvatar, conversationAvatar, imageUri)
+    }
+
+    /**
+     * The shortcut loads an avatar from the server: never inside the room lock, never before the first notify,
+     * and with a limit of its own.
+     */
+    private fun reportIncomingMessageShortcut(displayName: String = pushMessage.subject) {
+        if (pushMessage.type == TYPE_CHAT || pushMessage.type == TYPE_ROOM) {
+            val token = pushMessage.id
+            if (token != null && displayName.isNotEmpty()) {
+                BoundedLoad.within(BoundedLoad.PICTURE_TIMEOUT_MS) {
+                    DirectShareHelper.reportIncomingMessage(
+                        context!!,
+                        user,
+                        token,
+                        displayName,
+                        isOneToOne = "one2one" == conversationType
                     )
-                    if (failure == PushNotificationDecision.Stage2Failure.RERUN) {
-                        // the system took the network away: it starts stage 2 again when the network is back
-                        Log.w(TAG, "Stage 2 stopped by the system, the request will run again", e)
-                        return
-                    }
-
-                    fun setContentsFromPushNotificationSubject() {
-                        if (pushMessage.subject.contains(LINEBREAK)) {
-                            pushMessage.text = pushMessage.subject.substringAfter(LINEBREAK)
-                            pushMessage.subject = pushMessage.subject.substringBefore(LINEBREAK)
-                        }
-                    }
-
-                    if (failure == PushNotificationDecision.Stage2Failure.SUBJECT_FALLBACK) {
-                        setContentsFromPushNotificationSubject()
-                        showNotification(intent, null)
-                    }
-
-                    // without the server notification the thread id is unknown — still catch up
-                    // the room itself so the pushed message is cached for the main chat
-                    catchUpPushedRoom(threadId = null)
-
-                    Log.e(TAG, "Failed to get NC notification. Using decrypted data from push notification itself", e)
-                    if (BuildConfig.DEBUG) {
-                        Handler(Looper.getMainLooper()).post {
-                            Toast.makeText(context, "Failed to get NC notification", Toast.LENGTH_LONG).show()
-                        }
-                    }
                 }
-
-                override fun onComplete() {
-                    // unused atm
-                }
-            })
+            }
+        }
     }
 
     private fun enrichPushMessageByNcNotificationData(
@@ -723,7 +822,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     @Suppress("MagicNumber", "LongMethod")
     private fun showNotification(
         intent: Intent,
-        ncNotification: com.nextcloud.talk.models.json.notifications.NotificationDto?
+        ncNotification: com.nextcloud.talk.models.json.notifications.NotificationDto?,
+        update: PreparedUpdate? = null
     ) {
         var category = ""
         when (pushMessage.type) {
@@ -736,21 +836,10 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             else -> Log.e(TAG, "unknown pushMessage.type")
         }
 
-        if (pushMessage.type == TYPE_CHAT || pushMessage.type == TYPE_ROOM) {
-            val token = pushMessage.id
-            val displayName = pushMessage.subject
-            if (token != null && displayName.isNotEmpty()) {
-                runBlocking {
-                    DirectShareHelper.reportIncomingMessage(
-                        context!!,
-                        user,
-                        token,
-                        displayName,
-                        isOneToOne = "one2one" == conversationType
-                    )
-                }
-            }
-        }
+        // the first notification of a chat push has no network: no shortcut (avatar), no avatars, no preview
+        val fromSubjectOnly = TYPE_CHAT == pushMessage.type && ncNotification == null
+        // a fallback after a failed request of a room push keeps the old order: shortcut first
+        if (update == null && !fromSubjectOnly) reportIncomingMessageShortcut()
 
         val pendingIntent = createUniquePendingIntent(intent)
         val uri = user.baseUrl!!.toUri()
@@ -758,12 +847,12 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
         var contentTitle: CharSequence? = ""
         if (!TextUtils.isEmpty(pushMessage.subject)) {
-            contentTitle = EmojiCompat.get().process(pushMessage.subject)
+            contentTitle = SafeEmoji.process(pushMessage.subject)
         }
 
         var contentText: CharSequence? = ""
         if (!TextUtils.isEmpty(pushMessage.text)) {
-            contentText = EmojiCompat.get().process(pushMessage.text)
+            contentText = SafeEmoji.process(pushMessage.text)
         }
 
         val autoCancelOnClick = TYPE_RECORDING != pushMessage.type
@@ -782,6 +871,20 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             notificationBuilder.setLargeIcon(getLargeIcon())
         }
 
+        // Only the short part that reads the active notification, merges the history and notifies is locked:
+        // two pushes of one conversation must not overwrite the message of each other. No network in here.
+        synchronized(roomLocks.getOrPut("${user.id}@${pushMessage.id}") { Any() }) {
+            writeNotification(notificationBuilder, ncNotification, update, fromSubjectOnly)
+        }
+    }
+
+    @Suppress("LongMethod")
+    private fun writeNotification(
+        notificationBuilder: NotificationCompat.Builder,
+        ncNotification: com.nextcloud.talk.models.json.notifications.NotificationDto?,
+        update: PreparedUpdate?,
+        fromSubjectOnly: Boolean
+    ) {
         val activeStatusBarNotification = pushMessage.id?.let {
             findNotificationForRoom(
                 context,
@@ -789,40 +892,53 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 it
             )
         }
+        val activeMessages = activeStatusBarNotification?.let {
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it.notification)?.messages
+        }
+        val isChat = TYPE_CHAT == pushMessage.type
+        val alert = if (isChat) {
+            PushNotificationDecision.decide(
+                isEnrichment = subjectShown && ncNotification != null,
+                activeMessages = activeMessages,
+                pushNotificationId = pushMessage.notificationId
+            )
+        } else {
+            PushNotificationDecision.decideNonChat(
+                activeStatusBarNotification?.notification?.extras?.getLong(KEY_NOTIFICATION_ID),
+                pushMessage.notificationId
+            )
+        }
+        if (alert == PushNotificationDecision.Alert.SKIP) {
+            Log.d(TAG, "The message of this push is no longer in the notification, nothing written")
+            return
+        }
+        // the enriched version of a notification that is already on screen must stay silent
+        notificationBuilder.setOnlyAlertOnce(alert == PushNotificationDecision.Alert.SILENT)
+        if (alert == PushNotificationDecision.Alert.SILENT) {
+            // the id of the server notification of the newest message stays the one a delete push looks for
+            activeStatusBarNotification?.notification?.extras?.getLong(KEY_NOTIFICATION_ID)?.let {
+                notificationBuilder.extras.putLong(KEY_NOTIFICATION_ID, it)
+            }
+        }
 
         // NOTE - systemNotificationId is an internal ID used on the device only.
         // It is NOT the same as the notification ID used in communication with the server.
         val systemNotificationId: Int =
             activeStatusBarNotification?.id ?: calculateCRC32(System.currentTimeMillis().toString()).toInt()
 
-        if ((TYPE_CHAT == pushMessage.type || TYPE_REMINDER == pushMessage.type) &&
-            pushMessage.notificationUser != null
-        ) {
-            notificationBuilder.setOnlyAlertOnce(false)
-            val senderAvatar = loadSenderAvatar(pushMessage.notificationUser)
-            val conversationAvatar = if ("one2one" == conversationType) {
-                senderAvatar
-            } else {
-                pushMessage.id?.let { loadConversationAvatar(it) } ?: senderAvatar
-            }
-            val imageUri = imagePreviewUrl?.let { loadImageBitmapSync(it) }?.let {
-                NotificationUtils.saveBitmapToCache(
-                    context!!,
-                    it,
-                    "notification_preview_${pushMessage.id}.png"
-                )
-            }
-
+        if (fromSubjectOnly) {
+            styleSubjectConversation(notificationBuilder, activeStatusBarNotification)
+        } else if (isChat || (TYPE_REMINDER == pushMessage.type && pushMessage.notificationUser != null)) {
             styleConversationNotification(
                 notificationBuilder,
                 activeStatusBarNotification,
-                senderAvatar,
-                conversationAvatar,
-                imageUri
+                update?.senderAvatar,
+                update?.conversationAvatar,
+                update?.imageUri
             )
             addReplyAction(notificationBuilder, systemNotificationId)
             addMarkAsReadAction(notificationBuilder, systemNotificationId)
-            pushConversationShortcut(notificationBuilder, conversationAvatar)
+            pushConversationShortcut(notificationBuilder, update?.conversationAvatar)
         }
 
         if (TYPE_RECORDING == pushMessage.type && ncNotification != null) {
@@ -830,6 +946,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             addShareRecordingToChatAction(notificationBuilder, systemNotificationId, ncNotification)
         }
         sendNotification(systemNotificationId, notificationBuilder.build())
+        notified = true
+        if (fromSubjectOnly) subjectShown = true
     }
 
     private fun createNotificationBuilder(
@@ -930,9 +1048,10 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         conversationAvatar: Bitmap?,
         imageUri: Uri?
     ) {
-        val notificationUser = pushMessage.notificationUser ?: return
+        // a message of a user the server does not know (deleted user) has no notificationUser
+        val notificationUser = pushMessage.notificationUser
 
-        val userType = notificationUser.type
+        val userType = notificationUser?.type
         var style: NotificationCompat.MessagingStyle? = null
         if (activeStatusBarNotification != null) {
             style = NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(
@@ -940,8 +1059,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             )
         }
         val personBuilder = Person.Builder()
-            .setKey(user.id.toString() + "@" + notificationUser.id)
-            .setName(EmojiCompat.get().process(notificationUser.name!!))
+            .setKey(user.id.toString() + "@" + (notificationUser?.id ?: firstTitle))
+            .setName(SafeEmoji.process(notificationUser?.name ?: firstTitle))
             .setBot("bot" == userType)
 
         if (senderAvatar != null) {
@@ -960,15 +1079,13 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         val newStyle = NotificationCompat.MessagingStyle(deviceUser)
         newStyle.conversationTitle = pushMessage.subject.ifEmpty { sender.name }
         newStyle.isGroupConversation = "one2one" != conversationType
-        style?.messages?.forEach { message ->
-            newStyle.addMessage(
-                NotificationCompat.MessagingStyle.Message(
-                    message.text,
-                    message.timestamp,
-                    message.person
-                )
-            )
-        }
+        val message = NotificationCompat.MessagingStyle.Message(
+            pushMessage.text,
+            pushMessage.timestamp,
+            sender
+        )
+        PushMessageHistory.merge(style?.messages.orEmpty(), pushMessage.notificationId, message)
+            .forEach { newStyle.addMessage(it) }
 
         if (imageUri != null) {
             val imageMessage = NotificationCompat.MessagingStyle.Message(
@@ -980,12 +1097,37 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             newStyle.addMessage(imageMessage)
         }
 
+        notificationBuilder.setStyle(newStyle)
+    }
+
+    /**
+     * Style of the notification that is shown from the subject of the push alone. The message is marked with the
+     * id of the push, so that the enriched message replaces it instead of being added a second time.
+     */
+    private fun styleSubjectConversation(
+        notificationBuilder: NotificationCompat.Builder,
+        activeStatusBarNotification: StatusBarNotification?
+    ) {
+        val sender = Person.Builder()
+            .setKey(user.id.toString() + "@" + pushMessage.subject)
+            .setName(SafeEmoji.process(pushMessage.subject))
+            .build()
+        val deviceUser = Person.Builder()
+            .setKey(user.id.toString() + "@" + user.userId)
+            .setName(user.displayName ?: user.userId ?: "You")
+            .build()
+        val style = activeStatusBarNotification?.let {
+            NotificationCompat.MessagingStyle.extractMessagingStyleFromNotification(it.notification)
+        }
+        val newStyle = NotificationCompat.MessagingStyle(deviceUser)
+        newStyle.conversationTitle = pushMessage.subject
         val message = NotificationCompat.MessagingStyle.Message(
-            pushMessage.text,
+            pushMessage.text ?: pushMessage.subject,
             pushMessage.timestamp,
             sender
         )
-        newStyle.addMessage(message)
+        PushMessageHistory.merge(style?.messages.orEmpty(), pushMessage.notificationId, message)
+            .forEach { newStyle.addMessage(it) }
         notificationBuilder.setStyle(newStyle)
     }
 
@@ -999,7 +1141,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 false,
                 darkMode = DisplayUtils.isDarkModeOn(context!!)
             )
-            NotificationUtils.loadAvatarBitmapSync(avatarUrl, context!!)
+            NotificationUtils.loadAvatarBitmapSync(avatarUrl, context!!, timeoutMs = BoundedLoad.PICTURE_TIMEOUT_MS)
         } else {
             // Guests and bots have no avatar on the server, so theirs is drawn from their name here
             val avatar = CharacterAvatarUtils.avatarFor(
@@ -1013,12 +1155,11 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
     }
 
     private fun loadConversationAvatar(roomToken: String): Bitmap? =
-        NotificationUtils.loadConversationAvatarBitmapSync(
-            user.baseUrl,
-            roomToken,
-            credentials,
+        NotificationUtils.loadAvatarBitmapSync(
+            ApiUtils.getUrlForConversationAvatar(ApiUtils.API_V1, user.baseUrl, roomToken),
             context!!,
-            isOneToOne = false
+            credentials,
+            timeoutMs = BoundedLoad.PICTURE_TIMEOUT_MS
         )
 
     private fun loadImageBitmapSync(imageUrl: String): Bitmap? {
@@ -1032,7 +1173,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 onError = { Log.w(TAG, "Failed to load notification image: $imageUrl") }
             )
             .build()
-        context!!.imageLoader.executeBlocking(request)
+        // cancelled at the limit, the target keeps no bitmap: the notification is shown without the picture
+        BoundedLoad.within(BoundedLoad.PICTURE_TIMEOUT_MS) { context!!.imageLoader.execute(request) }
         return bitmap
     }
 
@@ -1044,7 +1186,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
         val personBuilder = Person.Builder()
             .setKey(user.id.toString() + "@" + notificationUser.id)
-            .setName(EmojiCompat.get().process(notificationUser.name!!))
+            .setName(SafeEmoji.process(notificationUser.name!!))
 
         if (avatarBitmap != null) {
             personBuilder.setIcon(IconCompat.createWithBitmap(avatarBitmap))
@@ -1438,12 +1580,18 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
          * Stage 2 of a push: the same worker, started when the system lets the app use the network. It gets the
          * encrypted input of stage 1 again (the decrypted text is never written to the work database).
          */
-        fun networkStageRequest(stage1Input: Data, userId: Long?, stage1Time: Long): OneTimeWorkRequest =
+        fun networkStageRequest(
+            stage1Input: Data,
+            subjectShown: Boolean,
+            userId: Long?,
+            stage1Time: Long
+        ): OneTimeWorkRequest =
             OneTimeWorkRequest.Builder(NotificationWorker::class.java)
                 .setInputData(
                     Data.Builder()
                         .putAll(stage1Input)
                         .putBoolean(BundleKeys.KEY_NOTIFICATION_NETWORK_STAGE, true)
+                        .putBoolean(BundleKeys.KEY_NOTIFICATION_SUBJECT_SHOWN, subjectShown)
                         .putLong(BundleKeys.KEY_NOTIFICATION_STAGE1_TIME, stage1Time)
                         .build()
                 )
@@ -1458,6 +1606,9 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
         /** All stages 2 of an account, for the delete-all push. */
         fun networkStageTag(userId: Long?): String = "push-stage2-$userId"
+
+        // one lock per conversation of an account: pushes of it run in parallel and write one notification
+        private val roomLocks = ConcurrentHashMap<String, Any>()
         private const val STAGE_LOCAL = 1
         private const val STAGE_NETWORK = 2
         private const val TYPE_CHAT = PushNotificationDecision.TYPE_CHAT

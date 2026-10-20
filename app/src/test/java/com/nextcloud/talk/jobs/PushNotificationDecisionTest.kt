@@ -6,19 +6,67 @@
  */
 package com.nextcloud.talk.jobs
 
+import android.app.Application
+import androidx.core.app.NotificationCompat.MessagingStyle.Message
+import androidx.core.app.Person
+import com.nextcloud.talk.jobs.PushNotificationDecision.Alert
 import com.nextcloud.talk.jobs.PushNotificationDecision.Stage1Route
 import com.nextcloud.talk.jobs.PushNotificationDecision.Stage2Failure
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 
 @Suppress("TooManyFunctions")
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class, sdk = [33])
 class PushNotificationDecisionTest {
 
+    private val sender = Person.Builder().setKey("1@sender").setName("Dilyara").build()
+
+    private fun messagesOf(vararg pushIds: Long): List<Message> =
+        pushIds.fold(emptyList()) { history, id ->
+            PushMessageHistory.merge(history, id, Message("m$id", id, sender))
+        }
+
     @Test
-    fun everyTypeThatNeedsTheServerWaitsForStageTwo() {
-        listOf("chat", "room", "recording", "reminder", "remote_talk_share", "call").forEach {
+    fun newMessageOfTheConversationAlerts() {
+        assertEquals(Alert.ALERT, PushNotificationDecision.decide(false, null, 619L))
+        assertEquals(Alert.ALERT, PushNotificationDecision.decide(false, messagesOf(618L), 619L))
+    }
+
+    @Test
+    fun enrichmentOfAMessageThatIsStillShownIsSilent() {
+        assertEquals(Alert.SILENT, PushNotificationDecision.decide(true, messagesOf(618L, 619L), 619L))
+    }
+
+    @Test
+    fun enrichmentAfterTheUserDismissedTheNotificationWritesNothing() {
+        assertEquals(Alert.SKIP, PushNotificationDecision.decide(true, null, 619L))
+    }
+
+    @Test
+    fun enrichmentOfAMessageThatIsNoLongerInTheNotificationWritesNothing() {
+        // a new notification of the conversation was created after the dismissal: it holds other messages
+        assertEquals(Alert.SKIP, PushNotificationDecision.decide(true, messagesOf(620L), 619L))
+    }
+
+    @Test
+    fun enrichmentWithoutPushIdWritesNothing() {
+        assertEquals(Alert.SKIP, PushNotificationDecision.decide(true, messagesOf(619L), null))
+    }
+
+    @Test
+    fun chatPushIsShownFromTheSubjectAndThenGoesToTheServer() {
+        assertEquals(Stage1Route.SUBJECT_THEN_SERVER, PushNotificationDecision.stage1Route("chat"))
+    }
+
+    @Test
+    fun otherTalkPushesAndCallsThatNeedTheServerWaitForStageTwo() {
+        listOf("room", "recording", "reminder", "remote_talk_share", "call").forEach {
             assertEquals(it, Stage1Route.SERVER, PushNotificationDecision.stage1Route(it))
         }
     }
@@ -40,8 +88,15 @@ class PushNotificationDecisionTest {
 
     @Test
     fun stoppedStageRunsAgainWhateverTheError() {
-        listOf(null, 404, 500).forEach { code ->
-            assertEquals(Stage2Failure.RERUN, PushNotificationDecision.onStage2Failure(stopped = true, httpCode = code))
+        listOf(false, true).forEach { notified ->
+            listOf(null, 404, 500).forEach { code ->
+                val failure = PushNotificationDecision.onStage2Failure(
+                    stopped = true,
+                    alreadyNotified = notified,
+                    httpCode = code
+                )
+                assertEquals(Stage2Failure.RERUN, failure)
+            }
         }
     }
 
@@ -49,18 +104,34 @@ class PushNotificationDecisionTest {
     fun notFoundMeansTheServerDroppedTheNotification() {
         assertEquals(
             Stage2Failure.NO_SHOW,
-            PushNotificationDecision.onStage2Failure(stopped = false, httpCode = 404)
+            PushNotificationDecision.onStage2Failure(stopped = false, alreadyNotified = false, httpCode = 404)
         )
     }
 
     @Test
-    fun failedRequestFallsBackToTheSubject() {
+    fun failedRequestKeepsTheChatShownInStageOne() {
+        assertEquals(
+            Stage2Failure.NO_SHOW,
+            PushNotificationDecision.onStage2Failure(stopped = false, alreadyNotified = true, httpCode = null)
+        )
+    }
+
+    @Test
+    fun failedRequestOfAPushThatShowedNothingFallsBackToTheSubject() {
         listOf(null, 403, 500).forEach { code ->
             assertEquals(
                 Stage2Failure.SUBJECT_FALLBACK,
-                PushNotificationDecision.onStage2Failure(stopped = false, httpCode = code)
+                PushNotificationDecision.onStage2Failure(stopped = false, alreadyNotified = false, httpCode = code)
             )
         }
+    }
+
+    @Test
+    fun serverNotificationThatIsAlreadyShownIsWrittenAgainWithoutSound() {
+        assertEquals(Alert.SILENT, PushNotificationDecision.decideNonChat(619L, 619L))
+        assertEquals(Alert.ALERT, PushNotificationDecision.decideNonChat(618L, 619L))
+        assertEquals(Alert.ALERT, PushNotificationDecision.decideNonChat(null, 619L))
+        assertEquals(Alert.ALERT, PushNotificationDecision.decideNonChat(null, null))
     }
 
     @Test

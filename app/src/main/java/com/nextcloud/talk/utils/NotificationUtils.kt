@@ -360,7 +360,8 @@ object NotificationUtils {
         avatarUrl: String,
         context: Context,
         credentials: String? = null,
-        useCache: Boolean = true
+        useCache: Boolean = true,
+        timeoutMs: Long? = null
     ): Bitmap? {
         var avatarBitmap: Bitmap? = null
 
@@ -393,7 +394,13 @@ object NotificationUtils {
                 .diskCachePolicy(CachePolicy.DISABLED)
         }
 
-        context.imageLoader.executeBlocking(requestBuilder.build())
+        val request = requestBuilder.build()
+        if (timeoutMs == null) {
+            context.imageLoader.executeBlocking(request)
+        } else {
+            // the request is cancelled at the limit, the target keeps no bitmap
+            BoundedLoad.within(timeoutMs) { context.imageLoader.execute(request) }
+        }
 
         return avatarBitmap
     }

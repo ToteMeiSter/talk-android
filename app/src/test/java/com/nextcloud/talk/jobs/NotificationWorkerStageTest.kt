@@ -30,7 +30,7 @@ class NotificationWorkerStageTest {
 
     @Test
     fun stageTwoWaitsForTheNetwork() {
-        val spec = NotificationWorker.networkStageRequest(stage1Input, USER_ID, STAGE1_TIME).workSpec
+        val spec = NotificationWorker.networkStageRequest(stage1Input, true, USER_ID, STAGE1_TIME).workSpec
 
         assertEquals(NetworkType.CONNECTED, spec.constraints.requiredNetworkType)
         assertEquals(NotificationWorker::class.java.name, spec.workerClassName)
@@ -38,36 +38,45 @@ class NotificationWorkerStageTest {
 
     @Test
     fun stageTwoIsExpeditedOnApi31AndLater() {
-        assertTrue(NotificationWorker.networkStageRequest(stage1Input, USER_ID, STAGE1_TIME).workSpec.expedited)
+        assertTrue(NotificationWorker.networkStageRequest(stage1Input, true, USER_ID, STAGE1_TIME).workSpec.expedited)
     }
 
     @Test
     @Config(sdk = [30])
     fun stageTwoIsNotExpeditedBeforeApi31() {
-        assertFalse(NotificationWorker.networkStageRequest(stage1Input, USER_ID, STAGE1_TIME).workSpec.expedited)
+        assertFalse(NotificationWorker.networkStageRequest(stage1Input, true, USER_ID, STAGE1_TIME).workSpec.expedited)
     }
 
     @Test
-    fun stageTwoGetsTheEncryptedInputAndTheTimeOfStageOneOnly() {
-        val input = NotificationWorker.networkStageRequest(stage1Input, USER_ID, STAGE1_TIME).workSpec.input
+    fun stageTwoGetsTheEncryptedInputAndTheStateOfStageOneOnly() {
+        val input = NotificationWorker.networkStageRequest(stage1Input, true, USER_ID, STAGE1_TIME).workSpec.input
 
         assertEquals(
             setOf(
                 BundleKeys.KEY_NOTIFICATION_SUBJECT,
                 BundleKeys.KEY_NOTIFICATION_SIGNATURE,
                 BundleKeys.KEY_NOTIFICATION_NETWORK_STAGE,
+                BundleKeys.KEY_NOTIFICATION_SUBJECT_SHOWN,
                 BundleKeys.KEY_NOTIFICATION_STAGE1_TIME
             ),
             input.keyValueMap.keys
         )
         assertEquals("encrypted-subject", input.getString(BundleKeys.KEY_NOTIFICATION_SUBJECT))
         assertTrue(input.getBoolean(BundleKeys.KEY_NOTIFICATION_NETWORK_STAGE, false))
+        assertTrue(input.getBoolean(BundleKeys.KEY_NOTIFICATION_SUBJECT_SHOWN, false))
         assertEquals(STAGE1_TIME, input.getLong(BundleKeys.KEY_NOTIFICATION_STAGE1_TIME, 0L))
     }
 
     @Test
+    fun stageTwoRemembersThatNothingWasShown() {
+        val input = NotificationWorker.networkStageRequest(stage1Input, false, USER_ID, STAGE1_TIME).workSpec.input
+
+        assertFalse(input.getBoolean(BundleKeys.KEY_NOTIFICATION_SUBJECT_SHOWN, true))
+    }
+
+    @Test
     fun stageTwoCarriesTheTagOfTheAccount() {
-        val spec = NotificationWorker.networkStageRequest(stage1Input, USER_ID, STAGE1_TIME)
+        val spec = NotificationWorker.networkStageRequest(stage1Input, true, USER_ID, STAGE1_TIME)
 
         assertEquals(setOf("push-stage2-7", NotificationWorker::class.java.name), spec.tags)
     }

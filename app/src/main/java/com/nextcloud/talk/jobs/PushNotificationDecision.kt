@@ -6,6 +6,8 @@
  */
 package com.nextcloud.talk.jobs
 
+import androidx.core.app.NotificationCompat.MessagingStyle.Message
+
 /** What the two stages of a Talk push do. Pure functions, so that the rules can be tested without WorkManager. */
 object PushNotificationDecision {
     const val TYPE_CHAT = "chat"
@@ -15,8 +17,45 @@ object PushNotificationDecision {
     const val TYPE_REMOTE_TALK_SHARE = "remote_talk_share"
     const val TYPE_REMINDER = "reminder"
 
+    enum class Alert {
+        /** A new message: sound and vibration. */
+        ALERT,
+
+        /** The server data of a message that is already shown: update, no sound. */
+        SILENT,
+
+        /** The message of this push is no longer in the notification: write nothing. */
+        SKIP
+    }
+
+    /**
+     * @param isEnrichment the push was already shown from its subject
+     * @param activeMessages messages of the notification of the conversation that is in the status bar now,
+     *  null if there is none (dismissed, cancelled)
+     */
+    fun decide(isEnrichment: Boolean, activeMessages: List<Message>?, pushNotificationId: Long?): Alert =
+        when {
+            !isEnrichment -> Alert.ALERT
+            activeMessages?.any { PushMessageHistory.isMessageOfPush(it, pushNotificationId) } == true -> Alert.SILENT
+            else -> Alert.SKIP
+        }
+
+    /**
+     * A push without chat history: the notification of the same server notification that is already in the status
+     * bar is written again without sound (stage 2 started again after the system stopped it).
+     */
+    fun decideNonChat(activeServerNotificationId: Long?, pushNotificationId: Long?): Alert =
+        if (pushNotificationId != null && activeServerNotificationId == pushNotificationId) {
+            Alert.SILENT
+        } else {
+            Alert.ALERT
+        }
+
     /** What stage 1 of a Talk push does, see [stage1Route]. */
     enum class Stage1Route {
+        /** Show the notification from the push subject, then hand the server data to stage 2. */
+        SUBJECT_THEN_SERVER,
+
         /** Nothing to show without the server: hand everything to stage 2. */
         SERVER,
 
@@ -24,10 +63,11 @@ object PushNotificationDecision {
         NONE
     }
 
-    /** Stage 1 needs no network: every type that needs the server is handed to stage 2. */
+    /** Stage 1 needs no network. Only a chat message has a text in the push subject that can be shown at once. */
     fun stage1Route(type: String?): Stage1Route =
         when (type) {
-            TYPE_CHAT, TYPE_ROOM, TYPE_RECORDING, TYPE_REMINDER, TYPE_REMOTE_TALK_SHARE, TYPE_CALL -> Stage1Route.SERVER
+            TYPE_CHAT -> Stage1Route.SUBJECT_THEN_SERVER
+            TYPE_ROOM, TYPE_RECORDING, TYPE_REMINDER, TYPE_REMOTE_TALK_SHARE, TYPE_CALL -> Stage1Route.SERVER
             else -> Stage1Route.NONE
         }
 
@@ -47,7 +87,7 @@ object PushNotificationDecision {
         /** The system stopped the stage: it runs again, nothing is written now. */
         RERUN,
 
-        /** The server dropped the notification: nothing is shown, the room is only caught up. */
+        /** Nothing is shown, the room is only caught up (the server dropped the notification, or it is shown). */
         NO_SHOW,
 
         /** Show the notification from the push subject. */
@@ -56,12 +96,13 @@ object PushNotificationDecision {
 
     /**
      * @param stopped the system stopped the stage
+     * @param alreadyNotified a notification was written for the push (a chat push in stage 1)
      * @param httpCode HTTP code of the answer, null for an error without one
      */
-    fun onStage2Failure(stopped: Boolean, httpCode: Int?): Stage2Failure =
+    fun onStage2Failure(stopped: Boolean, alreadyNotified: Boolean, httpCode: Int?): Stage2Failure =
         when {
             stopped -> Stage2Failure.RERUN
-            httpCode == HTTP_NOT_FOUND -> Stage2Failure.NO_SHOW
+            httpCode == HTTP_NOT_FOUND || alreadyNotified -> Stage2Failure.NO_SHOW
             else -> Stage2Failure.SUBJECT_FALLBACK
         }
 
