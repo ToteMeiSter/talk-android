@@ -3672,7 +3672,6 @@ class ChatActivity :
             val messages = loadSelectedMessages(chatViewModel.messageSelection.ids.value)
             val isOnline = networkMonitor.isOnline.value
             val plan = planForward(messages, { actionsStateFor(it, isOnline).showForward }, ::forwardedFromNote)
-            logForwardPlan(messages, isOnline, plan.texts.size)
             if (plan.outcome != ForwardOutcome.ALL) {
                 Toast.makeText(this@ChatActivity, R.string.nc_chat_forward_text_only, Toast.LENGTH_LONG).show()
             }
@@ -3682,15 +3681,6 @@ class ChatActivity :
             chatViewModel.messageSelection.clear()
             forwardTexts(plan.texts)
         }
-    }
-
-    /** Names, for every selected message, why it is or is not forwarded; no texts, names or file names. */
-    private fun logForwardPlan(messages: List<ChatMessage>, isOnline: Boolean, texts: Int) {
-        val rows = messages.joinToString { m ->
-            "${m.jsonMessageId}:${m.getCalculateMessageType()}" +
-                ",text=${actionsStateFor(m, isOnline).showForward},blank=${m.message.isNullOrBlank()}"
-        }
-        Log.d(TAG, "forward selection: ${messages.size} loaded, $texts texts; $rows")
     }
 
     private fun copySelectedMessages() {
