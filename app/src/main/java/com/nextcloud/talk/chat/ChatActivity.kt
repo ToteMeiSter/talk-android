@@ -4039,7 +4039,17 @@ class ChatActivity :
             return
         }
         val caption = message.message?.takeIf { it != "{file}" }.orEmpty()
-        val key = PendingFileForward.put(PendingFileForward.Entry(conversationUserId, remoteSharePath(path), caption))
+        val params = message.fileParameters
+        val entry = PendingFileForward.Entry(
+            userId = conversationUserId,
+            remotePath = remoteSharePath(path),
+            caption = caption,
+            fileId = params.id,
+            fileName = params.name,
+            fileSize = params.size ?: -1L,
+            permissions = params.permissions
+        )
+        val key = PendingFileForward.put(entry)
         val intent = Intent(this, ConversationsListActivity::class.java)
         intent.putExtra(BundleKeys.KEY_FORWARD_MSG_FLAG, true)
         intent.putExtra(BundleKeys.KEY_FORWARD_FILE_KEY, key)

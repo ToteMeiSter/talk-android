@@ -97,7 +97,7 @@ class MediaViewerChatRequestTest {
 
     @Test
     fun pendingForward_worksOnceAndNeedsTheKey() {
-        val entry = PendingFileForward.Entry(1L, "/Talk/a.jpg", "caption")
+        val entry = PendingFileForward.Entry(1L, "/Talk/a.jpg", "caption", "7", "a.jpg", 10L)
         val key = PendingFileForward.put(entry)
         assertEquals(entry, PendingFileForward.take(key))
         assertNull(PendingFileForward.take(key))
@@ -107,7 +107,7 @@ class MediaViewerChatRequestTest {
 
     @Test
     fun pendingForward_peekDoesNotConsumeTheEntry() {
-        val entry = PendingFileForward.Entry(1L, "/Talk/a.jpg", "")
+        val entry = PendingFileForward.Entry(1L, "/Talk/a.jpg", "", "7", "a.jpg", 10L)
         val key = PendingFileForward.put(entry)
         assertEquals(entry, PendingFileForward.peek(key))
         assertEquals(entry, PendingFileForward.peek(key))

@@ -16,7 +16,21 @@ import java.util.concurrent.ConcurrentHashMap
  */
 object PendingFileForward {
 
-    data class Entry(val userId: Long, val remotePath: String, val caption: String)
+    /**
+     * [fileId], [fileName] and [fileSize] describe the file for the copy that is made when the user may not share it
+     * again (a file of another user). [fileId] and [fileName] are blank when the message does not tell them; then
+     * no copy is possible. [permissions] are the permissions of the file in the message (mask 2 update, mask 16
+     * share), null when the message does not tell them; they decide between share and copy before the request.
+     */
+    data class Entry(
+        val userId: Long,
+        val remotePath: String,
+        val caption: String,
+        val fileId: String,
+        val fileName: String,
+        val fileSize: Long,
+        val permissions: Int? = null
+    )
 
     private val entries = ConcurrentHashMap<String, Entry>()
 
