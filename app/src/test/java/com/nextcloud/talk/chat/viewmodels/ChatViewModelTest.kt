@@ -10,6 +10,7 @@ package com.nextcloud.talk.chat.viewmodels
 import com.nextcloud.talk.chat.ui.model.ChatMessageUi
 import com.nextcloud.talk.chat.ui.model.MessageStatusIcon
 import com.nextcloud.talk.chat.ui.model.MessageTypeContent
+import com.nextcloud.talk.models.json.chat.ChatMessageDto
 import com.nextcloud.talk.utils.message.SendMessageUtils
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
@@ -61,6 +62,41 @@ class ChatViewModelTest {
 
         assertNull(ChatViewModel.findFirstUnreadMessageId(messages, lastReadMessage = 40))
     }
+
+    // holdsShare(): whether a share to the note to self that failed transiently already arrived.
+    // The server stores a reference id without ever looking at it again, so it deduplicates nothing
+    // and a second attempt that is not needed posts the message twice.
+
+    @Test
+    fun `a share the note to self already holds is not sent again`() {
+        val messages = listOf(messageWithReference("other-1"), messageWithReference("ours"))
+
+        assertEquals(true, ChatViewModel.holdsShare(messages, "ours"))
+    }
+
+    @Test
+    fun `a share that did not arrive is sent again`() {
+        val messages = listOf(messageWithReference("other-1"), messageWithReference("other-2"))
+
+        assertEquals(false, ChatViewModel.holdsShare(messages, "ours"))
+    }
+
+    @Test
+    fun `a lookup that could not be answered gives no verdict`() {
+        assertNull(ChatViewModel.holdsShare(null, "ours"))
+    }
+
+    @Test
+    fun `an empty note to self is proof the share did not arrive`() {
+        assertEquals(false, ChatViewModel.holdsShare(emptyList(), "ours"))
+    }
+
+    @Test
+    fun `messages without a reference id of their own are no proof either way`() {
+        assertEquals(false, ChatViewModel.holdsShare(listOf(messageWithReference(null)), "ours"))
+    }
+
+    private fun messageWithReference(referenceId: String?) = ChatMessageDto(referenceId = referenceId)
 
     // combineFileShareGroups(): combining batch-uploaded file shares into grouped "album" bubbles.
     // Mirrors web's combineFileMessages.ts tests - see https://github.com/nextcloud/spreed/pull/19040
@@ -223,6 +259,109 @@ class ChatViewModelTest {
 
         assertEquals(2, result.size)
         assertTrue(result.all { it is CombinedUnit.Single })
+    }
+
+    @Test
+    fun `deleted file shares of the same batch collapse into their last message`() {
+        val uploadId = "batch-10"
+        val messages = listOf(
+            mediaMessage(1, refUtils.generateGroupedReferenceId(uploadId, 1), isDeleted = true),
+            mediaMessage(2, refUtils.generateGroupedReferenceId(uploadId, 2), isDeleted = true),
+            mediaMessage(3, refUtils.generateGroupedReferenceId(uploadId, 3), isDeleted = true)
+        )
+
+        val result = combineFileShareGroups(messages)
+
+        assertEquals(1, result.size)
+        assertEquals(listOf(1, 2, 3), (result[0] as CombinedUnit.Collapsed).messages.map { it.id })
+    }
+
+    @Test
+    fun `deleted file shares of different batches do not collapse`() {
+        val messages = listOf(
+            mediaMessage(1, refUtils.generateGroupedReferenceId("batch-11", 1), isDeleted = true),
+            mediaMessage(2, refUtils.generateGroupedReferenceId("batch-12", 1), isDeleted = true),
+            mediaMessage(3, referenceId = null, isDeleted = true),
+            mediaMessage(4, referenceId = null, isDeleted = true)
+        )
+
+        val result = combineFileShareGroups(messages)
+
+        assertEquals(listOf(1, 2, 3, 4), result.flatMap { unit -> unit.messages.map { it.id } })
+        assertTrue(result.all { it is CombinedUnit.Single })
+    }
+
+    @Test
+    fun `a deleted file share does not combine with a file share of the same batch`() {
+        val uploadId = "batch-13"
+        val messages = listOf(
+            mediaMessage(1, refUtils.generateGroupedReferenceId(uploadId, 1), isDeleted = true),
+            mediaMessage(2, refUtils.generateGroupedReferenceId(uploadId, 2)),
+            mediaMessage(3, refUtils.generateGroupedReferenceId(uploadId, 3))
+        )
+
+        val result = combineFileShareGroups(messages)
+
+        assertEquals(2, result.size)
+        assertEquals(1, (result[0] as CombinedUnit.Single).message.id)
+        assertEquals(listOf(2, 3), (result[1] as CombinedUnit.Group).messages.map { it.id })
+    }
+
+    @Test
+    fun `a collapsed deleted message still stands for the messages it hides`() {
+        val item = ChatViewModel.ChatItem.MessageItem(uiMessage(3), collapsedMessageIds = listOf(1, 2))
+
+        assertEquals(listOf(1, 2, 3), item.messageIds())
+        assertTrue(item.containsMessage(1))
+    }
+
+    @Test
+    fun `marking a collapsed deleted message as unread keeps the messages it hides read`() {
+        val items = listOf(
+            messageItem(4),
+            ChatViewModel.ChatItem.MessageItem(uiMessage(3), collapsedMessageIds = listOf(1, 2)),
+            messageItem(0)
+        )
+
+        assertEquals(2, ChatViewModel.readMarkerForMarkingUnread(items, messageId = 3))
+    }
+
+    // Deleting a message shown in a media group deletes the whole group, same as web.
+
+    @Test
+    fun `deleting a message of a media group deletes every message of the group`() {
+        val uploadId = "batch-14"
+        val group = ChatViewModel.ChatItem.MediaGroupItem(
+            listOf(
+                mediaMessage(1, refUtils.generateGroupedReferenceId(uploadId, 1)),
+                mediaMessage(2, refUtils.generateGroupedReferenceId(uploadId, 2)),
+                mediaMessage(3, refUtils.generateGroupedReferenceId(uploadId, 3))
+            )
+        )
+        val items = listOf(messageItem(4), group)
+
+        assertEquals(listOf(1, 2, 3), ChatViewModel.messageIdsToDelete(items, messageId = 3))
+        assertEquals(listOf(1, 2, 3), ChatViewModel.messageIdsToDelete(items, messageId = 1))
+    }
+
+    @Test
+    fun `deleting a media group skips files that are still uploading`() {
+        val uploadId = "batch-15"
+        val group = ChatViewModel.ChatItem.MediaGroupItem(
+            listOf(
+                mediaMessage(1, refUtils.generateGroupedReferenceId(uploadId, 1)),
+                mediaMessage(-2, refUtils.generateGroupedReferenceId(uploadId, 2), isTemporary = true)
+            )
+        )
+
+        assertEquals(listOf(1), ChatViewModel.messageIdsToDelete(listOf(group), messageId = 1))
+    }
+
+    @Test
+    fun `deleting a message outside of a media group deletes only that message`() {
+        val items = listOf(messageItem(4), messageItem(5))
+
+        assertEquals(listOf(5), ChatViewModel.messageIdsToDelete(items, messageId = 5))
     }
 
     // Marking a message as unread. The chat items run newest first, the way the chat renders them

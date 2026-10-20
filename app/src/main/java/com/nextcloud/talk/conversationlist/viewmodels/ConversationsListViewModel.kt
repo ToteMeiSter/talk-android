@@ -41,8 +41,9 @@ import com.nextcloud.talk.users.UserManager
 import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.CapabilitiesUtil.hasSpreedFeatureCapability
 import com.nextcloud.talk.utils.SpreedFeatures
+import com.nextcloud.talk.utils.Undo
 import com.nextcloud.talk.utils.UserIdUtils
-import com.nextcloud.talk.utils.withRetry
+import com.nextcloud.talk.utils.optimisticAction
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedFactory
 import dagger.assisted.AssistedInject
@@ -51,6 +52,7 @@ import io.reactivex.android.schedulers.AndroidSchedulers
 import io.reactivex.disposables.Disposable
 import io.reactivex.schedulers.Schedulers
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -59,6 +61,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.launchIn
@@ -153,15 +156,26 @@ class ConversationsListViewModel @AssistedInject constructor(
 
     init {
         repository.syncErrorFlow
-            .onEach { throwable -> _getRoomsViewState.value = GetRoomsErrorState(throwable) }
+            // e.g. the sync of the account shown before switching to this one
+            .filter { syncError -> syncError.accountId == currentUser.id }
+            .onEach { syncError -> _getRoomsViewState.value = GetRoomsErrorState(syncError.throwable) }
             .launchIn(viewModelScope)
     }
 
     private val _isLoadingRooms = MutableStateFlow(true)
 
     /**
-     * True while a [getRooms] call is in progress (from start until the fetch-Job completes,
-     * i.e. after both the local-DB and the network-sync emissions have been produced).
+     * Number of [getRooms] jobs that have not completed yet. Guarded by [roomSyncsLock], together
+     * with the matching update of [_isLoadingRooms]: [getRooms] is also called off the main thread,
+     * from a background event subscriber.
+     */
+    private var roomSyncsInFlight = 0
+    private val roomSyncsLock = Any()
+
+    /**
+     * True while any [getRooms] call is in progress (from start until the last overlapping
+     * fetch-Job completes, i.e. after both the local-DB and the network-sync emissions have been
+     * produced).
      */
     val isLoadingRooms: StateFlow<Boolean> = _isLoadingRooms.asStateFlow()
 
@@ -242,10 +256,10 @@ class ConversationsListViewModel @AssistedInject constructor(
 
     private val hideRoomToken = MutableStateFlow<String?>(null)
 
-    /** Tokens of rooms being left; hidden optimistically while the leave-undo snackbar is showing. */
-    private val pendingLeaveTokens = MutableStateFlow<Set<String>>(emptySet())
+    /** Tokens of rooms being left or deleted; hidden optimistically until the request finished. */
+    private val pendingRemovalTokens = MutableStateFlow<Set<String>>(emptySet())
 
-    private val excludedRoomTokens = combine(hideRoomToken, pendingLeaveTokens) { hideToken, pendingTokens ->
+    private val excludedRoomTokens = combine(hideRoomToken, pendingRemovalTokens) { hideToken, pendingTokens ->
         if (hideToken != null) pendingTokens + hideToken else pendingTokens
     }
 
@@ -387,14 +401,14 @@ class ConversationsListViewModel @AssistedInject constructor(
         hideRoomToken.value = token
     }
 
-    /** Optimistically hide a room while its leave-undo snackbar is showing. */
-    fun markConversationPendingLeave(token: String) {
-        pendingLeaveTokens.value = pendingLeaveTokens.value + token
+    /** Optimistically hide a room that is being left or deleted. */
+    fun markConversationPendingRemoval(token: String) {
+        pendingRemovalTokens.value = pendingRemovalTokens.value + token
     }
 
-    /** Un-hide a room, either because the leave was undone or because it finished/failed. */
-    fun clearConversationPendingLeave(token: String) {
-        pendingLeaveTokens.value = pendingLeaveTokens.value - token
+    /** Un-hide a room, either because the removal was undone or because it finished or failed. */
+    fun clearConversationPendingRemoval(token: String) {
+        pendingRemovalTokens.value = pendingRemovalTokens.value - token
     }
 
     fun getFederationInvitations() {
@@ -562,28 +576,78 @@ class ConversationsListViewModel @AssistedInject constructor(
         }
     }
 
+    /**
+     * Refreshes the conversation list, unless a room list sync is already running, a search is
+     * open, or the sync would fetch the whole list without the refresh cadence calling for it.
+     *
+     * The in-flight check covers the room list request only: [getRooms] completes once the list is
+     * stored and leaves the message catch-up running, so a tick can start while messages of the
+     * previous one are still being fetched. That is deliberate - the list is what this refreshes.
+     *
+     * Whether a sync is due is read from stored state, and a read that fails must not take the
+     * refresh loop with it: this runs every tick for as long as the screen is open, and an
+     * exception would escape the loop's scope rather than skip one refresh. That read suspends, so
+     * it is done before the other checks: a sync or a search started while it runs is still seen.
+     */
+    suspend fun refreshRoomsIfIdle(user: User) {
+        val syncDue = isPeriodicSyncDue(user)
+        when {
+            _isLoadingRooms.value ->
+                Log.d(TAG, "Foreground refresh skipped: a room list sync is already in flight")
+
+            _isSearchActiveFlow.value ->
+                Log.d(TAG, "Foreground refresh skipped: a search is active")
+
+            !syncDue ->
+                Log.d(TAG, "Foreground refresh skipped: no delta available and no full sync due")
+
+            else -> getRooms(user)
+        }
+    }
+
+    /** Whether the cadence calls for a sync, treating a failed read of the stored state as yes. */
+    private suspend fun isPeriodicSyncDue(user: User): Boolean =
+        runCatching { repository.isPeriodicSyncDue(user) }.getOrElse { throwable ->
+            if (throwable is CancellationException) throw throwable
+            Log.w(TAG, "Could not read when the last sync was, refreshing anyway", throwable)
+            true
+        }
+
     fun getRooms(user: User, forceFullSync: Boolean = false): Job {
         val startNanoTime = System.nanoTime()
         Log.d(TAG, "fetchData - getRooms - calling: $startNanoTime")
-        _isLoadingRooms.value = true
         val job = repository.getRooms(user, forceFullSync)
+        // overlapping syncs (resume, pull to refresh, a refresh tick) must not end the loading
+        // state while another one is still running, or pull to refresh stops spinning too early
+        synchronized(roomSyncsLock) {
+            roomSyncsInFlight++
+            _isLoadingRooms.value = true
+        }
         viewModelScope.launch {
-            job.join()
-            _isLoadingRooms.value = false
+            try {
+                job.join()
+            } finally {
+                synchronized(roomSyncsLock) {
+                    roomSyncsInFlight--
+                    if (roomSyncsInFlight == 0) {
+                        _isLoadingRooms.value = false
+                    }
+                }
+            }
         }
         return job
     }
 
     /**
-     * Removes the room [token] that [user] has just left from the list. The room stays hidden
-     * until the full sync that deletes its row has finished; un-hiding it before would show the
-     * still stored row again for as long as the sync takes.
+     * Keeps a conversation the user left or deleted out of the list until the sync that drops it for
+     * good has landed, so it cannot flash back in between the request succeeding and the list
+     * catching up.
      */
-    fun onConversationLeft(user: User, token: String) {
+    fun onConversationRemoved(user: User, token: String) {
         val job = getRooms(user, forceFullSync = true)
         viewModelScope.launch {
             job.join()
-            clearConversationPendingLeave(token)
+            clearConversationPendingRemoval(token)
         }
     }
 
@@ -805,23 +869,24 @@ class ConversationsListViewModel @AssistedInject constructor(
         )
         val url = ApiUtils.getUrlForChatReadMarker(apiVersion, currentUser.baseUrl, conversation.token)
         viewModelScope.launch {
-            messageId?.let { conversationListUpdater.markPendingReadMarker(conversation.internalId, it) }
-            withContext(Dispatchers.IO) {
-                repository.updateConversation(optimistic)
-            }
-            try {
-                withContext(Dispatchers.IO) {
-                    withRetry(1) { conversationsRepository.markConversationAsRead(credentials, url, messageId) }
+            val result = optimisticAction(
+                apply = {
+                    messageId?.let { conversationListUpdater.markPendingReadMarker(conversation.internalId, it) }
+                    applyLocally(optimistic)
+                    revertTo(original) {
+                        messageId?.let { conversationListUpdater.clearPendingReadMarker(conversation.internalId, it) }
+                    }
+                },
+                request = { conversationsRepository.markConversationAsRead(credentials, url, messageId) }
+            )
+
+            _readUnreadState.value = result.fold(
+                onSuccess = { ConversationReadUnreadUiState.Success },
+                onFailure = {
+                    logger.e(TAG, "Failed to mark conversation as read", it)
+                    ConversationReadUnreadUiState.Error
                 }
-                _readUnreadState.value = ConversationReadUnreadUiState.Success
-            } catch (e: Exception) {
-                logger.e(TAG, "Failed to mark conversation as read", e)
-                messageId?.let { conversationListUpdater.clearPendingReadMarker(conversation.internalId, it) }
-                withContext(Dispatchers.IO) {
-                    repository.updateConversation(original)
-                }
-                _readUnreadState.value = ConversationReadUnreadUiState.Error
-            }
+            )
         }
     }
 
@@ -835,25 +900,38 @@ class ConversationsListViewModel @AssistedInject constructor(
         )
         val url = ApiUtils.getUrlForChatReadMarker(apiVersion, currentUser.baseUrl, conversation.token)
         viewModelScope.launch {
-            conversationListUpdater.markPendingUnread(conversation.internalId)
-            withContext(Dispatchers.IO) {
-                repository.updateConversation(optimistic)
-            }
-            try {
-                withContext(Dispatchers.IO) {
-                    withRetry(1) { conversationsRepository.markConversationAsUnread(credentials, url) }
+            val result = optimisticAction(
+                apply = {
+                    conversationListUpdater.markPendingUnread(conversation.internalId)
+                    applyLocally(optimistic)
+                    revertTo(original) { conversationListUpdater.clearPendingUnread(conversation.internalId) }
+                },
+                request = { conversationsRepository.markConversationAsUnread(credentials, url) }
+            )
+
+            _readUnreadState.value = result.fold(
+                onSuccess = { ConversationReadUnreadUiState.Success },
+                onFailure = {
+                    logger.e(TAG, "Failed to mark conversation as unread", it)
+                    ConversationReadUnreadUiState.Error
                 }
-                _readUnreadState.value = ConversationReadUnreadUiState.Success
-            } catch (e: Exception) {
-                logger.e(TAG, "Failed to mark conversation as unread", e)
-                conversationListUpdater.clearPendingUnread(conversation.internalId)
-                withContext(Dispatchers.IO) {
-                    repository.updateConversation(original)
-                }
-                _readUnreadState.value = ConversationReadUnreadUiState.Error
-            }
+            )
         }
     }
+
+    private suspend fun applyLocally(conversation: ConversationModel) {
+        withContext(Dispatchers.IO) { repository.updateConversation(conversation) }
+    }
+
+    /**
+     * The action that puts [original] back and releases whatever guard the caller registered, for
+     * [optimisticAction] to run when the request finally fails or the screen is left mid-request.
+     */
+    private fun revertTo(original: ConversationModel, releaseGuard: () -> Unit): Undo =
+        {
+            releaseGuard()
+            applyLocally(original)
+        }
 
     fun resetFavoriteState() {
         _favoriteState.value = FavoriteUiState.None
@@ -871,29 +949,30 @@ class ConversationsListViewModel @AssistedInject constructor(
         val apiVersion = ApiUtils.getConversationApiVersion(currentUser, intArrayOf(ApiUtils.API_V4, ApiUtils.API_V1))
         val url = ApiUtils.getUrlForArchive(apiVersion, currentUser.baseUrl, conversation.token)
         viewModelScope.launch {
-            conversationListUpdater.markPendingArchived(conversation.internalId, desiredArchived)
-            withContext(Dispatchers.IO) {
-                repository.updateConversation(optimistic)
-            }
-            try {
-                withContext(Dispatchers.IO) {
-                    withRetry(1) {
-                        if (desiredArchived) {
-                            conversationsRepository.archiveConversation(credentials, url)
-                        } else {
-                            conversationsRepository.unarchiveConversation(credentials, url)
-                        }
+            val result = optimisticAction(
+                apply = {
+                    conversationListUpdater.markPendingArchived(conversation.internalId, desiredArchived)
+                    applyLocally(optimistic)
+                    revertTo(original) {
+                        conversationListUpdater.clearPendingArchived(conversation.internalId, desiredArchived)
+                    }
+                },
+                request = {
+                    if (desiredArchived) {
+                        conversationsRepository.archiveConversation(credentials, url)
+                    } else {
+                        conversationsRepository.unarchiveConversation(credentials, url)
                     }
                 }
-                _archiveState.value = ArchiveUiState.Success(desiredArchived, conversation.displayName)
-            } catch (e: Exception) {
-                logger.e(TAG, "Failed to toggle conversation archive state", e)
-                conversationListUpdater.clearPendingArchived(conversation.internalId, desiredArchived)
-                withContext(Dispatchers.IO) {
-                    repository.updateConversation(original)
+            )
+
+            _archiveState.value = result.fold(
+                onSuccess = { ArchiveUiState.Success(desiredArchived, conversation.displayName) },
+                onFailure = {
+                    logger.e(TAG, "Failed to toggle conversation archive state", it)
+                    ArchiveUiState.Error
                 }
-                _archiveState.value = ArchiveUiState.Error
-            }
+            )
         }
     }
 
@@ -904,23 +983,24 @@ class ConversationsListViewModel @AssistedInject constructor(
         val apiVersion = ApiUtils.getConversationApiVersion(currentUser, intArrayOf(ApiUtils.API_V4, ApiUtils.API_V1))
         val url = ApiUtils.getUrlForRoomFavorite(apiVersion, currentUser.baseUrl, conversation.token)
         viewModelScope.launch {
-            conversationListUpdater.markPendingFavorite(conversation.internalId, favorite = true)
-            withContext(Dispatchers.IO) {
-                repository.updateConversation(optimistic)
-            }
-            try {
-                withContext(Dispatchers.IO) {
-                    withRetry(1) { conversationsRepository.addConversationToFavorites(credentials, url) }
+            val result = optimisticAction(
+                apply = {
+                    conversationListUpdater.markPendingFavorite(conversation.internalId, favorite = true)
+                    applyLocally(optimistic)
+                    revertTo(original) {
+                        conversationListUpdater.clearPendingFavorite(conversation.internalId, favorite = true)
+                    }
+                },
+                request = { conversationsRepository.addConversationToFavorites(credentials, url) }
+            )
+
+            _favoriteState.value = result.fold(
+                onSuccess = { FavoriteUiState.Success },
+                onFailure = {
+                    logger.e(TAG, "Failed to add conversation to favorites", it)
+                    FavoriteUiState.Error
                 }
-                _favoriteState.value = FavoriteUiState.Success
-            } catch (e: Exception) {
-                logger.e(TAG, "Failed to add conversation to favorites", e)
-                conversationListUpdater.clearPendingFavorite(conversation.internalId, favorite = true)
-                withContext(Dispatchers.IO) {
-                    repository.updateConversation(original)
-                }
-                _favoriteState.value = FavoriteUiState.Error
-            }
+            )
         }
     }
 
@@ -931,23 +1011,24 @@ class ConversationsListViewModel @AssistedInject constructor(
         val apiVersion = ApiUtils.getConversationApiVersion(currentUser, intArrayOf(ApiUtils.API_V4, ApiUtils.API_V1))
         val url = ApiUtils.getUrlForRoomFavorite(apiVersion, currentUser.baseUrl, conversation.token)
         viewModelScope.launch {
-            conversationListUpdater.markPendingFavorite(conversation.internalId, favorite = false)
-            withContext(Dispatchers.IO) {
-                repository.updateConversation(optimistic)
-            }
-            try {
-                withContext(Dispatchers.IO) {
-                    withRetry(1) { conversationsRepository.removeConversationFromFavorites(credentials, url) }
+            val result = optimisticAction(
+                apply = {
+                    conversationListUpdater.markPendingFavorite(conversation.internalId, favorite = false)
+                    applyLocally(optimistic)
+                    revertTo(original) {
+                        conversationListUpdater.clearPendingFavorite(conversation.internalId, favorite = false)
+                    }
+                },
+                request = { conversationsRepository.removeConversationFromFavorites(credentials, url) }
+            )
+
+            _favoriteState.value = result.fold(
+                onSuccess = { FavoriteUiState.Success },
+                onFailure = {
+                    logger.e(TAG, "Failed to remove conversation from favorites", it)
+                    FavoriteUiState.Error
                 }
-                _favoriteState.value = FavoriteUiState.Success
-            } catch (e: Exception) {
-                logger.e(TAG, "Failed to remove conversation from favorites", e)
-                conversationListUpdater.clearPendingFavorite(conversation.internalId, favorite = false)
-                withContext(Dispatchers.IO) {
-                    repository.updateConversation(original)
-                }
-                _favoriteState.value = FavoriteUiState.Error
-            }
+            )
         }
     }
 

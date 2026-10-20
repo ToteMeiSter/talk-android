@@ -365,6 +365,7 @@
     <string name="nc_location_unknown">Posição desconhecida</string>
     <string name="nc_locked">Trancado</string>
     <string name="nc_locked_tap_to_unlock">Toque para destrancar</string>
+    <string name="nc_login_too_many_attempts">Houve muitas tentativas de login malsucedidas desta rede. Tente novamente mais tarde.</string>
     <string name="nc_logs_advanced_logging">Registro avançado</string>
     <string name="nc_logs_advanced_logging_disable">Desativar o registro avançado</string>
     <string name="nc_logs_advanced_logging_enable">Ativar o registro avançado</string>
@@ -397,6 +398,7 @@
     <string name="nc_message_added_to_notes">Mensagem adicionada às notas</string>
     <string name="nc_message_failed">Falha ao enviar a mensagem</string>
     <string name="nc_message_failed_to_send">Falha ao enviar mensagem:</string>
+    <string name="nc_message_not_added_to_notes">Não foi possível adicionar a mensagem às notas</string>
     <string name="nc_message_quote_cancel_reply">Cancelar resposta</string>
     <string name="nc_message_read">Mensagem lida</string>
     <string name="nc_message_scheduled">Mensagem agendada</string>

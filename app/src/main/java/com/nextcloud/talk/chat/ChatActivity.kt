@@ -24,7 +24,6 @@ import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.AssetFileDescriptor
 import android.database.Cursor
-import android.location.LocationManager
 import android.media.MediaMetadataRetriever
 import android.net.Uri
 import android.os.Build
@@ -33,7 +32,6 @@ import android.os.Handler
 import android.os.SystemClock
 import android.provider.ContactsContract
 import android.provider.MediaStore
-import android.provider.Settings
 import android.text.TextUtils
 import android.util.Log
 import android.view.View
@@ -256,9 +254,9 @@ import java.time.ZonedDateTime
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.concurrent.CancellationException
 import java.util.concurrent.ExecutionException
 import javax.inject.Inject
-import java.util.concurrent.CancellationException
 import kotlin.math.abs
 
 @Suppress("TooManyFunctions", "LargeClass", "LongMethod")
@@ -402,6 +400,9 @@ class ChatActivity :
 
     var myFirstMessage: CharSequence? = null
     private var isLeavingRoom: Boolean = false
+    private var isScreenResumed: Boolean = false
+    private var hasBeenPaused: Boolean = false
+    private var isInitialLoadDone: Boolean = false
 
     private var lastHandledHighlightNonce: Long? = null
     private var pendingHighlightedMessageId: Long? = null
@@ -533,15 +534,11 @@ class ChatActivity :
             is ChatViewModel.LeaveRoomSuccessState -> {
                 logConversationInfos("leaveRoom#onNext")
 
-                isLeavingRoom = false
-
-                if (getRoomInfoTimerHandler != null) {
+                // a return to the chat during the leave resets isLeavingRoom and starts the room timer again
+                if (isLeavingRoom) {
                     getRoomInfoTimerHandler?.removeCallbacksAndMessages(null)
                 }
-
-                if (!isAnotherRoomCurrent()) {
-                    ApplicationWideCurrentRoomHolder.getInstance().clear()
-                }
+                isLeavingRoom = false
             }
 
             else -> {}
@@ -773,9 +770,7 @@ class ChatActivity :
 
     private fun scrollToMessageById(messageId: Long, logMiss: Boolean = true): Boolean {
         val items = chatViewModel.uiState.value.items
-        val targetIndex = items.indexOfFirst { item ->
-            (item as? ChatViewModel.ChatItem.MessageItem)?.uiMessage?.id == messageId.toInt()
-        }
+        val targetIndex = items.indexOfFirst { it.containsMessage(messageId.toInt()) }
         val listState = chatListState
         val composeScope = chatListComposeScope
         val isReadyToScroll = targetIndex >= 0 && listState != null && composeScope != null
@@ -842,9 +837,7 @@ class ChatActivity :
 
             if (attempt < SEARCH_CENTER_STABILIZE_ATTEMPTS - 1) {
                 delay(SEARCH_CENTER_STABILIZE_DELAY_MS)
-                targetIndex = chatViewModel.uiState.value.items.indexOfFirst { item ->
-                    (item as? ChatViewModel.ChatItem.MessageItem)?.uiMessage?.id == messageId.toInt()
-                }
+                targetIndex = chatViewModel.uiState.value.items.indexOfFirst { it.containsMessage(messageId.toInt()) }
             }
         }
     }
@@ -1464,7 +1457,9 @@ class ChatActivity :
     }
 
     override fun onSaveInstanceState(outState: Bundle) {
-        chatViewModel.handleOrientationChange()
+        if (isChangingConfigurations) {
+            chatViewModel.handleOrientationChange()
+        }
         super.onSaveInstanceState(outState)
     }
 
@@ -1544,6 +1539,12 @@ class ChatActivity :
         }
 
         lifecycleScope.launch {
+            chatViewModel.actionFailures.collect { message ->
+                Snackbar.make(binding.root, message, Snackbar.LENGTH_LONG).show()
+            }
+        }
+
+        lifecycleScope.launch {
             chatViewModel.noMoreSearchResults.collect {
                 val inSearchMode = chatViewModel.chatMode.value == ChatViewModel.ChatMode.SEARCH_MODE
                 val now = System.currentTimeMillis()
@@ -1605,6 +1606,7 @@ class ChatActivity :
                 }
 
                 is ChatViewModel.GetCapabilitiesInitialLoadState -> {
+                    isInitialLoadDone = true
                     spreedCapabilities = state.spreedCapabilities
                     currentConversation = state.conversationModel
                     chatApiVersion = ApiUtils.getChatApiVersion(spreedCapabilities, intArrayOf(1))
@@ -1620,37 +1622,14 @@ class ChatActivity :
                         }
                     }
 
-                    joinRoomWithPassword()
-
-                    if (sharedFilePaths.isNotEmpty()) {
-                        onChooseFileResult(sharedFilePaths.map { it.toUri() })
-                        sharedFilePaths = emptyList()
+                    if (isScreenResumed) {
+                        ensureJoined()
                     }
 
-                    refreshScheduledMessages()
+                    sendSharedFiles()
 
                     updateToolbarState()
-                    if (state.conversationModel.type == ConversationEnums.ConversationType.ROOM_TYPE_ONE_TO_ONE_CALL &&
-                        state.conversationModel.status == "dnd"
-                    ) {
-                        conversationUser.let {
-                            val credentials = ApiUtils.getCredentials(it.username, it.token)
-                            chatViewModel.outOfOfficeStatusOfUser(
-                                credentials!!,
-                                it.baseUrl!!,
-                                state.conversationModel!!.name
-                            )
-                        }
-                    }
-
-                    conversationUser.let {
-                        val credentials = ApiUtils.getCredentials(it.username, it.token)
-                        chatViewModel.fetchUpcomingEvent(
-                            credentials!!,
-                            it.baseUrl!!,
-                            roomToken
-                        )
-                    }
+                    refreshConversationExtras(state.conversationModel)
 
                     if (state.conversationModel.objectType == ConversationEnums.ObjectType.EVENT &&
                         hasSpreedFeatureCapability(
@@ -2115,6 +2094,58 @@ class ChatActivity :
         binding.let { viewThemeUtils.material.themeFAB(it.voiceRecordingLock) }
 
         updateToolbarState()
+
+        isScreenResumed = true
+        currentConversation?.takeIf { isInitialLoadDone }?.let { conversation ->
+            ensureJoined()
+            if (hasBeenPaused) {
+                returnToChat(conversation)
+            }
+        }
+    }
+
+    /**
+     * Joining the room is the counterpart of leaving it in onPause: once per resume, as soon as the screen is shown
+     * and the capabilities are loaded. It does not depend on when the conversation is refreshed.
+     */
+    private fun ensureJoined() {
+        if (isInitialLoadDone && chatViewModel.claimRoomJoin()) {
+            joinRoomWithPassword()
+        }
+    }
+
+    private fun returnToChat(conversation: ConversationModel) {
+        sendSharedFiles()
+        if (focusInput && messageInputFragment.isAdded) {
+            messageInputFragment.binding.fragmentMessageInputView.requestFocus()
+        }
+        refreshConversationExtras(conversation)
+        updateRoomTimerHandler(MILLIS_250)
+    }
+
+    private fun sendSharedFiles() {
+        if (sharedFilePaths.isNotEmpty()) {
+            onChooseFileResult(sharedFilePaths.map { it.toUri() })
+            sharedFilePaths = emptyList()
+        }
+    }
+
+    private fun refreshConversationExtras(conversation: ConversationModel) {
+        refreshScheduledMessages()
+
+        if (conversation.type == ConversationEnums.ConversationType.ROOM_TYPE_ONE_TO_ONE_CALL &&
+            conversation.status == "dnd"
+        ) {
+            conversationUser.let {
+                val credentials = ApiUtils.getCredentials(it.username, it.token)
+                chatViewModel.outOfOfficeStatusOfUser(credentials!!, it.baseUrl!!, conversation.name)
+            }
+        }
+
+        conversationUser.let {
+            val credentials = ApiUtils.getCredentials(it.username, it.token)
+            chatViewModel.fetchUpcomingEvent(credentials!!, it.baseUrl!!, roomToken)
+        }
     }
 
     private fun setupChatToolbarView() {
@@ -2902,68 +2933,13 @@ class ChatActivity :
     fun showShareLocationScreen() {
         Log.d(TAG, "showShareLocationScreen")
 
-        val locationManager = getSystemService(LOCATION_SERVICE) as LocationManager
-        val isGpsEnabled = locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER)
-
-        if (!isGpsEnabled) {
-            showLocationServicesDisabledDialog()
-        } else if (!permissionUtil.isLocationPermissionGranted()) {
-            showLocationPermissionDeniedDialog()
-        }
-
-        if (permissionUtil.isLocationPermissionGranted() && isGpsEnabled) {
-            val intent = Intent(this, LocationPickerActivity::class.java)
-            intent.putExtra(KEY_INTERNAL_USER_ID, conversationUserId)
-            intent.putExtra(KEY_ROOM_TOKEN, roomToken)
-            intent.putExtra(BundleKeys.KEY_CHAT_API_VERSION, chatApiVersion)
-            startActivity(intent)
-        }
-    }
-
-    private fun showLocationServicesDisabledDialog() {
-        val title = resources.getString(R.string.location_services_disabled)
-        val explanation = resources.getString(R.string.location_services_disabled_msg)
-        val positive = resources.getString(R.string.nc_permissions_settings)
-        val cancel = resources.getString(R.string.nc_cancel)
-        val dialogBuilder = MaterialAlertDialogBuilder(this)
-            .setTitle(title)
-            .setMessage(explanation)
-            .setPositiveButton(positive) { _, _ ->
-                val intent = Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS)
-                startActivity(intent)
-            }
-            .setNegativeButton(cancel, null)
-
-        viewThemeUtils.dialog.colorMaterialAlertDialogBackground(this, dialogBuilder)
-        val dialog = dialogBuilder.show()
-        viewThemeUtils.platform.colorTextButtons(
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE),
-            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
-        )
-    }
-
-    private fun showLocationPermissionDeniedDialog() {
-        val title = resources.getString(R.string.location_permission_denied)
-        val explanation = resources.getString(R.string.location_permission_denied_msg)
-        val positive = resources.getString(R.string.nc_permissions_settings)
-        val cancel = resources.getString(R.string.nc_cancel)
-        val dialogBuilder = MaterialAlertDialogBuilder(this)
-            .setTitle(title)
-            .setMessage(explanation)
-            .setPositiveButton(positive) { _, _ ->
-                val intent = Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
-                    data = Uri.fromParts("package", packageName, null)
-                }
-                startActivity(intent)
-            }
-            .setNegativeButton(cancel, null)
-
-        viewThemeUtils.dialog.colorMaterialAlertDialogBackground(this, dialogBuilder)
-        val dialog = dialogBuilder.show()
-        viewThemeUtils.platform.colorTextButtons(
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE),
-            dialog.getButton(AlertDialog.BUTTON_NEGATIVE)
-        )
+        // location permission and location services are optional: without them, a place can still be picked on the
+        // map. The picker asks for the permission itself.
+        val intent = Intent(this, LocationPickerActivity::class.java)
+        intent.putExtra(KEY_INTERNAL_USER_ID, conversationUserId)
+        intent.putExtra(KEY_ROOM_TOKEN, roomToken)
+        intent.putExtra(BundleKeys.KEY_CHAT_API_VERSION, chatApiVersion)
+        startActivity(intent)
     }
 
     private fun showConversationInfoScreen() {
@@ -3008,6 +2984,9 @@ class ChatActivity :
         super.onPause()
 
         logConversationInfos("onPause")
+
+        isScreenResumed = false
+        hasBeenPaused = true
 
         eventBus.unregister(this)
 
@@ -3121,6 +3100,8 @@ class ChatActivity :
             webSocketInstance?.joinRoomWithRoomTokenAndSession("", sessionIdAfterRoomJoined)
         }
         sessionIdAfterRoomJoined = "0"
+        // the session is left now, so a chat opened before the leave is answered must not reuse it
+        ApplicationWideCurrentRoomHolder.getInstance().clear()
 
         // FIXME Fix API checking with guests?
         val apiVersion = ApiUtils.getConversationApiVersion(conversationUser, intArrayOf(ApiUtils.API_V4, 1))
@@ -3649,16 +3630,16 @@ class ChatActivity :
             // FIXME Fix API checking with guests?
             val apiVersion = ApiUtils.getChatApiVersion(spreedCapabilities, intArrayOf(1))
 
-            chatViewModel.deleteChatMessages(
-                credentials!!,
+            val urlsByMessageId = chatViewModel.messageIdsToDelete(message.jsonMessageId).associateWith { id ->
                 ApiUtils.getUrlForChatMessage(
                     apiVersion,
                     conversationUser.baseUrl!!,
                     roomToken,
-                    message.jsonMessageId.toString()
-                ),
-                message.jsonMessageId
-            )
+                    id.toString()
+                )
+            }
+
+            chatViewModel.deleteChatMessages(credentials!!, urlsByMessageId)
         }
     }
 
@@ -4003,6 +3984,7 @@ class ChatActivity :
                 chatViewModel.shareLocationToNotes(
                     credentials!!,
                     ApiUtils.getUrlToSendLocation(apiVersion, conversationUser!!.baseUrl!!, roomToken),
+                    ApiUtils.getUrlForChat(apiVersion, conversationUser!!.baseUrl!!, roomToken),
                     "geo-location",
                     objectId,
                     metaData
