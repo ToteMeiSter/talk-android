@@ -144,7 +144,7 @@ class RemoteFileBrowserActivity :
 
     private fun loadList(state: RemoteFileBrowserItemsViewModel.LoadedState, mimeTypeSelectionFilter: String?) {
         val remoteFileBrowserItems = state.items
-        Log.d(TAG, "Items received: $remoteFileBrowserItems")
+        Log.d(TAG, "Items received: ${remoteFileBrowserItems.size}")
 
         // TODO make showGrid based on preferences (when available)
         val showGrid = false

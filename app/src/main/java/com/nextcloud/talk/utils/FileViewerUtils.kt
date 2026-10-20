@@ -386,7 +386,7 @@ class FileViewerUtils(private val context: Context, private val user: User) {
                 } else {
                     Log.d(
                         TAG,
-                        "file " + fileName +
+                        "file " + LogDescriptions.describeFile(fileName) +
                             " was downloaded but it's not opened because view is not shown on screen or " +
                             "openWhenDownloaded is false"
                     )

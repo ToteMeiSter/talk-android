@@ -29,7 +29,6 @@ object FileUtils {
     private const val MD5_LENGTH: Int = 32
     private const val SHARED_ATTACHMENTS_DIRECTORY = "shared_attachments"
     private const val PARTIAL_SUFFIX = ".part"
-    private const val NONE = "none"
 
     /**
      * Returns the dedicated cache directory used for externally shared attachments.
@@ -92,18 +91,6 @@ object FileUtils {
     }
 
     /**
-     * Shape of a share uri for the log: scheme, authority without a user id and whether there was one. Neither
-     * path nor query, as they hold file names.
-     */
-    fun describeShareUriForLog(uri: Uri?): String {
-        if (uri == null) return NONE
-        val authority = uri.authority
-        val host = authority?.substringAfterLast('@') ?: NONE
-        val hasUserInfo = authority?.contains('@') == true
-        return "${uri.scheme ?: NONE}://$host userInfo=$hasUserInfo"
-    }
-
-    /**
      * Resolves an untrusted file name inside [baseDirectory] and rejects traversal attempts.
      */
     fun resolveFileInDirectory(baseDirectory: File, untrustedFileName: String?): File? {
@@ -140,7 +127,7 @@ object FileUtils {
         if (!cacheFile.path.startsWith(cacheRoot.path + File.separator)) {
             throw IOException("Temporary file must stay inside cache directory.")
         }
-        Log.v(TAG, "Full path for new cache file:" + cacheFile.absolutePath)
+        Log.v(TAG, "New cache file: " + LogDescriptions.describeFile(cacheFile.name))
         val tempDir = cacheFile.parentFile ?: throw FileNotFoundException("could not cacheFile.getParentFile()")
         if (!tempDir.exists()) {
             Log.v(
@@ -171,7 +158,7 @@ object FileUtils {
         if (!cacheFile.path.startsWith(cacheRoot.path + File.separator)) {
             throw IOException("Temporary file must stay inside cache directory.")
         }
-        Log.v(TAG, "Full path for new cache file:" + cacheFile.absolutePath)
+        Log.v(TAG, "New cache file: " + LogDescriptions.describeFile(cacheFile.name))
         if (cacheFile.exists()) {
             if (cacheFile.delete()) {
                 Log.v(TAG, "Deletion successful")
@@ -187,7 +174,7 @@ object FileUtils {
         val scheme = sourceFileUri.scheme
 
         val file = if (scheme == null) {
-            Log.d(TAG, "relative uri: " + sourceFileUri.path)
+            Log.d(TAG, "relative uri: " + LogDescriptions.describeUri(sourceFileUri))
             throw IllegalArgumentException("relative paths are not supported")
         } else if (ContentResolver.SCHEME_CONTENT == scheme) {
             copyFileToCache(context, sourceFileUri, fileName, targetDir)
@@ -279,7 +266,7 @@ object FileUtils {
                 // Most notably the system Photo Picker's ephemeral uris, whose read grant can be
                 // revoked at any point after it was first handed to us, well before we're done
                 // using it - this must never crash the caller, just leave the file uncopied.
-                Log.w(TAG, "no longer permitted to read $sourceFileUri", e)
+                Log.w(TAG, "no longer permitted to read ${LogDescriptions.describeUri(sourceFileUri)}", e)
             }
         }
         if (!copied) {
@@ -288,7 +275,11 @@ object FileUtils {
         // The size a provider reports is not reliable (transcoding, cloud providers), so it is only logged.
         val reported = querySize(context, sourceFileUri)
         if (reported != null && reported > 0 && reported != target.length()) {
-            Log.w(TAG, "copy of $sourceFileUri has ${target.length()} bytes, the provider reports $reported")
+            Log.w(
+                TAG,
+                "copy of ${LogDescriptions.describeUri(sourceFileUri)} has ${target.length()} bytes, " +
+                    "the provider reports $reported"
+            )
         }
         // A stream that broke off throws and never gets here, so an empty copy of an empty source is complete.
         // An empty copy of a source that reports content is a placeholder that was not loaded: not a usable file.
@@ -302,10 +293,10 @@ object FileUtils {
                 if (index >= 0 && cursor.moveToFirst() && !cursor.isNull(index)) cursor.getLong(index) else null
             }
         } catch (e: SecurityException) {
-            Log.w(TAG, "could not query the size of $uri", e)
+            Log.w(TAG, "could not query the size of ${LogDescriptions.describeUri(uri)}", e)
             null
         } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "could not query the size of $uri", e)
+            Log.w(TAG, "could not query the size of ${LogDescriptions.describeUri(uri)}", e)
             null
         }
 
@@ -343,7 +334,7 @@ object FileUtils {
                 }
             }
         } catch (e: Exception) {
-            Log.w(TAG, "failed to query display name for $uri", e)
+            Log.w(TAG, "failed to query display name for ${LogDescriptions.describeUri(uri)}", e)
             null
         }
 
@@ -358,7 +349,7 @@ object FileUtils {
         try {
             context.contentResolver.getType(uri)
         } catch (e: Exception) {
-            Log.w(TAG, "failed to resolve mime type for $uri", e)
+            Log.w(TAG, "failed to resolve mime type for ${LogDescriptions.describeUri(uri)}", e)
             null
         } ?: MimeTypeMap.getSingleton().getMimeTypeFromExtension(
             MimeTypeMap.getFileExtensionFromUrl(uri.toString()).lowercase()

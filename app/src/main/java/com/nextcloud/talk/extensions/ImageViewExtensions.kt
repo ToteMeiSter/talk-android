@@ -161,7 +161,7 @@ fun ImageView.loadFederatedUserAvatar(
         darkTheme,
         requestBigSize
     )
-    Log.d(TAG, "federated avatar URL: $imageRequestUri")
+    Log.d(TAG, "federated avatar URL built")
 
     return loadAvatarInternal(user, imageRequestUri, ignoreCache, null)
 }
@@ -202,7 +202,7 @@ private fun ImageView.loadAvatarInternal(
             error(errorPlaceholder ?: ContextCompat.getDrawable(context, R.drawable.account_circle_96dp))
             fallback(errorPlaceholder ?: ContextCompat.getDrawable(context, R.drawable.account_circle_96dp))
             listener(onError = { _, result ->
-                Log.w(TAG, "Can't load avatar with URL: $url", result.throwable)
+                Log.w(TAG, "Can't load avatar", result.throwable)
             })
             memoryCachePolicy(cachePolicy)
             diskCachePolicy(cachePolicy)

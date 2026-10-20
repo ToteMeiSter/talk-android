@@ -1336,7 +1336,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             .addHeader("Authorization", credentials)
             .target(
                 onSuccess = { result -> bitmap = (result as BitmapDrawable).bitmap },
-                onError = { Log.w(TAG, "Failed to load notification image: $imageUrl") }
+                onError = { Log.w(TAG, "Failed to load notification image") }
             )
             .build()
         // cancelled at the limit, the target keeps no bitmap: the notification is shown without the picture

@@ -56,6 +56,7 @@ import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.CapabilitiesUtil
 import com.nextcloud.talk.utils.FileUtils
 import com.nextcloud.talk.utils.ImageCompressor
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.RemoteFileUtils
@@ -565,7 +566,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             val mimeType = FileUtils.resolveMimeType(context, sourceFileUri)?.toMediaTypeOrNull()
             startChunkedUpload(newChunkedUploader(), mimeType, remotePath)
         } else {
-            Log.d(TAG, "starting normal upload (not chunked) of $fileName")
+            Log.d(TAG, "starting normal upload (not chunked) of ${LogDescriptions.describeFile(fileName)}")
             val observable = FileUploader(
                 okHttpClient,
                 context,

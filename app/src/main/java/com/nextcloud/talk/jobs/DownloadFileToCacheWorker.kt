@@ -19,6 +19,7 @@ import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.users.UserManager
 import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.FileUtils
+import com.nextcloud.talk.utils.LogDescriptions
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_INTERNAL_USER_ID
 import com.nextcloud.talk.utils.preferences.AppPreferences
 import kotlinx.coroutines.runBlocking
@@ -96,10 +97,10 @@ class DownloadFileToCacheWorker(val context: Context, workerParameters: WorkerPa
         }
         if (body == null || targetFile == null) {
             if (body == null) {
-                Log.e(TAG, "Response body when downloading $fileName is null!")
+                Log.e(TAG, "Response body when downloading ${LogDescriptions.describeFile(fileName)} is null!")
             }
             if (targetFile == null) {
-                Log.e(TAG, "Refused to download file with unsafe name: $fileName")
+                Log.e(TAG, "Refused to download file with unsafe name: ${LogDescriptions.describeFile(fileName)}")
             }
             return Result.failure()
         }

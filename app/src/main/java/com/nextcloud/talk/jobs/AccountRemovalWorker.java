@@ -220,7 +220,7 @@ public class AccountRemovalWorker extends Worker {
                     accountCookieInterceptor.removeCookiesOf(credentials);
                 }
                 if (username != null) {
-                    Log.d(TAG, "deleted user: " + username);
+                    Log.d(TAG, "deleted user");
                 }
             } catch (Throwable e) {
                 Log.e(TAG, "error while trying to delete user", e);

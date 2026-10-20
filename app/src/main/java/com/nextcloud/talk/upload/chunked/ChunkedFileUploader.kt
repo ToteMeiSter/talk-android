@@ -399,10 +399,10 @@ class ChunkedFileUploader(
             ) { _ -> }
         } catch (e: HttpException) {
             if (e.code != METHOD_NOT_ALLOWED_CODE) {
-                Log.w(TAG, "Unexpected error creating remote folder $folderPath: ${e.code}")
+                Log.w(TAG, "Unexpected error creating remote folder: ${e.code}")
             }
         } catch (e: IOException) {
-            Log.w(TAG, "Failed to create remote folder $folderPath", e)
+            Log.w(TAG, "Failed to create remote folder", e)
         }
     }
 

@@ -263,10 +263,10 @@ object DirectShareHelper {
                 defaultIcon(context)
             }
         } catch (e: java.io.IOException) {
-            Log.w(TAG, "Failed to load avatar for shortcut: $displayName", e)
+            Log.w(TAG, "Failed to load avatar for shortcut", e)
             defaultIcon(context)
         } catch (e: IllegalArgumentException) {
-            Log.w(TAG, "Invalid avatar request for shortcut: $displayName", e)
+            Log.w(TAG, "Invalid avatar request for shortcut", e)
             defaultIcon(context)
         }
 
