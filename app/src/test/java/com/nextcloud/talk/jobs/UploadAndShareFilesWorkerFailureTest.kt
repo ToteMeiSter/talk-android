@@ -39,12 +39,12 @@ import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_INTERNAL_USER_ID
 import io.reactivex.Observable
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
-import okhttp3.OkHttpClient
-import okhttp3.ResponseBody.Companion.toResponseBody
 import mockwebserver3.Dispatcher
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.RecordedRequest
+import okhttp3.OkHttpClient
+import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse

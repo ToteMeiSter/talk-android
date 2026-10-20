@@ -6,19 +6,23 @@
  */
 package com.nextcloud.talk.webrtc
 
+import android.app.Application
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
-import mockwebserver3.MockResponse
-import mockwebserver3.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -29,6 +33,8 @@ import java.util.concurrent.atomic.AtomicReference
  * apply to the connection attempt. An open socket without traffic is normal (the server pings every 54 s) and must
  * live on; a read timeout which hit it would close every connection 10 s after the last frame.
  */
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class, sdk = [33])
 class WebSocketInstanceIdleSocketTest {
 
     private val server = MockWebServer()
