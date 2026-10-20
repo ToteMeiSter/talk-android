@@ -69,6 +69,7 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.platform.ComposeView
 import androidx.compose.ui.platform.LocalDensity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -91,6 +92,8 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import androidx.recyclerview.widget.LinearLayoutManager
 import androidx.window.embedding.ActivityEmbeddingController
+import androidx.window.embedding.SplitController
+import androidx.window.embedding.SplitController.SplitSupportStatus
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequest
 import com.nextcloud.talk.dagger.modules.assistedViewModels
@@ -114,6 +117,8 @@ import com.nextcloud.talk.attachmentpreview.FileAttachmentPreviewFragment
 import com.nextcloud.talk.chat.data.io.VoiceMessageMediaService
 import com.nextcloud.talk.chat.data.model.ChatMessage
 import com.nextcloud.talk.chat.data.model.FileParameters
+import com.nextcloud.talk.chat.ui.ChatConversationListPane
+import com.nextcloud.talk.chat.ui.createConversationListPaneLayout
 import com.nextcloud.talk.chat.ui.ChatEmptyState
 import com.nextcloud.talk.chat.ui.ChatEmptyStateType
 import com.nextcloud.talk.chat.ui.ChatToolbar
@@ -132,6 +137,7 @@ import com.nextcloud.talk.chat.viewmodels.MessageInputViewModel
 import com.nextcloud.talk.conversationinfo.ConversationInfoActivity
 import com.nextcloud.talk.conversationinfo.viewmodel.ConversationInfoViewModel
 import com.nextcloud.talk.conversationlist.ConversationsListActivity
+import com.nextcloud.talk.conversationlist.viewmodels.ConversationsListViewModel
 import com.nextcloud.talk.data.database.model.SendStatus
 import com.nextcloud.talk.data.network.NetworkMonitor
 import com.nextcloud.talk.data.user.model.User
@@ -307,6 +313,13 @@ class ChatActivity :
             roomToken,
             conversationThreadId
         )
+    }
+
+    @Inject
+    lateinit var conversationsListViewModelFactory: ConversationsListViewModel.Factory
+
+    private val conversationsListViewModel: ConversationsListViewModel by assistedViewModels {
+        conversationsListViewModelFactory.build(initialUser)
     }
 
     lateinit var conversationInfoViewModel: ConversationInfoViewModel
@@ -611,7 +624,13 @@ class ChatActivity :
         initialUser = setUpBoundUserOrFinish() ?: return
 
         binding = ActivityChatBinding.inflate(layoutInflater)
-        setContentView(binding.root)
+        setContentView(
+            if (isConversationListPaneEnabled()) {
+                wrapWithConversationListPane(binding.root)
+            } else {
+                binding.root
+            }
+        )
         keepContentOutOfDisplayCutout()
 
         setupChatToolbarView()
@@ -2372,6 +2391,10 @@ class ChatActivity :
             bundle.putBoolean(KEY_CALL_VOICE_ONLY, isVoiceOnlyCall)
         }
 
+        reopenWithRoom(token, bundle)
+    }
+
+    private fun reopenWithRoom(token: String, bundle: Bundle) {
         leaveRoom {
             val chatIntent = createIntent(context, conversationUserId, token, bundle)
             chatIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP)
@@ -4198,6 +4221,28 @@ class ChatActivity :
     }
 
     private fun isChatThread(): Boolean = conversationThreadId != null && conversationThreadId!! > 0
+
+    private fun isConversationListPaneEnabled(): Boolean =
+        resources.getBoolean(R.bool.chat_two_pane_fallback) &&
+            SplitController.getInstance(this).splitSupportStatus != SplitSupportStatus.SPLIT_AVAILABLE &&
+            !isEmbeddedNextToConversationList()
+
+    private fun wrapWithConversationListPane(chatRoot: View): View {
+        val pane = ComposeView(this).apply {
+            setContent {
+                ChatConversationListPane(
+                    viewModel = conversationsListViewModel,
+                    viewThemeUtils = viewThemeUtils,
+                    onConversationClick = {
+                        if (it.token != roomToken) {
+                            reopenWithRoom(it.token, Bundle())
+                        }
+                    }
+                )
+            }
+        }
+        return createConversationListPaneLayout(this, pane, chatRoot)
+    }
 
     private fun isEmbeddedNextToConversationList(): Boolean =
         ActivityEmbeddingController.getInstance(this).isActivityEmbedded(this)
