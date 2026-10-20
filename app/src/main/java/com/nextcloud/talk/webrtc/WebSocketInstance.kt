@@ -87,6 +87,11 @@ internal constructor(
     private var currentNormalBackendSession: String? = null
     private var currentFederation: FederationSettingsDto? = null
     private var reconnecting = false
+
+    // Guards the state of the connection (internalWebSocket, isConnected, reconnecting, messagesQueue): it is read and
+    // changed by the callers of the app and by the threads of OkHttp. Never held while a message is dispatched to
+    // listeners or while waiting.
+    private val connectionLock = Any()
     private val usersHashMap: HashMap<String?, ParticipantDto>
     private var messagesQueue: MutableList<String> = ArrayList()
     private val signalingMessageReceiver = ExternalSignalingMessageReceiver()
@@ -112,17 +117,17 @@ internal constructor(
         restartWebSocket()
     }
 
-    private fun sendHello() {
+    private fun sendHello(webSocket: WebSocket) {
         try {
             if (TextUtils.isEmpty(resumeId)) {
-                internalWebSocket!!.send(
+                webSocket.send(
                     LoganSquare.serialize(
                         webSocketConnectionHelper
                             .getAssembledHelloModel(conversationUser, webSocketTicket)
                     )
                 )
             } else {
-                internalWebSocket!!.send(
+                webSocket.send(
                     LoganSquare.serialize(
                         webSocketConnectionHelper
                             .getAssembledHelloModelForResume(resumeId)
@@ -135,26 +140,40 @@ internal constructor(
     }
 
     override fun onOpen(webSocket: WebSocket, response: Response) {
-        val previousWebSocket = internalWebSocket
-        Log.d(
-            TAG,
-            "Open webSocket ${webSocket.hashCode()} (previous was ${previousWebSocket?.hashCode()})"
-        )
-        internalWebSocket = webSocket
-        sendHello()
+        synchronized(connectionLock) {
+            val currentWebSocket = internalWebSocket
+            Log.d(TAG, "Open webSocket ${webSocket.hashCode()} (current is ${currentWebSocket?.hashCode()})")
+            if (webSocket !== currentWebSocket) {
+                // A restart replaced this socket while its upgrade was under way. Taking it for the current one would
+                // leave the new socket without a hello, so the server closes it, and the hello would go to the old one.
+                Log.d(TAG, "Ignoring the open of the replaced webSocket ${webSocket.hashCode()}")
+                return
+            }
+            sendHello(webSocket)
+        }
     }
 
     private fun closeWebSocket(webSocket: WebSocket) {
-        Log.d(TAG, "closeWebSocket ${webSocket.hashCode()}")
-        webSocket.close(NORMAL_CLOSURE, null)
-        webSocket.cancel()
-        if (webSocket !== internalWebSocket) {
-            return
+        synchronized(connectionLock) {
+            Log.d(TAG, "closeWebSocket ${webSocket.hashCode()}")
+            webSocket.close(NORMAL_CLOSURE, null)
+            webSocket.cancel()
+            if (webSocket !== internalWebSocket) {
+                return
+            }
+            isConnected = false
+            messagesQueue = ArrayList()
         }
-        isConnected = false
-        messagesQueue = ArrayList()
         sleep(ONE_SECOND)
-        restartWebSocket()
+        synchronized(connectionLock) {
+            // A message sent during the pause opens a new socket (see sendMessage). A restart now would cancel that
+            // socket, which has not said hello yet, and open yet another one a few milliseconds later.
+            if (webSocket !== internalWebSocket) {
+                Log.d(TAG, "closeWebSocket: ${webSocket.hashCode()} was replaced during the pause, no restart")
+                return
+            }
+            restartWebSocket()
+        }
     }
 
     fun clearResumeId() {
@@ -162,9 +181,18 @@ internal constructor(
     }
 
     fun restartWebSocket() {
-        val previousWebSocket = openNewWebSocket()
-        previousWebSocket?.close(NORMAL_CLOSURE, null)
-        previousWebSocket?.cancel()
+        synchronized(connectionLock) {
+            val wasConnected = isConnected
+            val previousWebSocket = openNewWebSocket()
+            previousWebSocket?.close(NORMAL_CLOSURE, null)
+            // A connection which said hello is healthy as far as the client knows: let the close frame leave the
+            // device. cancel() drops the send queue, so the server would see the connection vanish without any
+            // closing. OkHttp cancels a close which the server does not answer by itself after 60 seconds.
+            // A connection which did not get as far as a hello is probably dead already.
+            if (!wasConnected) {
+                previousWebSocket?.cancel()
+            }
+        }
     }
 
     /**
@@ -178,19 +206,21 @@ internal constructor(
      * the old one are never taken for the current one.
      */
     fun restartWebSocketWithNewSession() {
-        Log.d(TAG, "restartWebSocketWithNewSession: $connectionUrl")
-        val wasConnected = isConnected
-        resumeId = ""
-        // The "bye" removes the room session at the server. A join of the same room and session would be taken
-        // for done ("unchanged, joining locally") and the call API would be used with the removed session.
-        currentRoomToken = ""
-        currentNormalBackendSession = ""
-        currentFederation = null
-        val previousWebSocket = openNewWebSocket()
-        val byeSent = wasConnected && previousWebSocket != null && sendBye(previousWebSocket)
-        previousWebSocket?.close(NORMAL_CLOSURE, null)
-        if (!byeSent) {
-            previousWebSocket?.cancel()
+        synchronized(connectionLock) {
+            Log.d(TAG, "restartWebSocketWithNewSession: $connectionUrl")
+            val wasConnected = isConnected
+            resumeId = ""
+            // The "bye" removes the room session at the server. A join of the same room and session would be taken
+            // for done ("unchanged, joining locally") and the call API would be used with the removed session.
+            currentRoomToken = ""
+            currentNormalBackendSession = ""
+            currentFederation = null
+            val previousWebSocket = openNewWebSocket()
+            val byeSent = wasConnected && previousWebSocket != null && sendBye(previousWebSocket)
+            previousWebSocket?.close(NORMAL_CLOSURE, null)
+            if (!byeSent) {
+                previousWebSocket?.cancel()
+            }
         }
     }
 
@@ -388,8 +418,14 @@ internal constructor(
 
     @Throws(IOException::class)
     private fun processHelloMessage(webSocket: WebSocket, text: String) {
-        isConnected = true
-        reconnecting = false
+        synchronized(connectionLock) {
+            if (webSocket !== internalWebSocket) {
+                Log.d(TAG, "Ignoring the hello of the replaced webSocket ${webSocket.hashCode()}")
+                return
+            }
+            isConnected = true
+            reconnecting = false
+        }
         val oldResumeId = resumeId
         val (_, helloResponseWebSocketMessage1) = LoganSquare.parse(
             text,
@@ -409,10 +445,12 @@ internal constructor(
                 Log.d(TAG, "chat-relay is NOT supported")
             }
         }
-        for (i in messagesQueue.indices) {
-            webSocket.send(messagesQueue[i])
+        synchronized(connectionLock) {
+            for (i in messagesQueue.indices) {
+                webSocket.send(messagesQueue[i])
+            }
+            messagesQueue = ArrayList()
         }
-        messagesQueue = ArrayList()
         val helloHashMap = HashMap<String, String?>()
         if (!TextUtils.isEmpty(oldResumeId)) {
             helloHashMap["oldResumeId"] = oldResumeId
@@ -513,16 +551,20 @@ internal constructor(
     }
 
     private fun sendMessage(message: String) {
-        if (!isConnected || reconnecting) {
-            messagesQueue.add(message)
-
-            if (!reconnecting) {
-                restartWebSocket()
-            }
-        } else {
-            if (!internalWebSocket!!.send(message)) {
+        // The check and the restart are one step: two threads which both find the connection down must not both
+        // open a socket, as the second restart cancels the first socket before it has said hello.
+        synchronized(connectionLock) {
+            if (!isConnected || reconnecting) {
                 messagesQueue.add(message)
-                restartWebSocket()
+
+                if (!reconnecting) {
+                    restartWebSocket()
+                }
+            } else {
+                if (!internalWebSocket!!.send(message)) {
+                    messagesQueue.add(message)
+                    restartWebSocket()
+                }
             }
         }
     }
