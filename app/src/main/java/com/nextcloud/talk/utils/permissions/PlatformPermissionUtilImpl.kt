@@ -89,7 +89,11 @@ class PlatformPermissionUtilImpl(private val context: Context) : PlatformPermiss
         PermissionChecker.checkSelfPermission(
             context,
             Manifest.permission.ACCESS_FINE_LOCATION
-        ) == PermissionChecker.PERMISSION_GRANTED
+        ) == PermissionChecker.PERMISSION_GRANTED ||
+            PermissionChecker.checkSelfPermission(
+                context,
+                Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == PermissionChecker.PERMISSION_GRANTED
 
     companion object {
         private val MEDIA_PERMISSIONS = listOf(

@@ -33,8 +33,8 @@ import org.mockito.kotlin.doSuspendableAnswer
 import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
-import org.mockito.kotlin.verify
 import org.mockito.kotlin.times
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyBlocking
 import org.mockito.kotlin.whenever
 import org.mockito.kotlin.wheneverBlocking
@@ -294,6 +294,20 @@ class BrowserLoginActivityViewModelTest {
         verify(network, times(1)).performLoginFlowV2(any())
         assertNull(PendingBrowserLoginStore.active())
         assertEquals(BrowserLoginActivityViewModel.PostLoginViewState.PostLoginError, viewModel.postLoginState.value)
+    }
+
+    @Test
+    fun `a login refused because of too many failed logins is reported as such`() {
+        wheneverBlocking { repository.startOTPLoginFlow(any(), any(), anyOrNull()) }
+            .thenReturn(LoginCompletion(LoginRepository.HTTP_TOO_MANY_REQUESTS, BASE_URL, "user", ""))
+
+        viewModel.loginWithOTPQR("qr")
+
+        assertEquals(
+            BrowserLoginActivityViewModel.PostLoginViewState.PostLoginTooManyLoginAttempts,
+            viewModel.postLoginState.value
+        )
+        verifyBlocking(repository, never()) { parseAndLogin(any()) }
     }
 
     companion object {

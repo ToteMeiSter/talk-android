@@ -1324,7 +1324,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             roomToken,
             credentials,
             context!!,
-            BoundedLoad.PICTURE_TIMEOUT_MS
+            isOneToOne = false,
+            timeoutMs = BoundedLoad.PICTURE_TIMEOUT_MS
         )
 
     private fun loadImageBitmapSync(imageUrl: String): Bitmap? {

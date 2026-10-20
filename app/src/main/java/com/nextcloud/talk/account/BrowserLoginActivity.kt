@@ -122,6 +122,11 @@ class BrowserLoginActivity : BaseActivity() {
                             Snackbar.make(binding.root, R.string.nc_account_removal_pending, Snackbar.LENGTH_LONG)
                                 .show()
                         }
+                        BrowserLoginActivityViewModel.PostLoginViewState.PostLoginTooManyLoginAttempts -> {
+                            logger.e(TAG, "Login refused because of too many failed logins")
+                            Snackbar.make(binding.root, R.string.nc_login_too_many_attempts, Snackbar.LENGTH_LONG)
+                                .show()
+                        }
                         BrowserLoginActivityViewModel.PostLoginViewState.PostLoginRestartApp -> {
                             restartApp()
                         }

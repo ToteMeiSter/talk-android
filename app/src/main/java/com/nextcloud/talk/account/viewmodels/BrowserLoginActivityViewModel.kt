@@ -13,6 +13,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.nextcloud.talk.account.data.LoginRepository
 import com.nextcloud.talk.account.data.PendingBrowserLoginStore
+import com.nextcloud.talk.account.data.model.LoginCompletion
 import com.nextcloud.talk.account.data.model.LoginResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -40,6 +41,7 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
         data object None : PostLoginViewState()
         data object PostLoginRestartApp : PostLoginViewState()
         data object PostLoginError : PostLoginViewState()
+        data object PostLoginTooManyLoginAttempts : PostLoginViewState()
         data class PostLoginContinue(val data: Bundle) : PostLoginViewState()
         data object PostLoginDifferentAccount : PostLoginViewState()
         data object PostLoginRemovalPending : PostLoginViewState()
@@ -125,12 +127,7 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
                 // Only reached when the poll ended. If this view model is cleared first, the login stays pending.
                 PendingBrowserLoginStore.clear()
 
-                if (loginCompletionResponse == null) {
-                    _postLoginState.value = PostLoginViewState.PostLoginError
-                    return@launch
-                }
-
-                _postLoginState.value = postLoginStateFor(repository.parseAndLogin(loginCompletionResponse))
+                _postLoginState.value = postLoginStateFor(loginCompletionResponse)
             }
         }
     }
@@ -138,28 +135,28 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
     fun loginWithQR(dataString: String, reAuth: Boolean = false, accountToReauthorize: Long? = null) {
         if (!startLoginOnce()) return
         viewModelScope.launch {
-            val loginCompletionResponse = repository.startLoginFlowFromQR(dataString, reAuth, accountToReauthorize)
-            if (loginCompletionResponse == null) {
-                _postLoginState.value = PostLoginViewState.PostLoginError
-                return@launch
-            }
-
-            _postLoginState.value = postLoginStateFor(repository.parseAndLogin(loginCompletionResponse))
+            _postLoginState.value =
+                postLoginStateFor(repository.startLoginFlowFromQR(dataString, reAuth, accountToReauthorize))
         }
     }
 
     fun loginWithOTPQR(dataString: String, reAuth: Boolean = false, accountToReauthorize: Long? = null) {
         if (!startLoginOnce()) return
         viewModelScope.launch {
-            val loginCompletionResponse = repository.startOTPLoginFlow(dataString, reAuth, accountToReauthorize)
-            if (loginCompletionResponse == null) {
-                _postLoginState.value = PostLoginViewState.PostLoginError
-                return@launch
-            }
-
-            _postLoginState.value = postLoginStateFor(repository.parseAndLogin(loginCompletionResponse))
+            _postLoginState.value =
+                postLoginStateFor(repository.startOTPLoginFlow(dataString, reAuth, accountToReauthorize))
         }
     }
+
+    private suspend fun postLoginStateFor(loginCompletion: LoginCompletion?): PostLoginViewState =
+        when {
+            loginCompletion == null -> PostLoginViewState.PostLoginError
+
+            loginCompletion.status == LoginRepository.HTTP_TOO_MANY_REQUESTS ->
+                PostLoginViewState.PostLoginTooManyLoginAttempts
+
+            else -> postLoginStateFor(repository.parseAndLogin(loginCompletion))
+        }
 
     private fun postLoginStateFor(result: LoginRepository.LoginResult): PostLoginViewState =
         when (result) {

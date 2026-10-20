@@ -178,9 +178,7 @@ fun ChatView(
     val handleQuotedMessageClick: (Int) -> Unit = remember(coroutineScope, listState) {
         { messageId ->
             coroutineScope.launch {
-                val targetIndex = latestChatItems.indexOfFirst { item ->
-                    (item as? ChatViewModel.ChatItem.MessageItem)?.uiMessage?.id == messageId
-                }
+                val targetIndex = latestChatItems.indexOfFirst { it.containsMessage(messageId) }
 
                 if (targetIndex >= 0) {
                     val isVisible = listState.layoutInfo.visibleItemsInfo.any { it.index == targetIndex }
@@ -424,9 +422,9 @@ fun ChatView(
                             ChatMessageView(
                                 message = chatItem.uiMessage,
                                 highlightTriggerKey = quoteHighlightEvent
-                                    ?.takeIf { it.messageId == chatItem.uiMessage.id }
+                                    ?.takeIf { chatItem.containsMessage(it.messageId) }
                                     ?.nonce,
-                                isSelected = state.highlightedMessageId == chatItem.uiMessage.id,
+                                isSelected = state.highlightedMessageId?.let { chatItem.containsMessage(it) } == true,
                                 isChecked = chatItem.isChecked(state.selectedMessageIds),
                                 highlightSearchTerm = state.highlightedSearchTerm,
                                 context = ChatMessageContext(

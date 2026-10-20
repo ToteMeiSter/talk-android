@@ -12,12 +12,16 @@ package com.nextcloud.talk.location.components
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Context
+import android.content.Intent
 import android.content.res.Configuration
 import android.location.LocationListener
 import android.location.LocationManager
+import android.net.Uri
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -55,14 +59,17 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarDuration
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -72,6 +79,7 @@ import androidx.compose.runtime.snapshotFlow
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalContext
@@ -83,32 +91,32 @@ import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.PermissionChecker
+import androidx.core.location.LocationManagerCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import co.touchlab.kermit.Logger
 import com.nextcloud.talk.R
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.location.viewmodels.LocationPickerViewModel
 import kotlinx.coroutines.flow.drop
+import kotlinx.coroutines.flow.filter
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.yield
+import org.maplibre.compose.camera.CameraMoveReason
 import org.maplibre.compose.camera.CameraPosition
-import org.maplibre.compose.camera.rememberCameraState
-import org.maplibre.compose.expressions.ast.ColorLiteral
-import org.maplibre.compose.expressions.ast.DpLiteral
+import org.maplibre.compose.camera.CameraUpdate
+import org.maplibre.compose.expressions.dsl.const
 import org.maplibre.compose.layers.CircleLayer
-import org.maplibre.compose.map.MapOptions
+import org.maplibre.compose.map.MapState
 import org.maplibre.compose.map.MaplibreMap
-import org.maplibre.compose.map.OrnamentOptions
+import org.maplibre.compose.map.StyleLoadState
+import org.maplibre.compose.map.rememberMapState
 import org.maplibre.compose.material3.AttributionButtonDefaults
-import org.maplibre.compose.material3.ExpandingAttributionButton
+import org.maplibre.compose.overlay.attributions
 import org.maplibre.compose.sources.GeoJsonData
 import org.maplibre.compose.sources.rememberGeoJsonSource
 import org.maplibre.compose.style.BaseStyle
-import org.maplibre.compose.style.StyleState
-import org.maplibre.compose.style.rememberStyleState
 import org.maplibre.spatialk.geojson.Position
 
 private const val ZOOM_LEVEL_RECEIVED_RESULT: Double = 14.0
@@ -116,6 +124,11 @@ private const val ZOOM_LEVEL_DEFAULT: Double = 14.0
 private const val ZOOM_LEVEL_MIN: Double = 1.0
 private const val ZOOM_LEVEL_MAX: Double = 22.0
 private const val COORDINATE_ZERO: Double = 0.0
+
+// shown until the current location is known, instead of 0,0 in the South Atlantic
+private const val FALLBACK_LAT: Double = 52.520008
+private const val FALLBACK_LON: Double = 13.404954
+private const val ZOOM_LEVEL_FALLBACK: Double = 11.0
 private const val MIN_LOCATION_UPDATE_TIME: Long = 30 * 1000L
 private const val MIN_LOCATION_UPDATE_DISTANCE: Float = 0f
 private const val PIN_HEIGHT_DP = 50
@@ -123,6 +136,10 @@ private const val ATTRIBUTION_BUTTON_ALPHA = 0.7f
 private const val USER_LOCATION_LAYER_ID = "location-picker-user-location"
 private const val COLOR_NC_BLUE_PACKED = 0xFF0082C9.toInt()
 private const val TAG = "LocationPickerScreen"
+
+// request both, so that the user can choose between precise and approximate location (API 31+)
+private val locationPermissions =
+    arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
 
 @Suppress("Detekt.LongMethod", "Detekt.LongParameterList")
 @Composable
@@ -149,19 +166,59 @@ fun LocationPickerScreen(
             Position(initialState.mapCenterLon, initialState.mapCenterLat)
 
         initialState.geocodingResult?.let { it.lat != COORDINATE_ZERO && it.lon != COORDINATE_ZERO } == true ->
-            Position(initialState.geocodingResult!!.lon, initialState.geocodingResult!!.lat)
+            Position(initialState.geocodingResult.lon, initialState.geocodingResult.lat)
 
         else -> null
     }
 
-    val cameraState = rememberCameraState(
-        firstPosition = CameraPosition(
-            target = initialTarget ?: Position(COORDINATE_ZERO, COORDINATE_ZERO),
-            zoom = initialZoom
-        )
-    )
+    val styleUri = if (isSystemInDarkTheme()) {
+        "asset://map_style_dark.json"
+    } else {
+        "asset://map_style_light.json"
+    }
 
-    val styleState = rememberStyleState()
+    val mapState = rememberMapState(
+        baseStyle = BaseStyle.Uri(styleUri),
+        initialCameraPosition = CameraPosition(
+            center = initialTarget ?: Position(FALLBACK_LON, FALLBACK_LAT),
+            zoom = if (initialTarget != null) initialZoom else ZOOM_LEVEL_FALLBACK
+        )
+    ) {
+        val userLocationGeoJson = remember(myLocation) {
+            userLocationGeoJsonData(myLocation)
+        }
+        val userLocationSource = rememberGeoJsonSource(userLocationGeoJson)
+        CircleLayer(
+            id = USER_LOCATION_LAYER_ID,
+            source = userLocationSource,
+            color = const(Color(COLOR_NC_BLUE_PACKED)),
+            radius = const(7.5.dp),
+            strokeColor = const(Color.White),
+            strokeWidth = const(2.dp)
+        )
+    }
+
+    LaunchedEffect(mapState) {
+        snapshotFlow { mapState.style.loadState }
+            .collect { loadState ->
+                when (loadState) {
+                    StyleLoadState.Ready -> {
+                        isMapInitialized = true
+                        Log.d("MapLibre/LocationPicker", "Style loaded successfully: $styleUri")
+                    }
+
+                    is StyleLoadState.Failed -> {
+                        isMapInitialized = true
+                        Log.e(
+                            "MapLibre/LocationPicker",
+                            "Style failed to load: ${loadState.reason} | styleUri=$styleUri"
+                        )
+                    }
+
+                    else -> {}
+                }
+            }
+    }
 
     if (initialTarget != null) {
         LaunchedEffect(Unit) {
@@ -170,16 +227,16 @@ fun LocationPickerScreen(
     }
 
     // Detect user-driven camera movement (drop(1) skips the initial value)
-    LaunchedEffect(cameraState) {
-        snapshotFlow { cameraState.position }
+    LaunchedEffect(mapState) {
+        snapshotFlow { mapState.cameraPosition }
             .drop(1)
             .collect { position ->
                 // Ignore all camera events until the map style has finished loading
                 if (!isMapInitialized) return@collect
                 if (!isProgrammaticCameraMove) {
-                    viewModel.onMapScrolled(position.target.latitude, position.target.longitude)
+                    viewModel.onMapScrolled(position.center.latitude, position.center.longitude)
                 }
-                viewModel.updateMapCenter(position.target.latitude, position.target.longitude)
+                viewModel.updateMapCenter(position.center.latitude, position.center.longitude)
             }
     }
 
@@ -200,7 +257,7 @@ fun LocationPickerScreen(
             !hasZoomedToInitialLocation &&
             myLocation.latitude != COORDINATE_ZERO
         ) {
-            cameraState.animateTo(CameraPosition(target = myLocation, zoom = ZOOM_LEVEL_DEFAULT))
+            mapState.animateCamera(CameraUpdate(center = myLocation, zoom = ZOOM_LEVEL_DEFAULT))
             viewModel.updateMapCenter(myLocation.latitude, myLocation.longitude)
             hasZoomedToInitialLocation = true
         }
@@ -209,7 +266,7 @@ fun LocationPickerScreen(
     @SuppressLint("LocalContextGetResourceValueCall")
     val permissionLauncher =
         rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { permissions ->
-            if (permissions.values.all { it }) {
+            if (permissions.values.any { it }) {
                 requestLocationUpdates(locationManager, locationListener) { msgRes ->
                     coroutineScope.launch { snackbarHostState.showSnackbar(context.getString(msgRes)) }
                 }
@@ -217,25 +274,38 @@ fun LocationPickerScreen(
                     myLocation = Position(location.longitude, location.latitude)
                 }
             } else {
+                // the map stays usable without location permission, e.g. to pick some other place
                 coroutineScope.launch {
-                    snackbarHostState.showSnackbar(context.getString(R.string.nc_location_permission_required))
+                    showSnackbarWithSettingsAction(
+                        snackbarHostState = snackbarHostState,
+                        message = context.getString(R.string.location_permission_denied),
+                        actionLabel = context.getString(R.string.nc_permissions_settings)
+                    ) {
+                        context.startActivity(
+                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS).apply {
+                                data = Uri.fromParts("package", context.packageName, null)
+                            }
+                        )
+                    }
                 }
             }
         }
-
-    val isDarkMode = isSystemInDarkTheme()
 
     LaunchedEffect(uiState.geocodingResult) {
         val result = uiState.geocodingResult ?: return@LaunchedEffect
         if (result.lat != COORDINATE_ZERO && result.lon != COORDINATE_ZERO) {
             isProgrammaticCameraMove = true
-            cameraState.animateTo(
-                CameraPosition(target = Position(result.lon, result.lat), zoom = ZOOM_LEVEL_RECEIVED_RESULT)
-            )
-            yield()
-            viewModel.updateMapCenter(result.lat, result.lon)
-            viewModel.onMapScrolled(result.lat, result.lon)
-            isProgrammaticCameraMove = false
+            // a gesture cancels animateCamera, so reset the flag in finally
+            try {
+                mapState.animateCamera(
+                    CameraUpdate(center = Position(result.lon, result.lat), zoom = ZOOM_LEVEL_RECEIVED_RESULT)
+                )
+                yield()
+                viewModel.updateMapCenter(result.lat, result.lon)
+                viewModel.onMapScrolled(result.lat, result.lon)
+            } finally {
+                isProgrammaticCameraMove = false
+            }
         }
     }
 
@@ -288,9 +358,7 @@ fun LocationPickerScreen(
                 myLocation = Position(location.longitude, location.latitude)
             }
         } else {
-            permissionLauncher.launch(
-                arrayOf(Manifest.permission.ACCESS_FINE_LOCATION, Manifest.permission.ACCESS_COARSE_LOCATION)
-            )
+            permissionLauncher.launch(locationPermissions)
         }
     }
 
@@ -309,88 +377,74 @@ fun LocationPickerScreen(
             )
         },
         onCenterClick = {
-            if (myLocation.latitude == COORDINATE_ZERO && myLocation.longitude == COORDINATE_ZERO) {
+            if (!isLocationPermissionsGranted(context)) {
+                permissionLauncher.launch(locationPermissions)
+            } else if (!LocationManagerCompat.isLocationEnabled(locationManager)) {
+                coroutineScope.launch {
+                    showSnackbarWithSettingsAction(
+                        snackbarHostState = snackbarHostState,
+                        message = context.getString(R.string.location_services_disabled),
+                        actionLabel = context.getString(R.string.nc_permissions_settings)
+                    ) {
+                        context.startActivity(Intent(Settings.ACTION_LOCATION_SOURCE_SETTINGS))
+                    }
+                }
+            } else if (myLocation.latitude == COORDINATE_ZERO && myLocation.longitude == COORDINATE_ZERO) {
+                // location services may have been enabled after the screen was opened
+                requestLocationUpdates(locationManager, locationListener) { /* handled below */ }
+                getLastKnownLocation(locationManager)?.let { location ->
+                    myLocation = Position(location.longitude, location.latitude)
+                }
                 coroutineScope.launch {
                     snackbarHostState.showSnackbar(context.getString(R.string.nc_location_unknown))
                 }
             } else {
                 coroutineScope.launch {
-                    cameraState.animateTo(CameraPosition(target = myLocation, zoom = ZOOM_LEVEL_DEFAULT))
+                    mapState.animateCamera(CameraUpdate(center = myLocation, zoom = ZOOM_LEVEL_DEFAULT))
                 }
                 viewModel.onCenterLocationRequested()
             }
         },
         onZoomIn = {
-            val newZoom = (cameraState.position.zoom + 1).coerceAtMost(ZOOM_LEVEL_MAX)
-            if (newZoom > cameraState.position.zoom) {
+            val newZoom = (mapState.cameraPosition.zoom + 1).coerceAtMost(ZOOM_LEVEL_MAX)
+            if (newZoom > mapState.cameraPosition.zoom) {
                 coroutineScope.launch {
                     isProgrammaticCameraMove = true
-                    cameraState.animateTo(CameraPosition(target = cameraState.position.target, zoom = newZoom))
-                    isProgrammaticCameraMove = false
+                    try {
+                        mapState.animateCamera(CameraUpdate(zoom = newZoom))
+                    } finally {
+                        isProgrammaticCameraMove = false
+                    }
                 }
             }
         },
         onZoomOut = {
-            val newZoom = (cameraState.position.zoom - 1).coerceAtLeast(ZOOM_LEVEL_MIN)
+            val newZoom = (mapState.cameraPosition.zoom - 1).coerceAtLeast(ZOOM_LEVEL_MIN)
             if (newZoom > ZOOM_LEVEL_MIN) {
                 coroutineScope.launch {
                     isProgrammaticCameraMove = true
-                    cameraState.animateTo(CameraPosition(target = cameraState.position.target, zoom = newZoom))
-                    isProgrammaticCameraMove = false
+                    try {
+                        mapState.animateCamera(CameraUpdate(zoom = newZoom))
+                    } finally {
+                        isProgrammaticCameraMove = false
+                    }
                 }
             }
         },
         mapContent = {
-            val styleUri = if (isDarkMode) {
-                "asset://map_style_dark.json"
-            } else {
-                "asset://map_style_light.json"
-            }
+            // logo, attribution, compass and scale bar are disabled; attribution sits in the search card
             MaplibreMap(
-                baseStyle = BaseStyle.Uri(styleUri),
                 modifier = Modifier.fillMaxSize(),
-                cameraState = cameraState,
-                styleState = styleState,
-                logger = remember { Logger.withTag("MapLibre/LocationPicker") },
-                onMapLoadFailed = { reason ->
-                    isMapInitialized = true
-                    Log.e("MapLibre/LocationPicker", "Style failed to load: $reason | styleUri=$styleUri")
-                },
-                onMapLoadFinished = {
-                    isMapInitialized = true
-                    Log.d("MapLibre/LocationPicker", "Style loaded successfully: $styleUri")
-                },
-                options =
-                MapOptions(
-                    ornamentOptions =
-                    OrnamentOptions(
-                        isLogoEnabled = false,
-                        isAttributionEnabled = false,
-                        isCompassEnabled = false,
-                        isScaleBarEnabled = false
-                    )
-                )
-            ) {
-                val userLocationGeoJson = remember(myLocation) {
-                    userLocationGeoJsonData(myLocation)
-                }
-                val userLocationSource = rememberGeoJsonSource(userLocationGeoJson)
-                CircleLayer(
-                    id = USER_LOCATION_LAYER_ID,
-                    source = userLocationSource,
-                    color = ColorLiteral.of(Color(COLOR_NC_BLUE_PACKED)),
-                    radius = DpLiteral.of(7.5.dp),
-                    strokeColor = ColorLiteral.of(Color.White),
-                    strokeWidth = DpLiteral.of(2.dp)
-                )
-            }
+                state = mapState,
+                overlay = {}
+            )
         },
-        styleState = styleState
+        mapState = mapState
     )
 }
 
 @Composable
-private fun BoxScope.LocationPickerSearchCard(onBack: () -> Unit, onSearchClick: () -> Unit, styleState: StyleState) {
+private fun BoxScope.LocationPickerSearchCard(onBack: () -> Unit, onSearchClick: () -> Unit, mapState: MapState) {
     Column(
         modifier = Modifier
             .widthIn(min = 360.dp, max = 720.dp)
@@ -409,19 +463,42 @@ private fun BoxScope.LocationPickerSearchCard(onBack: () -> Unit, onSearchClick:
         ) {
             LocationPickerSearchRow(onBack = onBack, onSearchClick = onSearchClick)
         }
-        var attributionExpanded by remember { mutableStateOf(false) }
-        ExpandingAttributionButton(
-            expanded = attributionExpanded,
-            onClick = { attributionExpanded = !attributionExpanded },
-            styleState = styleState,
-            modifier = Modifier.padding(top = 4.dp),
-            contentAlignment = Alignment.TopEnd,
-            toggleButton = { onToggle ->
-                Box(modifier = Modifier.alpha(ATTRIBUTION_BUTTON_ALPHA)) {
-                    AttributionButtonDefaults.button(onToggle)
-                }
+        LocationPickerAttribution(mapState = mapState, modifier = Modifier.padding(top = 4.dp))
+    }
+}
+
+// Own version of maplibre's ExpandingAttributionButton, which always starts expanded
+@Composable
+private fun LocationPickerAttribution(mapState: MapState, modifier: Modifier = Modifier) {
+    val attributions by remember(mapState) { derivedStateOf { mapState.style.attributions() } }
+    if (attributions.isEmpty()) return
+    var expanded by remember { mutableStateOf(false) }
+
+    // collapse once the user starts moving the map
+    LaunchedEffect(mapState) {
+        snapshotFlow { mapState.isCameraMoving && mapState.cameraMoveReason == CameraMoveReason.Gesture }
+            .filter { it }
+            .collect { expanded = false }
+    }
+
+    Row(
+        modifier = modifier
+            .clip(RoundedCornerShape(28.dp))
+            .background(if (expanded) MaterialTheme.colorScheme.surface else Color.Transparent),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        // weight: the links fill all available width otherwise and push the toggle button out of the row
+        AnimatedVisibility(visible = expanded, modifier = Modifier.weight(1f, fill = false)) {
+            Box(modifier = Modifier.padding(start = 16.dp, top = 8.dp, bottom = 8.dp)) {
+                AttributionButtonDefaults.content(
+                    attributions,
+                    MaterialTheme.typography.bodySmall.copy(color = MaterialTheme.colorScheme.onSurface)
+                )
             }
-        )
+        }
+        Box(modifier = Modifier.alpha(ATTRIBUTION_BUTTON_ALPHA)) {
+            AttributionButtonDefaults.button { expanded = !expanded }
+        }
     }
 }
 
@@ -568,7 +645,7 @@ private fun LocationPickerScreenContent(
     onZoomIn: () -> Unit,
     onZoomOut: () -> Unit,
     mapContent: @Composable BoxScope.() -> Unit,
-    styleState: StyleState
+    mapState: MapState
 ) {
     Scaffold(
         contentWindowInsets = WindowInsets(0, 0, 0, 0)
@@ -583,7 +660,7 @@ private fun LocationPickerScreenContent(
             LocationPickerSearchCard(
                 onBack = onBack,
                 onSearchClick = onSearchClick,
-                styleState = styleState
+                mapState = mapState
             )
             LocationPickerBottomControls(
                 uiState = uiState,
@@ -678,23 +755,45 @@ private fun LocationPickerSharePanel(
     }
 }
 
+private suspend fun showSnackbarWithSettingsAction(
+    snackbarHostState: SnackbarHostState,
+    message: String,
+    actionLabel: String,
+    onAction: () -> Unit
+) {
+    val result = snackbarHostState.showSnackbar(
+        message = message,
+        actionLabel = actionLabel,
+        duration = SnackbarDuration.Long
+    )
+    if (result == SnackbarResult.ActionPerformed) {
+        onAction()
+    }
+}
+
 @SuppressLint("MissingPermission")
 private fun getLastKnownLocation(locationManager: LocationManager): android.location.Location? =
-    when {
-        locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) ->
-            locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
+    try {
+        when {
+            locationManager.isProviderEnabled(LocationManager.NETWORK_PROVIDER) ->
+                locationManager.getLastKnownLocation(LocationManager.NETWORK_PROVIDER)
 
-        locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ->
-            locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
+            locationManager.isProviderEnabled(LocationManager.GPS_PROVIDER) ->
+                locationManager.getLastKnownLocation(LocationManager.GPS_PROVIDER)
 
-        else -> null
+            else -> null
+        }
+    } catch (e: SecurityException) {
+        // before API 31 the GPS provider requires fine location, which may not be granted
+        Log.w(TAG, "Missing permission to get last known location", e)
+        null
     }
 
 private fun isLocationPermissionsGranted(context: Context): Boolean =
     PermissionChecker.checkSelfPermission(
         context,
         Manifest.permission.ACCESS_COARSE_LOCATION
-    ) == PermissionChecker.PERMISSION_GRANTED &&
+    ) == PermissionChecker.PERMISSION_GRANTED ||
         PermissionChecker.checkSelfPermission(
             context,
             Manifest.permission.ACCESS_FINE_LOCATION
@@ -788,7 +887,7 @@ private fun PreviewLocationPickerScreen() {
             onZoomIn = {},
             onZoomOut = {},
             mapContent = previewMapPlaceholder,
-            styleState = rememberStyleState()
+            mapState = rememberMapState()
         )
     }
 }
@@ -814,7 +913,7 @@ private fun PreviewLocationPickerScreenLandscape() {
             onZoomIn = {},
             onZoomOut = {},
             mapContent = previewMapPlaceholder,
-            styleState = rememberStyleState()
+            mapState = rememberMapState()
         )
     }
 }
@@ -837,7 +936,7 @@ private fun PreviewLocationPickerScreenGeocoded() {
             onZoomIn = {},
             onZoomOut = {},
             mapContent = previewMapPlaceholder,
-            styleState = rememberStyleState()
+            mapState = rememberMapState()
         )
     }
 }
@@ -860,7 +959,7 @@ private fun PreviewLocationPickerScreenSending() {
             onZoomIn = {},
             onZoomOut = {},
             mapContent = previewMapPlaceholder,
-            styleState = rememberStyleState()
+            mapState = rememberMapState()
         )
     }
 }
@@ -892,7 +991,7 @@ private fun PreviewLocationPickerScreenRtl() {
                     Text(text = "معاينة الخريطة")
                 }
             },
-            styleState = rememberStyleState()
+            mapState = rememberMapState()
         )
     }
 }

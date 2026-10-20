@@ -26,6 +26,7 @@ import androidx.core.graphics.drawable.toBitmap
 import androidx.core.net.toUri
 import coil.executeBlocking
 import coil.imageLoader
+import coil.request.CachePolicy
 import coil.request.ImageRequest
 import coil.transform.CircleCropTransformation
 import com.bluelinelabs.logansquare.LoganSquare
@@ -437,7 +438,8 @@ object NotificationUtils {
         avatarUrl: String,
         context: Context,
         credentials: String? = null,
-        timeoutMs: Long? = null
+        timeoutMs: Long? = null,
+        useCache: Boolean = true
     ): Bitmap? {
         var avatarBitmap: Bitmap? = null
 
@@ -464,6 +466,11 @@ object NotificationUtils {
         if (credentials != null) {
             requestBuilder.addHeader("Authorization", credentials)
         }
+        if (!useCache) {
+            requestBuilder
+                .memoryCachePolicy(CachePolicy.DISABLED)
+                .diskCachePolicy(CachePolicy.DISABLED)
+        }
 
         val request = requestBuilder.build()
         if (timeoutMs == null) {
@@ -476,15 +483,21 @@ object NotificationUtils {
         return avatarBitmap
     }
 
+    /**
+     * The conversation-avatar endpoint answers a one-to-one room with the other participant of the
+     * requesting account, so the same URL returns a different image per account on the same server.
+     * Those avatars bypass the caches, which are keyed by URL only.
+     */
     fun loadConversationAvatarBitmapSync(
         baseUrl: String?,
         roomToken: String,
         credentials: String?,
         context: Context,
+        isOneToOne: Boolean,
         timeoutMs: Long? = null
     ): Bitmap? {
         val avatarUrl = ApiUtils.getUrlForConversationAvatar(ApiUtils.API_V1, baseUrl, roomToken)
-        return loadAvatarBitmapSync(avatarUrl, context, credentials, timeoutMs)
+        return loadAvatarBitmapSync(avatarUrl, context, credentials, timeoutMs, useCache = !isOneToOne)
     }
 
     fun saveBitmapToCache(context: Context, bitmap: Bitmap, fileName: String): Uri? {

@@ -38,6 +38,9 @@ class LoginRepository(
         private const val INTERVAL = 250L
         private const val NETWORK_ERROR_INTERVAL = 3000L
         private const val HTTP_OK = 200
+
+        /** The status of a [LoginCompletion] for a login the server refused because of too many failed logins. */
+        const val HTTP_TOO_MANY_REQUESTS = 429
         private const val USER_KEY = "user:"
         private const val SERVER_KEY = "server:"
         private const val PASS_KEY = "password:"
@@ -189,7 +192,12 @@ class LoginRepository(
 
             // Need to use the qr code token to create temporary credentials to get access to the actual app password
             val credentials = Credentials.basic(loginName, appPassword)
-            val oneTimePassword = network.oneTimePasswordRequest(server, credentials)
+            val oneTimePassword = try {
+                network.oneTimePasswordRequest(server, credentials)
+            } catch (e: NetworkLoginDataSource.TooManyLoginAttemptsException) {
+                Log.w(TAG, "Server refused the one-time login because of too many failed logins", e)
+                return@withContext LoginCompletion(HTTP_TOO_MANY_REQUESTS, server, loginName, "")
+            }
 
             return@withContext if (server.isNotEmpty() && loginName.isNotEmpty() && oneTimePassword != null) {
                 LoginCompletion(HTTP_OK, server, loginName, oneTimePassword)

@@ -7,11 +7,14 @@
  */
 package com.nextcloud.talk.chat.viewmodels
 
+import android.app.Activity
 import android.content.Context
 import android.net.Uri
 import android.os.Bundle
 import android.provider.OpenableColumns
 import android.util.Log
+import androidx.annotation.StringRes
+import androidx.annotation.VisibleForTesting
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LiveData
@@ -65,7 +68,6 @@ import com.nextcloud.talk.models.json.chat.ChatMessageDto
 import com.nextcloud.talk.models.json.chat.ChatOverallSingleMessage
 import com.nextcloud.talk.models.json.conversations.ConversationEnums
 import com.nextcloud.talk.models.json.conversations.RoomOverall
-import com.nextcloud.talk.models.json.generic.GenericOverall
 import com.nextcloud.talk.models.json.opengraph.OpenGraphObjectDto
 import com.nextcloud.talk.models.json.reminder.ReminderDto
 import com.nextcloud.talk.models.json.threads.ThreadInfoDto
@@ -87,6 +89,7 @@ import com.nextcloud.talk.utils.SpreedFeatures
 import com.nextcloud.talk.utils.UserIdUtils
 import com.nextcloud.talk.utils.throttleLatest
 import com.nextcloud.talk.utils.bundle.BundleKeys
+import com.nextcloud.talk.utils.isTransientFailure
 import com.nextcloud.talk.utils.message.SendMessageUtils
 import com.nextcloud.talk.utils.message.groupHashOf
 import com.nextcloud.talk.utils.preferences.AppPreferences
@@ -104,6 +107,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableSharedFlow
@@ -139,6 +144,7 @@ import kotlinx.coroutines.withTimeoutOrNull
 import retrofit2.HttpException
 import java.io.File
 import java.io.IOException
+import java.net.HttpURLConnection
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
@@ -157,8 +163,9 @@ private const val VCARD_MIMETYPE = "text/vcard"
 internal fun groupHash(referenceId: String?): String? = groupHashOf(referenceId)
 
 // A run of consecutive single-file share messages from the same author, uploaded together in one
-// batch - whether still uploading or already synced - either kept as-is (Single) or merged into
-// one grouped "album" bubble (Group) - see ChatViewModel.combineFileShareGroups().
+// batch - whether still uploading or already synced - either kept as-is (Single), merged into
+// one grouped "album" bubble (Group) or, once deleted, shown as its last message only (Collapsed) -
+// see ChatViewModel.combineFileShareGroups().
 internal sealed interface CombinedUnit {
     val messages: List<ChatMessageUi>
 
@@ -167,6 +174,8 @@ internal sealed interface CombinedUnit {
     }
 
     data class Group(override val messages: List<ChatMessageUi>) : CombinedUnit
+
+    data class Collapsed(override val messages: List<ChatMessageUi>) : CombinedUnit
 }
 
 /**
@@ -174,7 +183,8 @@ internal sealed interface CombinedUnit {
  * (Media) or still mid-upload (UploadingMedia), so a batch groups into one bubble immediately as
  * it starts uploading rather than only once every file has synced. Mirrors web's
  * isCombinableFileMessage() otherwise: excludes system/voice/geo/poll/deck/text messages (via the
- * content-type check), deleted or failed messages, contact cards and audio files.
+ * content-type check), deleted or failed messages, contact cards and audio files. Deleted messages
+ * are collapsed separately by combineFileShareGroups().
  */
 internal fun isCombinableFileShare(message: ChatMessageUi): Boolean {
     val mimeType = when (val content = message.content) {
@@ -188,33 +198,41 @@ internal fun isCombinableFileShare(message: ChatMessageUi): Boolean {
         !MimetypeUtils.isAudioOnly(mimeType)
 }
 
-/** Two file shares belong to the same batch: same reply target and same upload-batch hash. */
+/**
+ * Two file shares belong to the same batch: both deleted or both not, same reply target and same
+ * upload-batch hash.
+ */
 internal fun canCombineFileShares(a: ChatMessageUi, b: ChatMessageUi): Boolean {
     val hash = groupHash(a.referenceId)
-    return a.parentMessage?.id == b.parentMessage?.id && hash != null && hash == groupHash(b.referenceId)
+    return a.isDeleted == b.isDeleted &&
+        a.parentMessage?.id == b.parentMessage?.id &&
+        hash != null &&
+        hash == groupHash(b.referenceId)
 }
 
 /**
  * Replaces consecutive file shares uploaded together in one batch with a single grouped unit.
  * A message that isn't a plain file share, a reply to a different message, or part of another
  * batch interrupts the run. A file share with a real caption (not just the "{file}" placeholder)
- * ends its group - the caption belongs to the group's last item, same as web.
+ * ends its group - the caption belongs to the group's last item, same as web. Deleted file shares
+ * of the same batch collapse into their last deleted message.
  */
 internal fun combineFileShareGroups(uiMessages: List<ChatMessageUi>): List<CombinedUnit> {
     val result = mutableListOf<CombinedUnit>()
     var pending = mutableListOf<ChatMessageUi>()
 
     fun flush() {
-        when (pending.size) {
-            0 -> {}
-            1 -> result.add(CombinedUnit.Single(pending[0]))
+        when {
+            pending.isEmpty() -> {}
+            pending.size == 1 -> result.add(CombinedUnit.Single(pending[0]))
+            pending[0].isDeleted -> result.add(CombinedUnit.Collapsed(pending.toList()))
             else -> result.add(CombinedUnit.Group(pending.toList()))
         }
         pending = mutableListOf()
     }
 
     for (message in uiMessages) {
-        if (!isCombinableFileShare(message)) {
+        if (!message.isDeleted && !isCombinableFileShare(message)) {
             flush()
             result.add(CombinedUnit.Single(message))
             continue
@@ -226,7 +244,7 @@ internal fun combineFileShareGroups(uiMessages: List<ChatMessageUi>): List<Combi
 
         pending.add(message)
 
-        if (message.plainMessage != FILE_PLACEHOLDER_MESSAGE) {
+        if (!message.isDeleted && message.plainMessage != FILE_PLACEHOLDER_MESSAGE) {
             flush()
         }
     }
@@ -663,6 +681,10 @@ class ChatViewModel @AssistedInject constructor(
     private val _reactionFailures = MutableSharedFlow<ReactionOperation>(extraBufferCapacity = 1)
     val reactionFailures: SharedFlow<ReactionOperation> = _reactionFailures
 
+    /** A reminder or a share to notes that the server refused, for the chat to report. */
+    private val _actionFailures = MutableSharedFlow<Int>(extraBufferCapacity = 1)
+    val actionFailures: SharedFlow<Int> = _actionFailures
+
     private val reactionLocks = mutableMapOf<Int, Mutex>()
 
     @Volatile private var firstUnreadMessageId: Int? = null
@@ -993,9 +1015,7 @@ class ChatViewModel @AssistedInject constructor(
         val targetThreadId = result.threadId?.toLongOrNull()?.takeIf { result.isThreadReplyResult() }
 
         viewModelScope.launch {
-            val foundLocally = _uiState.value.items.any {
-                (it as? ChatItem.MessageItem)?.uiMessage?.id == messageId.toInt()
-            }
+            val foundLocally = _uiState.value.items.any { it.containsMessage(messageId.toInt()) }
             if (!foundLocally) {
                 loadMessageContextAndSwitchMode(
                     messageId = messageId,
@@ -1009,9 +1029,7 @@ class ChatViewModel @AssistedInject constructor(
 
     fun jumpToQuotedMessage(messageId: Long) {
         viewModelScope.launch {
-            val foundLocally = _uiState.value.items.any {
-                (it as? ChatItem.MessageItem)?.uiMessage?.id == messageId.toInt()
-            }
+            val foundLocally = _uiState.value.items.any { it.containsMessage(messageId.toInt()) }
             if (!foundLocally) {
                 loadMessageContextAndSwitchMode(
                     messageId = messageId,
@@ -1453,6 +1471,9 @@ class ChatViewModel @AssistedInject constructor(
                         add(ChatItem.MessageItem(adjustedMessage))
                     }
                     is CombinedUnit.Group -> add(ChatItem.MediaGroupItem(messages))
+                    is CombinedUnit.Collapsed -> add(
+                        ChatItem.MessageItem(representative, collapsedMessageIds = messages.dropLast(1).map { it.id })
+                    )
                 }
             }
         }.asReversed()
@@ -1893,17 +1914,23 @@ class ChatViewModel @AssistedInject constructor(
     }
 
     fun setReminder(user: User, roomToken: String, messageId: String, timestamp: Int, chatApiVersion: Int) {
-        chatNetworkDataSource.setReminder(user, roomToken, messageId, timestamp, chatApiVersion)
-            .subscribeOn(Schedulers.io())
-            ?.observeOn(AndroidSchedulers.mainThread())
-            ?.subscribe(SetReminderObserver())
+        requestWithFeedback("set the reminder", R.string.nc_common_error_sorry) {
+            chatNetworkDataSource.setReminder(user, roomToken, messageId, timestamp, chatApiVersion)
+        }
     }
 
+    @Suppress("Detekt.TooGenericExceptionCaught")
     fun getReminder(user: User, roomToken: String, messageId: String, chatApiVersion: Int) {
-        chatNetworkDataSource.getReminder(user, roomToken, messageId, chatApiVersion)
-            .subscribeOn(Schedulers.io())
-            ?.observeOn(AndroidSchedulers.mainThread())
-            ?.subscribe(GetReminderObserver())
+        viewModelScope.launch {
+            _getReminderExistState.value = try {
+                GetReminderExistState(chatNetworkDataSource.getReminder(user, roomToken, messageId, chatApiVersion))
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.d(TAG, "Error when getting reminder", e)
+                GetReminderStartState
+            }
+        }
     }
 
     fun overrideReminderState() {
@@ -1911,26 +1938,10 @@ class ChatViewModel @AssistedInject constructor(
     }
 
     fun deleteReminder(user: User, roomToken: String, messageId: String, chatApiVersion: Int) {
-        chatNetworkDataSource.deleteReminder(user, roomToken, messageId, chatApiVersion)
-            .subscribeOn(Schedulers.io())
-            ?.observeOn(AndroidSchedulers.mainThread())
-            ?.subscribe(object : Observer<GenericOverall> {
-                override fun onSubscribe(d: Disposable) {
-                    disposableSet.add(d)
-                }
-
-                override fun onNext(genericOverall: GenericOverall) {
-                    _getReminderExistState.value = GetReminderStartState
-                }
-
-                override fun onError(e: Throwable) {
-                    Log.d(TAG, "Error when deleting reminder", e)
-                }
-
-                override fun onComplete() {
-                    // unused atm
-                }
-            })
+        requestWithFeedback("delete the reminder", R.string.nc_common_error_sorry) {
+            chatNetworkDataSource.deleteReminder(user, roomToken, messageId, chatApiVersion)
+            _getReminderExistState.value = GetReminderStartState
+        }
     }
 
     fun leaveRoom(credentials: String, url: String, functionToCallAfterLeave: (() -> Unit)?) {
@@ -2093,26 +2104,31 @@ class ChatViewModel @AssistedInject constructor(
         }
     }
 
-    fun deleteChatMessages(credentials: String, url: String, messageId: Int) {
+    fun messageIdsToDelete(messageId: Int): List<Int> = messageIdsToDelete(_uiState.value.items, messageId)
+
+    fun deleteChatMessages(credentials: String, urlsByMessageId: Map<Int, String>) {
         val deletedPlaceholder = NextcloudTalkApplication.sharedApplication!!
             .getString(R.string.message_deleted_by_you)
 
         viewModelScope.launch {
-            val result = chatRepository.deleteChatMessage(
-                credentials,
-                url,
-                messageId.toLong(),
-                deletedPlaceholder
-            )
+            val results = urlsByMessageId.map { (messageId, url) ->
+                async {
+                    chatRepository.deleteChatMessage(credentials, url, messageId.toLong(), deletedPlaceholder)
+                        .onFailure { throwable ->
+                            Log.e(TAG, "Failed to delete message with id $messageId", throwable)
+                        }
+                }
+            }.awaitAll()
 
-            result
-                .onSuccess { message ->
-                    message?.let { _deleteChatMessageViewState.value = DeleteChatMessageSuccessState(it) }
-                }
-                .onFailure { throwable ->
-                    Log.e(TAG, "Something went wrong when trying to delete message with id $messageId", throwable)
-                    _deleteChatMessageViewState.value = DeleteChatMessageErrorState
-                }
+            if (results.any { it.isFailure }) {
+                _deleteChatMessageViewState.value = DeleteChatMessageErrorState
+                return@launch
+            }
+
+            val responses = results.mapNotNull { it.getOrNull() }
+            val response = responses.firstOrNull { it.ocs?.meta?.statusCode == HttpURLConnection.HTTP_ACCEPTED }
+                ?: responses.firstOrNull()
+            response?.let { _deleteChatMessageViewState.value = DeleteChatMessageSuccessState(it) }
         }
     }
 
@@ -2245,26 +2261,9 @@ class ChatViewModel @AssistedInject constructor(
     }
 
     fun shareToNotes(credentials: String, url: String, message: String, displayName: String) {
-        chatNetworkDataSource.shareToNotes(credentials, url, message, displayName)
-            .subscribeOn(Schedulers.io())
-            ?.observeOn(AndroidSchedulers.mainThread())
-            ?.subscribe(object : Observer<ChatOverallSingleMessage> {
-                override fun onSubscribe(d: Disposable) {
-                    disposableSet.add(d)
-                }
-
-                override fun onNext(genericOverall: ChatOverallSingleMessage) {
-                    // unused atm
-                }
-
-                override fun onError(e: Throwable) {
-                    Log.d(TAG, "Error when sharing to notes $e")
-                }
-
-                override fun onComplete() {
-                    // unused atm
-                }
-            })
+        shareToNotes("share the message to notes", credentials, url) { referenceId ->
+            chatNetworkDataSource.shareToNotes(credentials, url, message, displayName, referenceId)
+        }
     }
 
     suspend fun checkForNoteToSelf(credentials: String, baseUrl: String): ConversationModel? =
@@ -2286,27 +2285,111 @@ class ChatViewModel @AssistedInject constructor(
             null
         }
 
-    fun shareLocationToNotes(credentials: String, url: String, objectType: String, objectId: String, metadata: String) {
-        chatNetworkDataSource.shareLocationToNotes(credentials, url, objectType, objectId, metadata)
-            .subscribeOn(Schedulers.io())
-            ?.observeOn(AndroidSchedulers.mainThread())
-            ?.subscribe(object : Observer<GenericOverall> {
-                override fun onSubscribe(d: Disposable) {
-                    disposableSet.add(d)
-                }
+    fun shareLocationToNotes(
+        credentials: String,
+        url: String,
+        chatUrl: String,
+        objectType: String,
+        objectId: String,
+        metadata: String
+    ) {
+        shareToNotes("share the location to notes", credentials, chatUrl) { referenceId ->
+            chatNetworkDataSource.shareLocationToNotes(credentials, url, objectType, objectId, metadata, referenceId)
+        }
+    }
 
-                override fun onNext(genericOverall: GenericOverall) {
-                    // unused atm
-                }
+    /**
+     * Shares to the note to self and, when the share failed for a transient reason, asks the note to
+     * self whether the message arrived anyway before sending it a second time. The server stores the
+     * reference id of a message without ever looking at it again, so it deduplicates nothing: a blind
+     * second attempt after a timeout the server did accept posts the note twice.
+     */
+    private fun shareToNotes(
+        description: String,
+        credentials: String,
+        lookupUrl: String,
+        share: suspend (String) -> Unit
+    ) {
+        val referenceId = SendMessageUtils().generateReferenceId()
 
-                override fun onError(e: Throwable) {
-                    Log.e(TAG, "Error when sharing location to notes $e")
-                }
+        viewModelScope.launch {
+            val failure = attemptShare(share, referenceId) ?: return@launch
 
-                override fun onComplete() {
-                    // unused atm
-                }
-            })
+            if (!isTransientFailure(failure)) {
+                reportShareFailure(description, failure)
+                return@launch
+            }
+
+            when (alreadyShared(credentials, lookupUrl, referenceId)) {
+                true -> Unit
+                false -> attemptShare(share, referenceId)?.let { reportShareFailure(description, it) }
+                null -> reportShareFailure(description, failure)
+            }
+        }
+    }
+
+    /** Runs the share once and reports what went wrong, or null when it worked. */
+    @Suppress("Detekt.TooGenericExceptionCaught")
+    private suspend fun attemptShare(share: suspend (String) -> Unit, referenceId: String): Exception? =
+        try {
+            share(referenceId)
+            null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            e
+        }
+
+    /**
+     * Whether the note to self already holds the message of this share, or null when the lookup could
+     * not be answered. An unanswered lookup is not retried, because posting a second copy is worse than
+     * not retrying, but it is reported rather than passed off as a message that arrived.
+     */
+    @Suppress("Detekt.TooGenericExceptionCaught")
+    private suspend fun alreadyShared(credentials: String, lookupUrl: String, referenceId: String): Boolean? =
+        try {
+            val fieldMap = hashMapOf(
+                "lookIntoFuture" to 0,
+                "includeLastKnown" to 1,
+                "setReadMarker" to 0,
+                "markNotificationsAsRead" to 0,
+                "timeout" to 0,
+                "limit" to SHARE_LOOKUP_LIMIT
+            )
+            val recent = chatNetworkDataSource.pullChatMessages(credentials, lookupUrl, fieldMap)
+            holdsShare(recent.body()?.ocs?.data, referenceId)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            logger.w(TAG, "Could not check whether the share arrived, so it is not sent again", e)
+            null
+        }
+
+    private suspend fun reportShareFailure(description: String, throwable: Throwable) {
+        logger.e(TAG, "Failed to $description", throwable)
+        _actionFailures.emit(R.string.nc_message_not_added_to_notes)
+    }
+
+    /**
+     * Runs an action whose only visible outcome is whether it worked. The reminder dialog is already
+     * dismissed and the chat has already said the message was sent by the time the answer arrives, so
+     * a failure that is not reported here is never reported at all.
+     *
+     * Deliberately without a retry: sharing to notes posts a message with a reference id generated per
+     * call, so a second attempt after a timeout the server did accept would post it twice.
+     */
+    @Suppress("Detekt.TooGenericExceptionCaught")
+    private fun requestWithFeedback(description: String, @StringRes failureMessage: Int, request: suspend () -> Unit) {
+        viewModelScope.launch {
+            try {
+                request()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                logger.e(TAG, "Failed to $description", e)
+                _actionFailures.emit(failureMessage)
+            }
+        }
     }
 
     fun deleteReaction(roomToken: String, chatMessage: ChatMessage, emoji: String) {
@@ -2705,43 +2788,6 @@ class ChatViewModel @AssistedInject constructor(
         }
     }
 
-    inner class SetReminderObserver : Observer<ReminderDto> {
-        override fun onSubscribe(d: Disposable) {
-            disposableSet.add(d)
-        }
-
-        override fun onNext(reminder: ReminderDto) {
-            Log.d(TAG, "reminder set successfully")
-        }
-
-        override fun onError(e: Throwable) {
-            Log.e(TAG, "Error when sending reminder, $e")
-        }
-
-        override fun onComplete() {
-            // unused atm
-        }
-    }
-
-    inner class GetReminderObserver : Observer<ReminderDto> {
-        override fun onSubscribe(d: Disposable) {
-            disposableSet.add(d)
-        }
-
-        override fun onNext(reminder: ReminderDto) {
-            _getReminderExistState.value = GetReminderExistState(reminder)
-        }
-
-        override fun onError(e: Throwable) {
-            Log.d(TAG, "Error when getting reminder $e")
-            _getReminderExistState.value = GetReminderStartState
-        }
-
-        override fun onComplete() {
-            // unused atm
-        }
-    }
-
     @Suppress("Detekt.TooGenericExceptionCaught")
     fun outOfOfficeStatusOfUser(credentials: String, baseUrl: String, userId: String) {
         viewModelScope.launch {
@@ -2964,6 +3010,29 @@ class ChatViewModel @AssistedInject constructor(
             conversationLastReadMessage: Int,
             newestOwnMessageId: Int?
         ): Int? = maxOf(localLastReadMessage, newestOwnMessageId ?: 0).takeIf { it > conversationLastReadMessage }
+        /** Enough of the note to self to cover what a share of ours could have landed behind. */
+        private const val SHARE_LOOKUP_LIMIT = 20
+
+        /**
+         * Whether [messages] already hold the share that was sent with [referenceId], or null when the
+         * server returned no messages to judge by, because the lookup failed or answered "not modified".
+         */
+        @VisibleForTesting
+        fun holdsShare(messages: List<ChatMessageDto>?, referenceId: String): Boolean? =
+            messages?.any { it.referenceId == referenceId }
+
+        /**
+         * Ids of the messages a delete of [messageId] applies to: every already-uploaded message of the
+         * media group the message is shown in, or just the message itself.
+         */
+        internal fun messageIdsToDelete(items: List<ChatItem>, messageId: Int): List<Int> =
+            items
+                .filterIsInstance<ChatItem.MediaGroupItem>()
+                .firstOrNull { group -> group.messages.any { it.id == messageId } }
+                ?.messages
+                ?.filter { it.id == messageId || it.content !is MessageTypeContent.UploadingMedia }
+                ?.map { it.id }
+                ?: listOf(messageId)
 
         /**
          * Returns the read marker that makes [messageId] the first unread message: the id of the
@@ -2976,11 +3045,7 @@ class ChatViewModel @AssistedInject constructor(
          */
         internal fun readMarkerForMarkingUnread(items: List<ChatItem>, messageId: Int): Int? {
             val newestFirstIds = items.flatMap { item ->
-                when (item) {
-                    is ChatItem.MessageItem -> listOf(item.uiMessage.id)
-                    is ChatItem.MediaGroupItem -> item.messages.map { it.id }.asReversed()
-                    else -> emptyList()
-                }
+                item.messageIds().asReversed()
             }
 
             val selectedIndex = newestFirstIds.indexOf(messageId)
@@ -3070,6 +3135,16 @@ class ChatViewModel @AssistedInject constructor(
                 else -> null
             }
 
+        /** Ids of all messages this item stands for, oldest first. */
+        fun messageIds(): List<Int> =
+            when (this) {
+                is MessageItem -> collapsedMessageIds + uiMessage.id
+                is MediaGroupItem -> messages.map { it.id }
+                else -> emptyList()
+            }
+
+        fun containsMessage(messageId: Int): Boolean = messageId in messageIds()
+
         /** Whether the row of this item shows the checkmark of a selection. A media group is selected by its last. */
         fun isChecked(selectedMessageIds: Set<Int>): Boolean =
             when (this) {
@@ -3094,7 +3169,10 @@ class ChatViewModel @AssistedInject constructor(
                 is LoadGapItem -> "load_gap_$anchorMessageId"
             }
 
-        data class MessageItem(val uiMessage: ChatMessageUi) : ChatItem
+        // collapsedMessageIds: the older deleted messages of the same upload batch that are shown as
+        // this one message only (see CombinedUnit.Collapsed), oldest first.
+        data class MessageItem(val uiMessage: ChatMessageUi, val collapsedMessageIds: List<Int> = emptyList()) :
+            ChatItem
 
         // A run of consecutive single-file share messages from the same author - whether still
         // uploading or already synced - uploaded together in one batch (matching referenceId hash,

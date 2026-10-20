@@ -33,6 +33,7 @@ How to translate with transifex:
     <string name="nc_common_dismiss">Dismiss</string>
     <string name="nc_common_error_sorry">Sorry, something went wrong!</string>
     <string name="nc_account_removal_pending">The removal of this account is not finished yet. Please try again in a moment.</string>
+    <string name="nc_login_too_many_attempts">Too many failed login attempts from this network. Try again later.</string>
     <string name="nc_reauthorize_different_account">You logged in with a different account. Log in with the account you want to reauthorize.</string>
     <string name="nc_common_create">Create</string>
     <string name="nc_common_unknown">Unknown</string>
@@ -572,6 +573,7 @@ How to translate with transifex:
     <string name="nc_scheduled_thread">Scheduled thread</string>
     <string name="nc_reply_to_thread">Reply to thread: %1$s</string>
     <string name="nc_message_added_to_notes">Message added to notes</string>
+    <string name="nc_message_not_added_to_notes">Could not add the message to notes</string>
     <string name="nc_message_failed">Failed to send message</string>
     <string name="nc_message_failed_to_send">Failed to send message:</string>
     <string name="nc_add_attachment">Add attachment</string>
@@ -746,7 +748,6 @@ How to translate with transifex:
     <!-- location sharing -->
     <string name="nc_share_location">Share location</string>
     <string name="nc_search_location">Search location</string>
-    <string name="nc_location_permission_required">location permission is required</string>
     <string name="nc_share_current_location">Share current location</string>
     <string name="nc_share_this_location">Share this location</string>
     <string name="nc_shared_location">Shared location</string>
@@ -1141,9 +1142,7 @@ How to translate with transifex:
     <string name="qr_code_error">QR code could not be read</string>
     <string name="message_delete_are_you_sure">Are you sure you want to delete this message?</string>
     <string name="location_permission_denied">Location permission denied</string>
-    <string name="location_permission_denied_msg">Please enable it in the app settings</string>
     <string name="location_services_disabled">Location services disabled</string>
-    <string name="location_services_disabled_msg">Please enable location services (GPS) to use this feature</string>
     <string name="please_continue_the_login_process_in_the_browser">Please continue login in browser</string>
     <string name="pin_message">Pin message</string>
     <string name="unpin_message">Unpin message</string>

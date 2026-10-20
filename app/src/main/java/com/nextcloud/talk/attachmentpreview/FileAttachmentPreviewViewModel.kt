@@ -36,7 +36,8 @@ import javax.inject.Inject
 internal class FileAttachmentPreviewViewModel(
     private val context: Context,
     private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
-    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main,
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main.immediate,
+    private val describer: (Context, String, Boolean) -> FileDescription = ::describeFile,
     private val mimeTypeResolver: (Context, String) -> String? = { ctx, uri ->
         FileUtils.resolveMimeType(ctx, uri.toUri())
     }
@@ -189,11 +190,12 @@ internal class FileAttachmentPreviewViewModel(
      */
     fun describeFiles(compress: Boolean) {
         val snapshot = files.toList()
+        // a stale job finishing last would retainAll away the description of a file added since
         describeJob?.cancel()
-        describeJob = viewModelScope.launch(Dispatchers.IO) {
+        describeJob = viewModelScope.launch(ioDispatcher) {
             val described = snapshot.associateWith {
                 ensureActive()
-                describeFile(context, it, compress)
+                describer(context, it, compress)
             }
             ensureActive()
             // files is mutated on the main thread, so publish there
