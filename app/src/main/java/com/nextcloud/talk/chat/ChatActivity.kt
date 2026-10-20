@@ -30,6 +30,7 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.provider.ContactsContract
 import android.provider.MediaStore
@@ -63,6 +64,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.produceState
@@ -82,6 +84,7 @@ import androidx.core.view.WindowInsetsCompat
 import androidx.emoji2.text.EmojiCompat
 import androidx.fragment.app.DialogFragment
 import androidx.fragment.app.commit
+import androidx.fragment.app.commitNow
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
@@ -96,6 +99,7 @@ import androidx.window.embedding.SplitController
 import androidx.window.embedding.SplitController.SplitSupportStatus
 import androidx.work.Data
 import androidx.work.OneTimeWorkRequest
+import com.nextcloud.talk.dagger.modules.ViewModelFactoryWithParams
 import com.nextcloud.talk.dagger.modules.assistedViewModels
 import com.nextcloud.talk.utils.setExpeditedIfSupported
 import androidx.work.WorkInfo
@@ -307,13 +311,18 @@ class ChatActivity :
      */
     private lateinit var initialUser: User
 
-    val chatViewModel: ChatViewModel by assistedViewModels {
-        chatViewModelFactory.build(
-            initialUser,
-            roomToken,
-            conversationThreadId
-        )
-    }
+    /**
+     * The view models which belong to the shown room. They are replaced when the chat switches to another room,
+     * see [switchRoomInPlace]. State, so the composables of the chat follow the switch.
+     */
+    private class RoomSession(val chatViewModel: ChatViewModel, val messageInputViewModel: MessageInputViewModel)
+
+    private val roomStore: ChatRoomStore by viewModels()
+    private var roomSession by mutableStateOf<RoomSession?>(null)
+    private lateinit var roomLifecycle: RoomLifecycleOwner
+
+    val chatViewModel: ChatViewModel
+        get() = requireNotNull(roomSession) { "no room is shown yet" }.chatViewModel
 
     @Inject
     lateinit var conversationsListViewModelFactory: ConversationsListViewModel.Factory
@@ -323,7 +332,8 @@ class ChatActivity :
     }
 
     lateinit var conversationInfoViewModel: ConversationInfoViewModel
-    val messageInputViewModel: MessageInputViewModel by viewModels()
+    val messageInputViewModel: MessageInputViewModel
+        get() = requireNotNull(roomSession) { "no room is shown yet" }.messageInputViewModel
 
     private var hasScheduledMessages: Boolean = false
 
@@ -377,10 +387,12 @@ class ChatActivity :
 
     var sessionIdAfterRoomJoined: String? = null
 
-    val roomToken: String by lazy {
-        intent.getStringExtra(KEY_ROOM_TOKEN)
-            ?: error("roomToken missing")
-    }
+    /**
+     * Token of the shown room. It changes only in [switchRoomInPlace]. State, so the conversation list next to the
+     * chat can follow it.
+     */
+    var roomToken: String by mutableStateOf("")
+        private set
 
     val conversationUserId: Long by lazy { resolveUserIdFromIntent() }
 
@@ -394,9 +406,13 @@ class ChatActivity :
 
     var openedViaNotification: Boolean = false
     var conversationThreadInfo: ThreadInfoDto? = null
+
+    // Before the first room session exists, onCreate (handleIntent) already needs the user, which is the one the
+    // session is created with.
     val conversationUser: User
-        get() = chatViewModel.currentUser
+        get() = roomSession?.chatViewModel?.currentUser ?: initialUser
     lateinit var spreedCapabilities: SpreedCapabilityDto
+    private var capabilitiesLoaded = false
     var chatApiVersion: Int = 1
     private var roomPassword: String = ""
     var credentials: String? = null
@@ -585,7 +601,11 @@ class ChatActivity :
                         displayName = context.resources?.getString(R.string.nc_guest)!!
                     }
 
+                    val session = roomSession
                     runOnUiThread {
+                        if (session !== roomSession) {
+                            return@runOnUiThread
+                        }
                         val typingParticipant = TypingParticipant(userIdOrGuestSession!!, displayName) {
                             typingParticipants.remove(userIdOrGuestSession)
                             updateTypingIndicator()
@@ -622,6 +642,7 @@ class ChatActivity :
         // Not loaded in a coroutine: initData() must have run before onResume() (activity and ChatViewModel),
         // and registerForActivityResult() must be called before the activity is started.
         initialUser = setUpBoundUserOrFinish() ?: return
+        roomToken = resolveRoomToken(savedInstanceState)
 
         binding = ActivityChatBinding.inflate(layoutInflater)
         setContentView(
@@ -673,7 +694,61 @@ class ChatActivity :
             overflowContainerHeightPx.intValue = binding.chatOverflowContainer.height
         }
 
+        startRoomSession()
+
+        pickMultipleMedia = registerForActivityResult(
+            ActivityResultContracts.PickMultipleVisualMedia(MAX_AMOUNT_MEDIA_FILE_PICKER)
+        ) { uris ->
+            if (uris.isNotEmpty()) {
+                onChooseFileResult(uris)
+            }
+        }
+
+        onBackPressedDispatcher.addCallback(this, onBackPressedCallback)
+    }
+
+    /**
+     * The room of the intent. After [switchRoomInPlace] the intent shows the new room, but when the process was
+     * killed meanwhile, the system restores the original intent. So the shown room is taken from the saved state.
+     */
+    private fun resolveRoomToken(savedInstanceState: Bundle?): String {
+        val savedToken = savedInstanceState?.getString(STATE_ROOM_TOKEN)
+        if (savedToken != null && savedToken != intent.getStringExtra(KEY_ROOM_TOKEN)) {
+            intent.replaceExtras(roomIntentExtras(savedToken))
+        }
+        return intent.getStringExtra(KEY_ROOM_TOKEN) ?: error("roomToken missing")
+    }
+
+    private fun roomIntentExtras(token: String): Bundle =
+        Bundle().apply {
+            putString(KEY_ROOM_TOKEN, token)
+            putLong(KEY_INTERNAL_USER_ID, conversationUserId)
+        }
+
+    /**
+     * Sets up everything which belongs to the room [roomToken]: the view models, the observers and the message input.
+     * Used when the activity is created and when the chat switches to another room in [switchRoomInPlace].
+     */
+    private fun startRoomSession() {
         handleIntent(intent)
+
+        val token = roomToken
+        val threadId = conversationThreadId
+        val store = roomStore.storeFor(token)
+        val chat = ViewModelProvider(
+            store,
+            ViewModelFactoryWithParams(ChatViewModel::class.java) {
+                chatViewModelFactory.build(initialUser, token, threadId)
+            }
+        )[ChatViewModel::class.java]
+        val input = ViewModelProvider(
+            store,
+            ViewModelFactoryWithParams(MessageInputViewModel::class.java) { MessageInputViewModel() }
+        )[MessageInputViewModel::class.java]
+        roomLifecycle = RoomLifecycleOwner(lifecycle)
+        roomLifecycle.lifecycle.addObserver(chat)
+        roomSession = RoomSession(chat, input)
+
         chatViewModel.initData()
         if (sharedText.isNotEmpty()) {
             chatViewModel.messageDraft.messageText = sharedText
@@ -707,25 +782,147 @@ class ChatActivity :
             pendingTargetThreadId = null
             pendingTargetSearchQuery = null
         }
+    }
 
-        pickMultipleMedia = registerForActivityResult(
-            ActivityResultContracts.PickMultipleVisualMedia(MAX_AMOUNT_MEDIA_FILE_PICKER)
-        ) { uris ->
-            if (uris.isNotEmpty()) {
-                onChooseFileResult(uris)
-            }
+    /**
+     * A click in the conversation list next to the chat. Shows the conversation in this chat, if nothing of the
+     * shown room would be lost by that. Otherwise opens it like [reopenWithRoom].
+     */
+    private fun onConversationListPaneClick(token: String) {
+        if (token == roomToken) {
+            return
+        }
+        val fallback = roomSwitchFallback(
+            RoomSwitchContext(
+                isThread = conversationThreadId != null,
+                isRecording = chatViewModel.getVoiceRecordingInProgress.value == true ||
+                    chatViewModel.getVoiceRecordingLocked.value == true,
+                isInCall = CallActivity.active || !isNotInCall(),
+                isLeavingRoom = isLeavingRoom
+            )
+        )
+        if (fallback == null) {
+            switchRoomInPlace(token)
+        } else {
+            Log.d(TAG, "can not switch to the room in place ($fallback), reopening the chat")
+            reopenWithRoom(token, Bundle())
+        }
+    }
+
+    /**
+     * Shows the room [token] in this activity. The old room is left like in [leaveRoom], everything which is bound to
+     * it is dropped and the chat is set up again for the new room. The conversation list next to the chat stays as
+     * it is, so does the rest of the activity.
+     */
+    private fun switchRoomInPlace(token: String) {
+        logConversationInfos("switchRoomInPlace to $token")
+
+        // files picked for the old room must not be sent to the new one
+        dismissAttachmentPreview(supportFragmentManager)
+
+        // The input saves its draft when it is removed, which needs the view models of the old room.
+        supportFragmentManager.findFragmentById(R.id.fragment_container_activity_chat)?.let {
+            supportFragmentManager.commitNow(allowStateLoss = true) { remove(it) }
         }
 
-        onBackPressedDispatcher.addCallback(this, onBackPressedCallback)
+        // leaving the room does not pass onPause, so the read marker of the old room is sent here
+        updateRemoteLastReadMessageIfNeeded()
+
+        // no signaling message of the old room may reach the new room
+        webSocketInstance?.getSignalingMessageReceiver()?.removeListener(localParticipantMessageListener)
+        webSocketInstance?.getSignalingMessageReceiver()?.removeListener(conversationMessageListener)
+        // Its view models still run operations like edit or delete. They are cleared when the room is left, or
+        // after a timeout if leaving fails, as the callback is not called then.
+        val store = roomStore
+        val retired = store.retire()
+        if (retired != null) {
+            Handler(Looper.getMainLooper()).postDelayed(
+                { store.clearRetired(retired) },
+                RETIRED_STORE_TIMEOUT_MS
+            )
+        }
+        leaveRoom { retired?.let(store::clearRetired) }
+        // Nobody waits for the leave to finish, as the new room is independent of the old one.
+        isLeavingRoom = false
+
+        chatViewModel.leaveRoomViewState.removeObserver(leaveRoomObserver)
+        roomLifecycle.close()
+        resetRoomState()
+
+        roomToken = token
+        // The activity is recreated with its intent, so it has to show the new room and not any extra of the old one.
+        intent.replaceExtras(roomIntentExtras(token))
+
+        startRoomSession()
+        resumeRoom()
+    }
+
+    /**
+     * Drops all state of the shown room which is kept outside of its view models.
+     */
+    private fun resetRoomState() {
+        getRoomInfoTimerHandler?.removeCallbacksAndMessages(null)
+        disposables.dispose()
+        webSocketInstance = null
+        signalingMessageSender = null
+        externalSignalingServer = null
+        sessionIdAfterRoomJoined = null
+
+        typingParticipants.values.forEach { it.cancelTimer() }
+        typingParticipants.clear()
+        typingParticipantNames = emptyList()
+        mentionAutocomplete?.dismissPopup()
+
+        mediaController?.apply {
+            stop()
+            clearMediaItems()
+        }
+        stopProgressPolling()
+
+        pendingHighlightRetryJob?.cancel()
+        centerSelectedMessageJob?.cancel()
+        lastHandledHighlightNonce = null
+        pendingHighlightedMessageId = null
+        pendingScrollToNewestMessage = false
+        chatListState = null
+        chatListComposeScope = null
+
+        currentConversation = null
+        conversationThreadInfo = null
+        capabilitiesLoaded = false
+        chatApiVersion = 1
+        roomPassword = ""
+        hasScheduledMessages = false
+        myFirstMessage = null
+        openedViaNotification = false
+        startCallFromNotification = false
+        startCallFromRoomSwitch = false
+        focusInput = false
+        pullChatMessagesPending = false
+        lastMessageClickTime = 0L
+        lastMessageId = 0
+        sharedText = ""
+        sharedFilePaths = emptyList()
+        filesToUpload.clear()
+        pendingCameraUri = null
+        _participantPermissionsFlow.value = null
+
+        chatToolbarState = ChatToolbarState()
+        chatEmptyStateType.value = null
+        upcomingEventUiState.value = ChatViewModel.UpcomingEventUIState.None
+
+        binding.messagesListViewCompose.visibility = View.GONE
+        binding.chatEmptyStateComposeView.visibility = View.GONE
+        binding.conversationDeleteNoticeComposeView.visibility = View.GONE
+        binding.pinnedMessageContainer.visibility = View.GONE
+        binding.outOfOfficeComposeView.visibility = View.GONE
+        binding.voiceRecordingLock.visibility = View.GONE
+        binding.typingIndicatorComposeView.visibility = View.VISIBLE
+        binding.fragmentContainerActivityChat.visibility = View.VISIBLE
+        binding.genericComposeView.setContent {}
     }
 
     private fun setUpcomingEventContent() {
-        chatViewModel.upcomingEventViewState.observe(this) { state ->
-            if (state is ChatViewModel.UpcomingEventUIState.Error) {
-                Log.e(TAG, "Error fetching upcoming events", state.exception)
-            }
-            upcomingEventUiState.value = state
-        }
         binding.upcomingEventComposeView.setContent {
             MaterialTheme(colorScheme = viewThemeUtils.getColorScheme(this@ChatActivity)) {
                 val uiState = upcomingEventUiState.value
@@ -899,7 +1096,12 @@ class ChatActivity :
                 val participantPermissions by participantPermissionsFlow.collectAsStateWithLifecycle()
                 currentConversation = uiState.conversation
 
-                LaunchedEffect(uiState.isInLobby, uiState.conversation?.lobbyTimer, uiState.conversation?.description) {
+                LaunchedEffect(
+                    roomSession,
+                    uiState.isInLobby,
+                    uiState.conversation?.lobbyTimer,
+                    uiState.conversation?.description
+                ) {
                     if (uiState.isInLobby) {
                         binding.messagesListViewCompose.visibility = View.GONE
                         showLobbyView()
@@ -914,8 +1116,9 @@ class ChatActivity :
                     }
                 }
 
-                val listState = rememberLazyListState()
-                val composeScope = rememberCoroutineScope()
+                // Everything remembered for the list belongs to one room, so it starts over when the room switches.
+                val listState = key(roomToken) { rememberLazyListState() }
+                val composeScope = key(roomToken) { rememberCoroutineScope() }
                 SideEffect {
                     chatListState = listState
                     chatListComposeScope = composeScope
@@ -929,76 +1132,83 @@ class ChatActivity :
                 val uploadProgressMap by chatViewModel.uploadProgressMap.collectAsStateWithLifecycle()
                 val uploadedLocalPreviewMap by chatViewModel.uploadedLocalPreviewMap.collectAsStateWithLifecycle()
 
-                CompositionLocalProvider(
-                    LocalViewThemeUtils provides viewThemeUtils,
-                    LocalMessageUtils provides messageUtils,
-                    LocalOpenGraphFetcher provides { url -> chatViewModel.fetchOpenGraph(url) },
-                    LocalUploadProgressProvider provides { refId -> uploadProgressMap[refId] },
-                    LocalUploadedLocalPreviewProvider provides { refId -> uploadedLocalPreviewMap[refId] }
-                ) {
-                    val isOneToOneConversation = uiState.isOneToOneConversation
+                // everything remembered in here belongs to one room
+                key(roomToken) {
+                    CompositionLocalProvider(
+                        LocalViewThemeUtils provides viewThemeUtils,
+                        LocalMessageUtils provides messageUtils,
+                        LocalOpenGraphFetcher provides { url -> chatViewModel.fetchOpenGraph(url) },
+                        LocalUploadProgressProvider provides { refId -> uploadProgressMap[refId] },
+                        LocalUploadedLocalPreviewProvider provides { refId -> uploadedLocalPreviewMap[refId] }
+                    ) {
+                        val isOneToOneConversation = uiState.isOneToOneConversation
 
-                    // list of the file ids of messages being downloaded
-                    val downloadingFileState = remember { mutableStateOf(listOf<String>()) }
+                        // list of the file ids of messages being downloaded
+                        val downloadingFileState = remember { mutableStateOf(listOf<String>()) }
 
-                    // openWhenDownloaded is a derived boolean state of the visible chat message list on the condition
-                    // that if any of the messages that are present contain a fileId that is within downloadingFileState
-                    val openWhenDownloadState = remember { mutableStateOf(false) }
+                        // openWhenDownloaded is a derived boolean state of the visible chat message list on the
+                        // condition that if any of the messages that are present contain a fileId that is within
+                        // downloadingFileState
+                        val openWhenDownloadState = remember { mutableStateOf(false) }
 
-                    val visibleIds = listState.visibleItemsWithThreshold()
-                    LaunchedEffect(visibleIds, downloadingFileState.value) {
-                        openWhenDownloadState.value = (downloadingFileState.value.intersect(visibleIds).isNotEmpty())
-                    }
+                        val visibleIds = listState.visibleItemsWithThreshold()
+                        LaunchedEffect(visibleIds, downloadingFileState.value) {
+                            openWhenDownloadState.value =
+                                downloadingFileState.value.intersect(visibleIds).isNotEmpty()
+                        }
 
-                    val overflowHeightDp = with(LocalDensity.current) {
-                        overflowContainerHeightPx.intValue.toDp()
-                    }
-                    ChatView(
-                        state = ChatViewState(
-                            chatItems = uiState.items,
-                            isOneToOneConversation = isOneToOneConversation,
-                            conversationThreadId = conversationThreadId,
-                            chatMode = chatMode,
-                            highlightedMessageId = uiState.highlightedMessageId,
-                            highlightedSearchTerm = uiState.highlightedSearchTerm,
-                            markedAsUnreadByUser = uiState.markedAsUnreadByUser,
-                            hasChatPermission = participantPermissions?.hasChatPermission() == true,
-                            downloadingFileState = downloadingFileState.value,
-                            stickyHeaderTopOffset = overflowHeightDp
-                        ),
-                        callbacks = ChatViewCallbacks(
-                            onLoadMore = { messageId, direction -> loadMoreMessages(messageId, direction) },
-                            onJumpToBottom = { chatViewModel.switchToDefaultMode() },
-                            advanceLocalLastReadMessageIfNeeded = { advanceLocalLastReadMessageIfNeeded(it) },
-                            updateRemoteLastReadMessageIfNeeded = { updateRemoteLastReadMessageIfNeeded() },
-                            onLoadQuotedMessageClick = { messageId -> onLoadQuotedMessage(messageId) },
-                            messageCallbacks = ChatMessageCallbacks(
-                                onLongClick = { openMessageActionsDialog(it) },
-                                onSwipeReply = { handleSwipeToReply(it) },
-                                onFileClick = { downloadAndOpenFile(it, openWhenDownloadState, downloadingFileState) },
-                                onPollClick = { pollId, pollName -> openPollDialog(pollId, pollName) },
-                                onVoicePlayPauseClick = { onVoiceClick(it) },
-                                onVoiceSeek = { id, progress ->
-                                    mediaController?.let { controller ->
-                                        if (id.toString() == controller.currentMediaItem?.mediaId) {
-                                            val pos = controller.duration * progress / 100f
-                                            controller.seekTo(pos.toLong())
+                        val overflowHeightDp = with(LocalDensity.current) {
+                            overflowContainerHeightPx.intValue.toDp()
+                        }
+                        ChatView(
+                            state = ChatViewState(
+                                chatItems = uiState.items,
+                                isOneToOneConversation = isOneToOneConversation,
+                                conversationThreadId = conversationThreadId,
+                                chatMode = chatMode,
+                                highlightedMessageId = uiState.highlightedMessageId,
+                                highlightedSearchTerm = uiState.highlightedSearchTerm,
+                                markedAsUnreadByUser = uiState.markedAsUnreadByUser,
+                                hasChatPermission = participantPermissions?.hasChatPermission() == true,
+                                downloadingFileState = downloadingFileState.value,
+                                stickyHeaderTopOffset = overflowHeightDp
+                            ),
+                            callbacks = ChatViewCallbacks(
+                                onLoadMore = { messageId, direction -> loadMoreMessages(messageId, direction) },
+                                onJumpToBottom = { chatViewModel.switchToDefaultMode() },
+                                advanceLocalLastReadMessageIfNeeded = { advanceLocalLastReadMessageIfNeeded(it) },
+                                updateRemoteLastReadMessageIfNeeded = { updateRemoteLastReadMessageIfNeeded() },
+                                onLoadQuotedMessageClick = { messageId -> onLoadQuotedMessage(messageId) },
+                                messageCallbacks = ChatMessageCallbacks(
+                                    onLongClick = { openMessageActionsDialog(it) },
+                                    onSwipeReply = { handleSwipeToReply(it) },
+                                    onFileClick = {
+                                        downloadAndOpenFile(it, openWhenDownloadState, downloadingFileState)
+                                    },
+                                    onPollClick = { pollId, pollName -> openPollDialog(pollId, pollName) },
+                                    onVoicePlayPauseClick = { onVoiceClick(it) },
+                                    onVoiceSeek = { id, progress ->
+                                        mediaController?.let { controller ->
+                                            if (id.toString() == controller.currentMediaItem?.mediaId) {
+                                                val pos = controller.duration * progress / 100f
+                                                controller.seekTo(pos.toLong())
+                                            }
                                         }
-                                    }
-                                },
-                                onVoiceSpeedClick = { onVoiceSpeedClickCompose(it) },
-                                onReactionClick = { messageId, emoji -> handleReactionClick(messageId, emoji) },
-                                onReactionLongClick = { messageId -> openReactionsDialog(messageId) },
-                                onOpenThreadClick = { messageId -> openThread(messageId.toLong()) },
-                                onSystemMessageExpandClick = { messageId ->
-                                    chatViewModel.toggleSystemMessageCollapse(messageId)
-                                },
-                                onAvatarClick = { messageId -> chatViewModel.showProfileSheet(messageId.toLong()) },
-                                onCancelUpload = { referenceId -> chatViewModel.cancelUpload(referenceId) }
-                            )
-                        ),
-                        listState = listState
-                    )
+                                    },
+                                    onVoiceSpeedClick = { onVoiceSpeedClickCompose(it) },
+                                    onReactionClick = { messageId, emoji -> handleReactionClick(messageId, emoji) },
+                                    onReactionLongClick = { messageId -> openReactionsDialog(messageId) },
+                                    onOpenThreadClick = { messageId -> openThread(messageId.toLong()) },
+                                    onSystemMessageExpandClick = { messageId ->
+                                        chatViewModel.toggleSystemMessageCollapse(messageId)
+                                    },
+                                    onAvatarClick = { messageId -> chatViewModel.showProfileSheet(messageId.toLong()) },
+                                    onCancelUpload = { referenceId -> chatViewModel.cancelUpload(referenceId) }
+                                )
+                            ),
+                            listState = listState
+                        )
+                    }
                 }
 
                 val reactionsSheetMessageId by chatViewModel.reactionsSheetMessageId.collectAsStateWithLifecycle()
@@ -1362,9 +1572,12 @@ class ChatActivity :
     }
 
     private fun handleReactionClick(messageId: Int, emoji: String) {
+        val session = roomSession
         lifecycleScope.launch {
             val chatMessage = chatViewModel.getMessageById(messageId.toLong()).first()
-            onClickReaction(chatMessage, emoji)
+            if (session === roomSession) {
+                onClickReaction(chatMessage, emoji)
+            }
         }
     }
 
@@ -1449,7 +1662,6 @@ class ChatActivity :
         super.onStart()
         active = true
         this.lifecycle.addObserver(AudioUtils)
-        this.lifecycle.addObserver(chatViewModel)
 
         val sessionToken = SessionToken(this, ComponentName(this, VoiceMessageMediaService::class.java))
         val future = MediaController.Builder(this, sessionToken)
@@ -1484,6 +1696,7 @@ class ChatActivity :
 
     override fun onSaveInstanceState(outState: Bundle) {
         chatViewModel.handleOrientationChange()
+        outState.putString(STATE_ROOM_TOKEN, roomToken)
         super.onSaveInstanceState(outState)
     }
 
@@ -1491,7 +1704,6 @@ class ChatActivity :
         super.onStop()
         active = false
         this.lifecycle.removeObserver(AudioUtils)
-        this.lifecycle.removeObserver(chatViewModel)
 
         mediaController?.removeListener(playerListener)
         stopProgressPolling()
@@ -1513,7 +1725,14 @@ class ChatActivity :
 
         Log.d(TAG, "initObservers Called")
 
-        lifecycleScope.launch {
+        chatViewModel.upcomingEventViewState.observe(roomLifecycle) { state ->
+            if (state is ChatViewModel.UpcomingEventUIState.Error) {
+                Log.e(TAG, "Error fetching upcoming events", state.exception)
+            }
+            upcomingEventUiState.value = state
+        }
+
+        roomLifecycle.lifecycleScope.launch {
             chatViewModel.chatMode.collectLatest { mode ->
                 val inSearchMode = mode == ChatViewModel.ChatMode.SEARCH_MODE
                 updateToolbarForSearchMode(inSearchMode)
@@ -1523,7 +1742,7 @@ class ChatActivity :
             }
         }
 
-        lifecycleScope.launch {
+        roomLifecycle.lifecycleScope.launch {
             chatViewModel.searchUiState
                 .map {
                     SearchObserverState(
@@ -1546,13 +1765,13 @@ class ChatActivity :
                 }
         }
 
-        lifecycleScope.launch {
+        roomLifecycle.lifecycleScope.launch {
             chatViewModel.isLoadingFlow.collectLatest { isLoading ->
                 updateSearchLoadingIndicator(isLoading)
             }
         }
 
-        lifecycleScope.launch {
+        roomLifecycle.lifecycleScope.launch {
             chatViewModel.reactionFailures.collect { operation ->
                 val message = when (operation) {
                     ChatViewModel.ReactionOperation.ADD -> R.string.reaction_add_failed
@@ -1562,7 +1781,7 @@ class ChatActivity :
             }
         }
 
-        lifecycleScope.launch {
+        roomLifecycle.lifecycleScope.launch {
             chatViewModel.noMoreSearchResults.collect {
                 val inSearchMode = chatViewModel.chatMode.value == ChatViewModel.ChatMode.SEARCH_MODE
                 val now = System.currentTimeMillis()
@@ -1577,7 +1796,7 @@ class ChatActivity :
             }
         }
 
-        lifecycleScope.launch {
+        roomLifecycle.lifecycleScope.launch {
             chatViewModel.uiState.collectLatest { state ->
                 val nonce = state.highlightTriggerNonce
                 val messageId = state.highlightedMessageId
@@ -1604,11 +1823,12 @@ class ChatActivity :
             }
         }
 
-        chatViewModel.getCapabilitiesViewState.observe(this) { state ->
+        chatViewModel.getCapabilitiesViewState.observe(roomLifecycle) { state ->
             when (state) {
                 is ChatViewModel.GetCapabilitiesUpdateState -> {
                     if (currentConversation != null) {
                         spreedCapabilities = state.spreedCapabilities
+                        capabilitiesLoaded = true
                         chatApiVersion = ApiUtils.getChatApiVersion(spreedCapabilities, intArrayOf(1))
                         _participantPermissionsFlow.value =
                             ParticipantPermissions(spreedCapabilities, currentConversation!!)
@@ -1625,6 +1845,7 @@ class ChatActivity :
 
                 is ChatViewModel.GetCapabilitiesInitialLoadState -> {
                     spreedCapabilities = state.spreedCapabilities
+                    capabilitiesLoaded = true
                     currentConversation = state.conversationModel
                     chatApiVersion = ApiUtils.getChatApiVersion(spreedCapabilities, intArrayOf(1))
                     _participantPermissionsFlow.value =
@@ -1716,7 +1937,7 @@ class ChatActivity :
             }
         }
 
-        lifecycleScope.launch {
+        roomLifecycle.lifecycleScope.launch {
             chatViewModel.callEndedSystemMessage.collect { systemMessage ->
                 maybeShowCallEndedDeletionWarning(ConversationEnums.ObjectType.PHONE_TEMPORARY, systemMessage)
                 maybeShowCallEndedDeletionWarning(ConversationEnums.ObjectType.INSTANT_MEETING, systemMessage)
@@ -1724,7 +1945,7 @@ class ChatActivity :
             }
         }
 
-        chatViewModel.joinRoomViewState.observe(this) { state ->
+        chatViewModel.joinRoomViewState.observe(roomLifecycle) { state ->
             when (state) {
                 is ChatViewModel.JoinRoomSuccessState -> {
                     currentConversation = state.conversationModel
@@ -1760,7 +1981,7 @@ class ChatActivity :
 
         chatViewModel.leaveRoomViewState.observeForever(leaveRoomObserver)
 
-        messageInputViewModel.sendChatMessageViewState.observe(this) { state ->
+        messageInputViewModel.sendChatMessageViewState.observe(roomLifecycle) { state ->
             when (state) {
                 is MessageInputViewModel.SendChatMessageSuccessState -> {
                     myFirstMessage = state.message
@@ -1773,7 +1994,7 @@ class ChatActivity :
             }
         }
 
-        messageInputViewModel.scheduleChatMessageViewState.observe(this) { state ->
+        messageInputViewModel.scheduleChatMessageViewState.observe(roomLifecycle) { state ->
             when (state) {
                 is MessageInputViewModel.ScheduleChatMessageSuccessState -> {
                     val scheduledAt = state.scheduledAt
@@ -1798,7 +2019,7 @@ class ChatActivity :
             }
         }
 
-        chatViewModel.scheduledMessagesViewState.observe(this) { state ->
+        chatViewModel.scheduledMessagesViewState.observe(roomLifecycle) { state ->
             when (state) {
                 is ChatViewModel.ScheduledMessagesSuccessState -> {
                     hasScheduledMessages = state.messages.isNotEmpty()
@@ -1816,7 +2037,7 @@ class ChatActivity :
             }
         }
 
-        chatViewModel.deleteChatMessageViewState.observe(this) { state ->
+        chatViewModel.deleteChatMessageViewState.observe(roomLifecycle) { state ->
             when (state) {
                 is ChatViewModel.DeleteChatMessageSuccessState -> {
                     if (state.msg.ocs!!.meta!!.statusCode == HttpURLConnection.HTTP_ACCEPTED) {
@@ -1837,7 +2058,7 @@ class ChatActivity :
             }
         }
 
-        chatViewModel.createRoomViewState.observe(this) { state ->
+        chatViewModel.createRoomViewState.observe(roomLifecycle) { state ->
             when (state) {
                 is ChatViewModel.CreateRoomSuccessState -> {
                     val token = state.roomOverall.ocs!!.data!!.token
@@ -1858,12 +2079,12 @@ class ChatActivity :
             }
         }
 
-        this.lifecycleScope.launch {
+        roomLifecycle.lifecycleScope.launch {
             chatViewModel.mediaPlayerSeekbarObserver.onEach { msg ->
             }.collect()
         }
 
-        messageInputViewModel.editMessageViewState.observe(this) { state ->
+        messageInputViewModel.editMessageViewState.observe(roomLifecycle) { state ->
             when (state) {
                 is MessageInputViewModel.EditMessageSuccessState -> {
                     when (state.messageEdited.ocs?.meta?.statusCode) {
@@ -1902,7 +2123,7 @@ class ChatActivity :
             }
         }
 
-        chatViewModel.getVoiceRecordingLocked.observe(this) { showContiniousVoiceRecording ->
+        chatViewModel.getVoiceRecordingLocked.observe(roomLifecycle) { showContiniousVoiceRecording ->
             if (showContiniousVoiceRecording) {
                 binding.voiceRecordingLock.visibility = View.GONE
                 supportFragmentManager.commit {
@@ -1919,7 +2140,7 @@ class ChatActivity :
 
         // The observer also gets the current value when the activity is recreated: no feedback for that
         var lastRecordingInProgress = chatViewModel.getVoiceRecordingInProgress.value
-        chatViewModel.getVoiceRecordingInProgress.observe(this) { voiceRecordingInProgress ->
+        chatViewModel.getVoiceRecordingInProgress.observe(roomLifecycle) { voiceRecordingInProgress ->
             if (shouldVibrateOnRecordingChange(lastRecordingInProgress, voiceRecordingInProgress)) {
                 VibrationUtils.vibrateShort(context)
             }
@@ -1939,11 +2160,11 @@ class ChatActivity :
             }
         }
 
-        chatViewModel.recordTouchObserver.observe(this) { y ->
+        chatViewModel.recordTouchObserver.observe(roomLifecycle) { y ->
             binding.voiceRecordingLock.y -= y
         }
 
-        chatViewModel.unbindRoomResult.observe(this) { uiState ->
+        chatViewModel.unbindRoomResult.observe(roomLifecycle) { uiState ->
             when (uiState) {
                 is ChatViewModel.UnbindRoomUiState.Success -> {
                     binding.conversationDeleteNoticeComposeView.visibility = View.GONE
@@ -1969,7 +2190,7 @@ class ChatActivity :
             }
         }
 
-        chatViewModel.outOfOfficeViewState.observe(this) { uiState ->
+        chatViewModel.outOfOfficeViewState.observe(roomLifecycle) { uiState ->
             when (uiState) {
                 is ChatViewModel.OutOfOfficeUIState.Error -> {
                     Log.e(TAG, "Error fetching/ no user absence data", uiState.exception)
@@ -2001,7 +2222,7 @@ class ChatActivity :
             }
         }
 
-        this.lifecycleScope.launch {
+        roomLifecycle.lifecycleScope.launch {
             chatViewModel.threadRetrieveState.collect { uiState ->
                 when (uiState) {
                     ChatViewModel.ThreadRetrieveUiState.None -> {
@@ -2124,14 +2345,21 @@ class ChatActivity :
         // reset in case a previously started leave failed (success already resets this in leaveRoomObserver)
         isLeavingRoom = false
 
+        binding.let { viewThemeUtils.material.themeFAB(it.voiceRecordingLock) }
+
+        resumeRoom()
+    }
+
+    /**
+     * The part of resuming the chat which is bound to the shown room. Also used after switching to another room.
+     */
+    private fun resumeRoom() {
         webSocketInstance?.getSignalingMessageReceiver()?.addListener(localParticipantMessageListener)
         webSocketInstance?.getSignalingMessageReceiver()?.addListener(conversationMessageListener)
 
         cancelNotificationsForCurrentConversation()
 
         chatViewModel.getRoom(roomToken)
-
-        binding.let { viewThemeUtils.material.themeFAB(it.voiceRecordingLock) }
 
         updateToolbarState()
     }
@@ -2184,7 +2412,7 @@ class ChatActivity :
         val conversation = currentConversation
         val user = conversationUser
         val isOneToOne = isOneToOneConversation()
-        val capabilitiesReady = ::spreedCapabilities.isInitialized
+        val capabilitiesReady = capabilitiesLoaded
 
         val isClassified = conversation != null &&
             capabilitiesReady &&
@@ -2305,7 +2533,7 @@ class ChatActivity :
     private fun buildOverflowItems(): List<MenuItemData> {
         val items = mutableListOf<MenuItemData>()
         val isThread = isChatThread()
-        val capabilitiesReady = ::spreedCapabilities.isInitialized
+        val capabilitiesReady = capabilitiesLoaded
 
         if (isSearchAvailable(capabilitiesReady, currentConversation)) {
             items += MenuItemData(
@@ -2875,7 +3103,7 @@ class ChatActivity :
                 caption = if (i == files.size - 1) caption else "",
                 roomToken = roomToken,
                 replyToMessageId = getReplyToMessageId(),
-                displayName = currentConversation?.displayName!!,
+                displayName = currentConversation?.displayName.orEmpty(),
                 compressImages = compressImages,
                 uploadId = uploadId,
                 order = i + 1,
@@ -3094,9 +3322,7 @@ class ChatActivity :
         super.onDestroy()
         logConversationInfos("onDestroy")
 
-        if (::initialUser.isInitialized) {
-            chatViewModel.leaveRoomViewState.removeObserver(leaveRoomObserver)
-        }
+        roomSession?.chatViewModel?.leaveRoomViewState?.removeObserver(leaveRoomObserver)
 
         findViewById<View>(R.id.toolbar)?.setOnClickListener(null)
 
@@ -3313,7 +3539,7 @@ class ChatActivity :
     }
 
     private fun refreshScheduledMessages() {
-        if (!this::spreedCapabilities.isInitialized) {
+        if (!capabilitiesLoaded) {
             return
         }
         val scheduledMessagesUrl = if (isChatThread()) {
@@ -3634,15 +3860,22 @@ class ChatActivity :
 
     // just a temporary helper class to get ChatMessage by id. Should be improved after migrationto Compose
     private fun openMessageActionsDialog(messageId: Int) {
+        val session = roomSession
         this.lifecycleScope.launch {
             val chatMessage = chatViewModel.getMessageById(messageId.toLong()).first()
-            openMessageActionsDialog(chatMessage)
+            if (session === roomSession) {
+                openMessageActionsDialog(chatMessage)
+            }
         }
     }
 
     private fun handleSwipeToReply(messageId: Int) {
+        val session = roomSession
         lifecycleScope.launch {
             val chatMessage = chatViewModel.getMessageById(messageId.toLong()).first()
+            if (session !== roomSession) {
+                return@launch
+            }
             if (chatMessage.isThread && conversationThreadId == null) {
                 openThread(chatMessage)
             } else {
@@ -4233,11 +4466,7 @@ class ChatActivity :
                 ChatConversationListPane(
                     viewModel = conversationsListViewModel,
                     viewThemeUtils = viewThemeUtils,
-                    onConversationClick = {
-                        if (it.token != roomToken) {
-                            reopenWithRoom(it.token, Bundle())
-                        }
-                    }
+                    onConversationClick = { onConversationListPaneClick(it.token) }
                 )
             }
         }
@@ -4409,6 +4638,8 @@ class ChatActivity :
         private const val ROOM_TYPE_ONE_TO_ONE = "1"
         private const val ACTOR_TYPE = "users"
         const val CONVERSATION_INTERNAL_ID = "CONVERSATION_INTERNAL_ID"
+        private const val STATE_ROOM_TOKEN = "STATE_ROOM_TOKEN"
+        private const val RETIRED_STORE_TIMEOUT_MS = 60_000L
         const val NO_OFFLINE_MESSAGES_FOUND = "NO_OFFLINE_MESSAGES_FOUND"
         private const val NO_MORE_RESULTS_TOAST_THROTTLE_MS: Long = 2000
         const val VOICE_MESSAGE_CONTINUOUS_BEFORE = -5
