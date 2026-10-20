@@ -125,13 +125,16 @@ class SharedAttachmentShareUriTest {
 
     @Test
     fun logDescriptionHasNoFileNameAndNoUserId() {
-        val ownText = FileUtils.describeShareUriForLog(Uri.parse("content://7@$own/logs/secret-name.json"), own)
-        assertEquals("content://$own userInfo=true firstSegment=logs", ownText)
+        val ownText = FileUtils.describeShareUriForLog(Uri.parse("content://7@$own/logs/secret-name.json"))
+        assertEquals("content://$own userInfo=true", ownText)
 
-        val foreign = FileUtils.describeShareUriForLog(Uri.parse("content://media/external/Holiday.jpg"), own)
-        assertEquals("content://media userInfo=false firstSegment=-", foreign)
+        val single = FileUtils.describeShareUriForLog(Uri.parse("content://$own/secret-name.json?x=Holiday.jpg"))
+        assertEquals("content://$own userInfo=false", single)
 
-        assertEquals("none", FileUtils.describeShareUriForLog(null, own))
-        assertEquals("none://none userInfo=false firstSegment=-", FileUtils.describeShareUriForLog(Uri.EMPTY, own))
+        val foreign = FileUtils.describeShareUriForLog(Uri.parse("content://media/external/Holiday.jpg"))
+        assertEquals("content://media userInfo=false", foreign)
+
+        assertEquals("none", FileUtils.describeShareUriForLog(null))
+        assertEquals("none://none userInfo=false", FileUtils.describeShareUriForLog(Uri.EMPTY))
     }
 }
