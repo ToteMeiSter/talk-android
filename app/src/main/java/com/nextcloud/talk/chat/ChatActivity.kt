@@ -4408,6 +4408,7 @@ class ChatActivity :
         ids.mapNotNull { loadMessageOrNull(it.toLong()) }.sortedBy { it.jsonMessageId }
 
     private fun toggleMessageSelection(messageId: Int, message: ChatMessage? = null) {
+        val session = roomSession
         val selection = chatViewModel.messageSelection
         if (messageId in selection.ids.value) {
             selection.toggle(messageId, null)
@@ -4419,6 +4420,7 @@ class ChatActivity :
         }
         lifecycleScope.launch {
             val loaded = loadMessageOrNull(messageId.toLong()) ?: return@launch
+            if (session !== roomSession) return@launch
             addMessageToSelection(loaded)
         }
     }
