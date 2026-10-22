@@ -142,7 +142,7 @@ class MessageActionsStateTest {
         val selection = MessageSelection()
         // the menu entry calls this toggle with the id of its message (ChatActivity: onSelect)
         if (buildStateFor(msg).showSelect) {
-            selection.toggle(msg.jsonMessageId)
+            selection.toggle(msg.jsonMessageId, msg.message)
         }
         Assert.assertEquals(setOf(7), selection.ids.value)
         Assert.assertTrue(selection.isActive)

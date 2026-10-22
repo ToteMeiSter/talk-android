@@ -153,6 +153,7 @@ import com.nextcloud.talk.chat.ui.model.MessageTypeContent
 import com.nextcloud.talk.chat.viewmodels.ChatViewModel
 import com.nextcloud.talk.chat.viewmodels.MessageInputViewModel
 import com.nextcloud.talk.chat.viewmodels.ForwardOutcome
+import com.nextcloud.talk.chat.viewmodels.SelectionLimit
 import com.nextcloud.talk.chat.viewmodels.forwardedCaption
 import com.nextcloud.talk.chat.viewmodels.forwardedText
 import com.nextcloud.talk.chat.viewmodels.planForward
@@ -1244,7 +1245,7 @@ class ChatActivity :
                                 onLoadQuotedMessageClick = { messageId -> onLoadQuotedMessage(messageId) },
                                 messageCallbacks = ChatMessageCallbacks(
                                     onLongClick = { openMessageActionsDialog(it) },
-                                    onSelectionToggle = { chatViewModel.messageSelection.toggle(it) },
+                                    onSelectionToggle = { toggleMessageSelection(it) },
                                     onSwipeReply = { handleSwipeToReply(it) },
                                     onFileClick = {
                                         downloadAndOpenFile(it, openWhenDownloadState, downloadingFileState)
@@ -1341,7 +1342,7 @@ class ChatActivity :
                             onReply = { replyTo(msg) },
                             onReplyPrivately = { replyPrivately(msg) },
                             onOpenThread = { msg.threadId?.let { openThread(it) } },
-                            onSelect = { chatViewModel.messageSelection.toggle(msg.jsonMessageId) },
+                            onSelect = { toggleMessageSelection(msg.jsonMessageId, msg) },
                             onForward = { forwardMessage(msg) },
                             onEdit = { messageInputViewModel.edit(msg) },
                             onCopy = { copyMessage(msg) },
@@ -4405,6 +4406,36 @@ class ChatActivity :
 
     private suspend fun loadSelectedMessages(ids: Set<Int>): List<ChatMessage> =
         ids.mapNotNull { loadMessageOrNull(it.toLong()) }.sortedBy { it.jsonMessageId }
+
+    private fun toggleMessageSelection(messageId: Int, message: ChatMessage? = null) {
+        val selection = chatViewModel.messageSelection
+        if (messageId in selection.ids.value) {
+            selection.toggle(messageId, null)
+            return
+        }
+        if (message != null) {
+            addMessageToSelection(message)
+            return
+        }
+        lifecycleScope.launch {
+            val loaded = loadMessageOrNull(messageId.toLong()) ?: return@launch
+            addMessageToSelection(loaded)
+        }
+    }
+
+    private fun addMessageToSelection(message: ChatMessage) {
+        val text = if (actionsStateFor(message, true).showForward) {
+            forwardedText(message, forwardedFromNote(message))
+        } else {
+            null
+        }
+        val notice = when (chatViewModel.messageSelection.toggle(message.jsonMessageId, text)) {
+            SelectionLimit.MESSAGE_COUNT -> R.string.nc_chat_selection_message_limit
+            SelectionLimit.TEXT_LENGTH -> R.string.nc_chat_selection_text_limit
+            null -> return
+        }
+        Toast.makeText(this, notice, Toast.LENGTH_LONG).show()
+    }
 
     private fun forwardSelectedMessages() {
         val session = roomSession ?: return
