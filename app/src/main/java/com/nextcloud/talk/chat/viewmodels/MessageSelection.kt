@@ -31,6 +31,11 @@ class MessageSelection {
         _ids.value = emptySet()
     }
 
+    /** Drops the ids that are not in [existing] any more, e.g. a pending message replaced by its server copy. */
+    fun retainOnly(existing: Set<Int>) {
+        _ids.update { ids -> ids.filterTo(HashSet()) { it in existing } }
+    }
+
     /** Ends an active selection for the back action. Returns false, when there is none and back is not handled. */
     fun consumeBack(): Boolean {
         if (!isActive) {
@@ -76,3 +81,6 @@ fun forwardedText(message: ChatMessage, note: String): String? =
 
 /** The caption of a forwarded file: [note] on the first line, then the original [caption], if there is one. */
 fun forwardedCaption(note: String, caption: String): String = if (caption.isBlank()) note else "$note\n$caption"
+
+/** Whether a message with [messageId] can be selected. Pending messages have a negative id until the server answers. */
+fun isSelectableMessageId(messageId: Int): Boolean = messageId > 0
