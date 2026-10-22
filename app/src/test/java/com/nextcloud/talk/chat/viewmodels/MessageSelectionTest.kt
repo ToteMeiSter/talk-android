@@ -62,6 +62,34 @@ class MessageSelectionTest {
     fun `back without a selection is not handled`() {
         assertFalse(selection.consumeBack())
     }
+
+    @Test
+    fun `ids that left the chat are dropped from the selection`() {
+        selection.toggle(-3)
+        selection.toggle(7)
+        selection.toggle(8)
+
+        selection.retainOnly(setOf(7, 8, 9))
+        selection.retainOnly(setOf(7, 9))
+
+        assertEquals(setOf(7), selection.ids.value)
+    }
+
+    @Test
+    fun `dropping the last selected id ends the selection`() {
+        selection.toggle(-3)
+
+        selection.retainOnly(setOf(7))
+
+        assertFalse(selection.isActive)
+    }
+
+    @Test
+    fun `a pending message with a negative id cannot be selected`() {
+        assertFalse(isSelectableMessageId(-1))
+        assertFalse(isSelectableMessageId(0))
+        assertTrue(isSelectableMessageId(1))
+    }
 }
 
 class ForwardPlanTest {
