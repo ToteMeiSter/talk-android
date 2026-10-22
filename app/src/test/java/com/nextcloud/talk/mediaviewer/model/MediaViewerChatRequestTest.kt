@@ -31,6 +31,7 @@ class MediaViewerChatRequestTest {
             showReply = allowed,
             showReplyPrivately = false,
             showOpenThread = false,
+            showSelect = false,
             showForward = false,
             showForwardFile = allowed,
             canSendToConversation = allowed,

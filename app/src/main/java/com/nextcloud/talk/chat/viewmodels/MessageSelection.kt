@@ -84,3 +84,7 @@ fun forwardedCaption(note: String, caption: String): String = if (caption.isBlan
 
 /** Whether a message with [messageId] can be selected. Pending messages have a negative id until the server answers. */
 fun isSelectableMessageId(messageId: Int): Boolean = messageId > 0
+
+/** Whether a message can be selected: not a system or deleted one, and not pending. Used by the row and the menu. */
+fun isSelectableMessage(isSystemMessage: Boolean, isDeleted: Boolean, messageId: Int): Boolean =
+    !isSystemMessage && !isDeleted && isSelectableMessageId(messageId)

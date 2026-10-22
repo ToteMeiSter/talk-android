@@ -1341,6 +1341,7 @@ class ChatActivity :
                             onReply = { replyTo(msg) },
                             onReplyPrivately = { replyPrivately(msg) },
                             onOpenThread = { msg.threadId?.let { openThread(it) } },
+                            onSelect = { chatViewModel.messageSelection.toggle(msg.jsonMessageId) },
                             onForward = { forwardMessage(msg) },
                             onEdit = { messageInputViewModel.edit(msg) },
                             onCopy = { copyMessage(msg) },

@@ -37,6 +37,7 @@ class MediaViewerActionsTest {
             showReply = true,
             showReplyPrivately = false,
             showOpenThread = false,
+            showSelect = false,
             showForward = false,
             showForwardFile = true,
             canSendToConversation = true,
