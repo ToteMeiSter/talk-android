@@ -6,34 +6,69 @@
  */
 package com.nextcloud.talk.jobs
 
+import android.app.Application
+import com.nextcloud.talk.api.NcApi
 import io.reactivex.Observable
-import io.reactivex.disposables.Disposables
+import mockwebserver3.MockResponse
+import mockwebserver3.MockWebServer
+import org.junit.After
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
+import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.annotation.Config
+import retrofit2.HttpException
+import retrofit2.Retrofit
+import retrofit2.adapter.rxjava2.RxJava2CallAdapterFactory
 
+@RunWith(RobolectricTestRunner::class)
+@Config(application = Application::class, sdk = [33])
 class AccountRemovalWorkerTest {
 
+    private val server = MockWebServer()
+    private lateinit var ncApi: NcApi
+
+    @Before
+    fun setUp() {
+        server.start()
+        ncApi = Retrofit.Builder()
+            .baseUrl(server.url("/"))
+            .addCallAdapterFactory(RxJava2CallAdapterFactory.create())
+            .build()
+            .create(NcApi::class.java)
+    }
+
+    @After
+    fun tearDown() {
+        server.close()
+    }
+
     @Test
-    fun aSuccessfulRequestWithANullBodyIsRecognizedAsSuccess() {
+    fun `a successful request with an empty body is recognized as success`() {
         // The push proxy answers without a body, Retrofit emits null.
-        val request = Observable.unsafeCreate<Void> { observer ->
-            observer.onSubscribe(Disposables.empty())
-            observer.onNext(unsafeNull())
-            observer.onComplete()
-        }
+        server.enqueue(MockResponse())
+
+        val request = ncApi.unregisterDeviceForNotificationsWithProxy(server.url("/devices").toString(), emptyMap())
 
         assertNull(AccountRemovalWorker.awaitCompletion(request))
     }
 
     @Test
-    fun aFailedRequestReturnsItsError() {
+    fun `a failed request returns its error`() {
+        server.enqueue(MockResponse(code = 500))
+
+        val request = ncApi.unregisterDeviceForNotificationsWithProxy(server.url("/devices").toString(), emptyMap())
+
+        assertTrue(AccountRemovalWorker.awaitCompletion(request) is HttpException)
+    }
+
+    @Test
+    fun `a failed request retains its original error`() {
         val error = RuntimeException("proxy unreachable")
 
         assertSame(error, AccountRemovalWorker.awaitCompletion(Observable.error<Void>(error)))
     }
-
-    // Kotlin refuses a literal null for the non-null RxJava parameter; the erased generic cast lets it through.
-    @Suppress("UNCHECKED_CAST")
-    private fun <T> unsafeNull(): T = null as T
 }
