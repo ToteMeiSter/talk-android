@@ -23,5 +23,6 @@ data class ChatToolbarCallbacks(
     val onEventMenu: () -> Unit = {},
     val onSelectionClose: () -> Unit = {},
     val onSelectionForward: () -> Unit = {},
-    val onSelectionCopy: () -> Unit = {}
+    val onSelectionCopy: () -> Unit = {},
+    val onSelectionDelete: () -> Unit = {}
 )

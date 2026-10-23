@@ -129,6 +129,7 @@ import com.nextcloud.talk.chat.viewmodels.ChatViewModel
 import com.nextcloud.talk.chat.viewmodels.MessageInputViewModel
 import com.nextcloud.talk.chat.viewmodels.ForwardOutcome
 import com.nextcloud.talk.chat.viewmodels.SelectionLimit
+import com.nextcloud.talk.chat.viewmodels.canDeleteSelected
 import com.nextcloud.talk.chat.viewmodels.forwardedTextOrNull
 import com.nextcloud.talk.chat.viewmodels.loadSelected
 import com.nextcloud.talk.chat.viewmodels.planForward
@@ -1833,6 +1834,19 @@ class ChatActivity :
                     }
                 }
 
+                is ChatViewModel.DeleteChatMessagesPartialState -> {
+                    logger.e(TAG, "Failed to delete ${state.outcome.failed.size} chat messages")
+                    Snackbar.make(
+                        binding.root,
+                        getString(
+                            R.string.nc_chat_delete_selected_failed,
+                            state.outcome.failed.size,
+                            state.outcome.requested.size
+                        ),
+                        Snackbar.LENGTH_LONG
+                    ).show()
+                }
+
                 is ChatViewModel.DeleteChatMessageErrorState -> {
                     logger.e(TAG, "Failed to delete chat message")
                     Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
@@ -2151,15 +2165,23 @@ class ChatActivity :
                             actionsStateFor(it, networkMonitor.isOnline.value).showForward
                         }
                     }
+                    val canDeleteSelection by produceState(false, selectedMessageIds) {
+                        value = canDeleteSelected(
+                            selectedMessageIds.size,
+                            loadSelectedMessages(selectedMessageIds)
+                        ) { actionsStateFor(it, networkMonitor.isOnline.value).showDelete }
+                    }
                     ChatToolbar(
                         state = chatToolbarState.copy(
                             selectedCount = selectedMessageIds.size,
-                            canForwardSelection = canForwardSelection
+                            canForwardSelection = canForwardSelection,
+                            canDeleteSelection = canDeleteSelection
                         ),
                         callbacks = ChatToolbarCallbacks(
                             onSelectionClose = { chatViewModel.messageSelection.clear() },
                             onSelectionForward = { forwardSelectedMessages() },
                             onSelectionCopy = { copySelectedMessages() },
+                            onSelectionDelete = { confirmDeleteSelectedMessages() },
                             onNavigateUp = { onBackPressedDispatcher.onBackPressed() },
                             onTitleClick = { showConversationInfoScreen() },
                             onVoiceCall = { startACall(true, false) },
@@ -3628,20 +3650,40 @@ class ChatActivity :
             )
             Snackbar.make(binding.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
         } else {
-            // FIXME Fix API checking with guests?
-            val apiVersion = ApiUtils.getChatApiVersion(spreedCapabilities, intArrayOf(1))
-
-            val urlsByMessageId = chatViewModel.messageIdsToDelete(message.jsonMessageId).associateWith { id ->
-                ApiUtils.getUrlForChatMessage(
-                    apiVersion,
-                    conversationUser.baseUrl!!,
-                    roomToken,
-                    id.toString()
-                )
-            }
-
-            chatViewModel.deleteChatMessages(credentials!!, urlsByMessageId)
+            deleteMessageIds(chatViewModel.messageIdsToDelete(message.jsonMessageId))
         }
+    }
+
+    private fun deleteMessageIds(messageIds: Collection<Int>) {
+        // FIXME Fix API checking with guests?
+        val apiVersion = ApiUtils.getChatApiVersion(spreedCapabilities, intArrayOf(1))
+
+        val urlsByMessageId = messageIds.associateWith { id ->
+            ApiUtils.getUrlForChatMessage(
+                apiVersion,
+                conversationUser.baseUrl!!,
+                roomToken,
+                id.toString()
+            )
+        }
+
+        chatViewModel.deleteChatMessages(credentials!!, urlsByMessageId)
+    }
+
+    private fun confirmDeleteSelectedMessages() {
+        val messageIds = chatViewModel.messageSelection.ids.value
+            .flatMap { chatViewModel.messageIdsToDelete(it) }
+            .distinct()
+        if (messageIds.isEmpty()) {
+            return
+        }
+        MaterialAlertDialogBuilder(this)
+            .setMessage(
+                resources.getQuantityString(R.plurals.nc_chat_delete_selected, messageIds.size, messageIds.size)
+            )
+            .setPositiveButton(R.string.nc_delete) { _, _ -> deleteMessageIds(messageIds) }
+            .setNegativeButton(R.string.nc_cancel, null)
+            .show()
     }
 
     fun replyPrivately(message: ChatMessage?) {
