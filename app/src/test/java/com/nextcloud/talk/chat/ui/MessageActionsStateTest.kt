@@ -8,6 +8,7 @@ package com.nextcloud.talk.chat.ui
 
 import com.nextcloud.talk.chat.data.model.ChatMessage
 import com.nextcloud.talk.chat.viewmodels.MessageSelection
+import com.nextcloud.talk.chat.viewmodels.canDeleteSelected
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.models.json.capabilities.SpreedCapabilityDto
 import com.nextcloud.talk.utils.DateUtils
@@ -112,4 +113,39 @@ class MessageActionsStateTest {
         Assert.assertEquals(setOf(7), selection.ids.value)
         Assert.assertTrue(selection.isActive)
     }
+
+    private fun deleteStateFor(message: ChatMessage) =
+        buildMessageActionsState(
+            message = message,
+            user = User().apply { userId = "alice" },
+            conversation = null,
+            hasChatPermission = true,
+            hasReactPermission = true,
+            spreedCapabilities = SpreedCapabilityDto().apply { features = listOf("delete-messages") },
+            isOnline = true,
+            dateUtils = dateUtils,
+            conversationThreadId = null
+        )
+
+    private fun deletableCandidate(id: Int, actor: String) =
+        ChatMessage(
+            jsonMessageId = id,
+            actorId = actor,
+            timestamp = System.currentTimeMillis() / MILLIS_PER_SECOND,
+            message = "Hello",
+            systemMessageType = ChatMessage.SystemMessageType.DUMMY
+        )
+
+    @Test
+    fun deleteSelection_offeredOnlyWhenEveryMessageHasTheDeleteEntry() {
+        val own = deletableCandidate(1, "alice")
+        val foreign = deletableCandidate(2, "bob")
+
+        Assert.assertTrue(deleteStateFor(own).showDelete)
+        Assert.assertFalse(deleteStateFor(foreign).showDelete)
+        Assert.assertTrue(canDeleteSelected(1, listOf(own)) { deleteStateFor(it).showDelete })
+        Assert.assertFalse(canDeleteSelected(2, listOf(own, foreign)) { deleteStateFor(it).showDelete })
+    }
 }
+
+private const val MILLIS_PER_SECOND = 1000L

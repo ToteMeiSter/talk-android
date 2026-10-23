@@ -651,6 +651,7 @@ class ChatViewModel @AssistedInject constructor(
     object DeleteChatMessageStartState : ViewState
     class DeleteChatMessageSuccessState(val msg: ChatOverallSingleMessage) : ViewState
     object DeleteChatMessageErrorState : ViewState
+    class DeleteChatMessagesPartialState(val outcome: DeleteOutcome) : ViewState
 
     private val _deleteChatMessageViewState: MutableLiveData<ViewState> = MutableLiveData(DeleteChatMessageStartState)
     val deleteChatMessageViewState: LiveData<ViewState>
@@ -2086,8 +2087,18 @@ class ChatViewModel @AssistedInject constructor(
                 }
             }.awaitAll()
 
-            if (results.any { it.isFailure }) {
-                _deleteChatMessageViewState.value = DeleteChatMessageErrorState
+            val outcome = DeleteOutcome(
+                requested = urlsByMessageId.keys,
+                failed = urlsByMessageId.keys.filterIndexedTo(HashSet()) { index, _ -> results[index].isFailure }
+            )
+            messageSelection.remove(outcome.deleted)
+
+            if (outcome.failed.isNotEmpty()) {
+                _deleteChatMessageViewState.value = if (outcome.isPartialFailure) {
+                    DeleteChatMessagesPartialState(outcome)
+                } else {
+                    DeleteChatMessageErrorState
+                }
                 return@launch
             }
 

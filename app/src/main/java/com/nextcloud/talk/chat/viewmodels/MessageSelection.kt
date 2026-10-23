@@ -67,6 +67,12 @@ class MessageSelection {
         _ids.update { ids -> ids.filterTo(HashSet()) { it in existing } }
     }
 
+    /** Drops [ids] from the selection, e.g. the messages that were deleted. Ends the selection when none is left. */
+    fun remove(ids: Set<Int>) {
+        forwardTextLengths.keys.removeAll(ids)
+        _ids.update { it - ids }
+    }
+
     /** Ends an active selection for the back action. Returns false, when there is none and back is not handled. */
     fun consumeBack(): Boolean {
         if (!isActive) {
@@ -128,3 +134,21 @@ suspend fun <T> loadSelected(
             null
         }
     }
+
+/**
+ * Whether the delete action is offered for a selection of [selectedCount] messages: only when every one of them was
+ * loaded and [canDelete] (the rule of the single message menu) allows it for each. One message that cannot be deleted
+ * hides the action instead of silently leaving it out.
+ */
+fun canDeleteSelected(selectedCount: Int, messages: List<ChatMessage>, canDelete: (ChatMessage) -> Boolean): Boolean =
+    messages.isNotEmpty() && messages.size == selectedCount && messages.all(canDelete)
+
+/** What a delete of [requested] message ids did. The server deletes one message per request, so some can fail. */
+data class DeleteOutcome(val requested: Set<Int>, val failed: Set<Int>) {
+    val deleted: Set<Int>
+        get() = requested - failed
+
+    /** Some, not all, requested messages could not be deleted: the user is told how many. */
+    val isPartialFailure: Boolean
+        get() = failed.isNotEmpty() && requested.size > 1
+}
