@@ -7,11 +7,13 @@
 package com.nextcloud.talk.jobs
 
 import android.os.Bundle
+import com.nextcloud.talk.activities.CallStatus
 import com.nextcloud.talk.models.domain.ConversationModel
 import com.nextcloud.talk.models.json.capabilities.SpreedCapabilityDto
 import com.nextcloud.talk.models.json.conversations.ConversationEnums
 import com.nextcloud.talk.models.json.participants.ParticipantDto
 import com.nextcloud.talk.utils.ConversationUtils
+import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.ParticipantPermissions
 import com.nextcloud.talk.utils.bundle.BundleKeys
 
@@ -88,9 +90,32 @@ object CallPushPayload {
      */
     fun stateOfStalePush(hasCall: Boolean?): CallState = if (hasCall == true) CallState.RING else CallState.MISSED
 
-    /** Whether the call starts with the camera on: only when it is not answered as a voice call. */
-    fun startsWithCamera(voiceOnly: Boolean, cameraPermissionGranted: Boolean): Boolean =
-        !voiceOnly && cameraPermissionGranted
+    /**
+     * Whether the call screen is in a call that the others see us in. It is not after the ring time ran out
+     * ([CallStatus.CALLING_TIMEOUT], the call is left) or when the call ends: a call of the other side to the same
+     * room is then a new call and rings. Dialling again by hand puts the status back.
+     */
+    fun holdsCall(status: CallStatus): Boolean = status != CallStatus.CALLING_TIMEOUT && status != CallStatus.LEAVING
+
+    /**
+     * How old the ringing call is at [sinceArrivalMs] after the push reached the device: the time the push took
+     * (`sentTime` against `arrivalTime`, both 0 or unknown count as no delay) plus the time since.
+     */
+    fun ringAgeMs(sentTime: Long, arrivalTime: Long, sinceArrivalMs: Long): Long {
+        val maxTravel = NotificationUtils.CALL_NOTIFICATION_TIMEOUT_MS
+        val travel = if (sentTime > 0L) (arrivalTime - sentTime).coerceIn(0L, maxTravel) else 0L
+        return travel + sinceArrivalMs
+    }
+
+    /**
+     * The timeout of the call notification (and with it of the window of the incoming call, which closes with the
+     * notification) when it is posted [ringAgeMs] after the push: every post of the notification starts a timeout
+     * of its own, so what is left of the 55 s is set, not the whole time again.
+     */
+    fun notificationTimeoutMs(ringAgeMs: Long): Long =
+        (NotificationUtils.CALL_NOTIFICATION_TIMEOUT_MS - ringAgeMs).coerceAtLeast(MIN_NOTIFICATION_TIMEOUT_MS)
+
+    private const val MIN_NOTIFICATION_TIMEOUT_MS = 1_000L
 
     /** What the call screen knows about the kind of the call. */
     enum class CallType(val showsVoiceButton: Boolean, val showsVideoButton: Boolean) {

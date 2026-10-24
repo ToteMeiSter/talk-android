@@ -289,11 +289,14 @@ object NotificationUtils {
      * polls for 50 s (10 x 5 s) plus one request and then shows the "missed call". If the system removes the
      * notification earlier, that "missed call" is not shown. A poll that outlives the timeout (slow requests on a bad
      * network, no per-request limit) therefore ends the ring silently.
+     *
+     * [timeoutMs] is what is left of [CALL_NOTIFICATION_TIMEOUT_MS] when the notification is posted again.
      */
     fun applyCallDismissal(
         builder: NotificationCompat.Builder,
         userId: Long,
-        serverNotificationId: Long?
+        serverNotificationId: Long?,
+        timeoutMs: Long = CALL_NOTIFICATION_TIMEOUT_MS
     ): NotificationCompat.Builder =
         builder
             .addExtras(
@@ -302,7 +305,7 @@ object NotificationUtils {
                     serverNotificationId?.let { putLong(BundleKeys.KEY_NOTIFICATION_ID, it) }
                 }
             )
-            .setTimeoutAfter(CALL_NOTIFICATION_TIMEOUT_MS)
+            .setTimeoutAfter(timeoutMs)
 
     fun cancelAllNotificationsForAccount(context: Context?, conversationUser: User) {
         val cancelled = mutableListOf<Int>()

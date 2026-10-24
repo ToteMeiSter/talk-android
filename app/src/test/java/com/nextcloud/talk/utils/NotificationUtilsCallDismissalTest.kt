@@ -77,6 +77,21 @@ class NotificationUtilsCallDismissalTest {
     }
 
     @Test
+    fun callNotificationPostedLaterTimesOutAtTheSameMomentAsTheFirstOne() {
+        val call = CallPushPayload.IncomingCall.fromPush(ROOM_TOKEN, DISPLAY_NAME).copy(callFlag = CALL_FLAG)
+        val notification = NotificationUtils.applyCallDismissal(
+            NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(android.R.drawable.sym_call_incoming)
+                .addExtras(call.toNotificationExtras(USER_ID, SYSTEM_ID)),
+            USER_ID,
+            SERVER_ID,
+            CallPushPayload.notificationTimeoutMs(40_000L)
+        ).build()
+
+        assertEquals(15_000L, notification.timeoutAfter)
+    }
+
+    @Test
     fun callStopsRingingByItselfAfterTheTimeout() {
         val notification = callNotification(USER_ID, SERVER_ID)
 

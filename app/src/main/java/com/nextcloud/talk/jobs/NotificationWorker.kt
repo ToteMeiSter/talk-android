@@ -550,6 +550,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         // During a call the incoming call must not take the screen over and must not ring in a loop over the
         // voices of the call: a heads-up with Answer / Decline and one short sound and vibration
         val duringCall = CallActivity.activeCall != null
+        // every post starts a timeout of its own: set what is left of the 55 s since the push, not all of it again
+        val ringTimeoutMs = CallPushPayload.notificationTimeoutMs(ringAgeMs())
         logger.d(TAG, "incoming call notification, duringCall=$duringCall")
         val notificationChannelId = NotificationUtils.incomingCallChannel(duringCall).name
         val uri = user.baseUrl!!.toUri()
@@ -574,7 +576,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             NotificationUtils.applyCallDismissal(
                 NotificationCompat.Builder(applicationContext, notificationChannelId),
                 user.id!!,
-                pushMessage.notificationId
+                pushMessage.notificationId,
+                ringTimeoutMs
             )
                 .setPriority(NotificationCompat.PRIORITY_HIGH)
                 .setCategory(NotificationCompat.CATEGORY_CALL)
@@ -595,7 +598,6 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             notificationBuilder
                 .setContentText(callerPerson.name)
                 .setVibrate(longArrayOf(0, VIBRATION_ON_MS, VIBRATION_PAUSE_MS, VIBRATION_ON_MS))
-                .setTimeoutAfter(NotificationUtils.CALL_NOTIFICATION_TIMEOUT_MS)
                 .addAction(
                     R.drawable.ic_call_end_white_24px,
                     applicationContext.getString(R.string.nc_call_notification_decline),
@@ -626,6 +628,14 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         sendNotification(pushMessage.timestamp.toInt(), notification)
         logFullNotificationShown()
     }
+
+    /** How long the call has been ringing: the way of the push plus the time since stage 1 took it. */
+    private fun ringAgeMs(): Long =
+        CallPushPayload.ringAgeMs(
+            sentTime = inputData.getLong(BundleKeys.KEY_NOTIFICATION_PUSH_SENT_TIME, 0L),
+            arrivalTime = pushMessage.timestamp,
+            sinceArrivalMs = (System.currentTimeMillis() - pushMessage.timestamp).coerceAtLeast(0L)
+        )
 
     /**
      * Loads the room of a call push. The network may come up late after the push woke the device (Doze, microG),
@@ -1584,8 +1594,9 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         )
 
         var isCallNotificationVisible = true
-        val pollStartedAt = SystemClock.elapsedRealtime()
-        fun pollElapsed() = SystemClock.elapsedRealtime() - pollStartedAt
+
+        // the poll window counts from the push, as the timeout of the notification does
+        fun pollElapsed() = ringAgeMs()
 
         ncApi.getPeersForCall(
             credentials,
