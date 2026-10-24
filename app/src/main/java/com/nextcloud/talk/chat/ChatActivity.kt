@@ -665,6 +665,13 @@ class ChatActivity :
 
         chatAudioPlayer = ChatAudioPlayer(this, chatAudioStore, lifecycleScope)
         lifecycle.addObserver(chatAudioPlayer)
+        // once per activity: initObservers() runs for every room switched in place, and each run would add a
+        // collector that shows the same error again
+        chatAudioPlayer.state
+            .map { it.currentKey to it.error }
+            .distinctUntilChanged()
+            .onEach { (_, error) -> error?.let { showAudioError(it) } }
+            .launchIn(lifecycleScope)
 
         binding = ActivityChatBinding.inflate(layoutInflater)
         setContentView(
@@ -2066,12 +2073,6 @@ class ChatActivity :
                 else -> {}
             }
         }
-
-        chatAudioPlayer.state
-            .map { it.currentKey to it.error }
-            .distinctUntilChanged()
-            .onEach { (_, error) -> error?.let { showAudioError(it) } }
-            .launchIn(lifecycleScope)
 
         messageInputViewModel.editMessageViewState.observe(roomLifecycle) { state ->
             when (state) {
