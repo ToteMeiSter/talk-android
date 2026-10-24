@@ -30,13 +30,25 @@ internal object CallRecoveryPolicy {
         DEFER,
 
         /** The connection is fine. */
-        KEEP
+        KEEP,
+
+        /** A rejoin is already on its way (pause or join): its result is waited for, no second one starts. */
+        IGNORE
     }
 
     const val RECHECK_DELAY_MILLIS = 3_000L
     const val MAX_RECHECKS = 3
 
-    fun onIceFailed(interrupted: Boolean): Action = if (interrupted) Action.DEFER else Action.REJOIN
+    /**
+     * @param rejoinInProgress an earlier failure started a rejoin which is not through yet. A late failure of the
+     *  connection that was already replaced must not start another one on top of it.
+     */
+    fun onIceFailed(interrupted: Boolean, rejoinInProgress: Boolean = false): Action =
+        when {
+            interrupted -> Action.DEFER
+            rejoinInProgress -> Action.IGNORE
+            else -> Action.REJOIN
+        }
 
     fun onNetworkSwitched(interrupted: Boolean, publisher: IceConnectionState?): Action =
         when {

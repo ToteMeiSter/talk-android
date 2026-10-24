@@ -413,8 +413,19 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         // the age is the phone clock against the FCM time: a clock that runs ahead must not drop a live call
         val stale = CallPushPayload.isStale(sentTime, pushMessage.timestamp)
         val shown = when (
-            CallPushPayload.stage1Action(stale, CapabilitiesUtil.isCallEndToEndEncryptionEnabled(capabilities))
+            CallPushPayload.stage1Action(
+                stale,
+                CapabilitiesUtil.isCallEndToEndEncryptionEnabled(capabilities),
+                CallPushPayload.isOwnCall(CallActivity.activeCall, user.id, roomToken)
+            )
         ) {
+            CallPushPayload.Stage1Action.OWN_CALL -> {
+                // the user is in this call: the push comes from a rejoin of the other side, not a new call
+                Log.d(TAG, "Call push for the call the user is in, not ringing")
+                removeNotification(pushMessage.timestamp.toInt())
+                null
+            }
+
             CallPushPayload.Stage1Action.END_TO_END_ENCRYPTED -> {
                 showEndToEndEncryptionUnsupportedNotification(pushedCall.displayName, roomToken)
                 null
@@ -513,7 +524,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
         val isVideoCall = call.isVideoCall
 
-        val answerBundle = Bundle(bundle).apply { putBoolean(BundleKeys.KEY_CALL_VOICE_ONLY, !isVideoCall) }
+        val answerBundle = call.toAnswerBundle(user.id!!, pushMessage.timestamp.toInt())
         val answerPendingIntentOffset =
             if (isVideoCall) ANSWER_VIDEO_REQUEST_OFFSET else ANSWER_VOICE_REQUEST_OFFSET
         val primaryAnswerIntent = PendingIntent.getActivity(
@@ -538,7 +549,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         val soundUri = getCallRingtoneUri(applicationContext, appPreferences)
         // During a call the incoming call must not take the screen over and must not ring in a loop over the
         // voices of the call: a heads-up with Answer / Decline and one short sound and vibration
-        val duringCall = CallActivity.callInProgress
+        val duringCall = CallActivity.activeCall != null
         logger.d(TAG, "incoming call notification, duringCall=$duringCall")
         val notificationChannelId = NotificationUtils.incomingCallChannel(duringCall).name
         val uri = user.baseUrl!!.toUri()

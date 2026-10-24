@@ -91,7 +91,7 @@ class CallPushRetryPolicyTest {
         assertEquals(PollFailureOutcome.RETRY, CallPushRetryPolicy.pollFailureOutcome(UnknownHostException(), 0))
         assertEquals(
             PollFailureOutcome.RETRY,
-            CallPushRetryPolicy.pollFailureOutcome(SSLException("Read error"), 59_999)
+            CallPushRetryPolicy.pollFailureOutcome(SSLException("Read error"), CallPushRetryPolicy.POLL_WINDOW_MS - 1)
         )
     }
 
@@ -260,16 +260,17 @@ class CallPushRetryPolicyTest {
         run.advanceTo(100_000)
         assertTrue(run.completed)
         assertEquals(null, run.error)
-        assertTrue(run.values.size >= 10)
+        assertTrue(run.values.size >= 8)
     }
 
     @Test
     fun persistentPollErrorEndsAtWindowAsExhausted() {
         val run = PollRun()
         run.start { Observable.error(UnknownHostException()) }
-        run.advanceTo(59_999)
+        run.advanceTo(CallPushRetryPolicy.POLL_WINDOW_MS - 1)
         assertEquals(null, run.error)
-        run.advanceTo(60_000)
+        // the last retry is started inside the window and fails after it
+        run.advanceTo(CallPushRetryPolicy.POLL_WINDOW_MS + CallPushRetryPolicy.RETRY_DELAY_MS)
         val e = run.error!!
         assertEquals(
             CallPushRetryPolicy.PollFailureOutcome.WINDOW_EXHAUSTED,
@@ -306,8 +307,8 @@ class CallPushRetryPolicyTest {
         run.start { n -> Observable.just(n) }
         run.advanceTo(200_000)
         assertTrue(run.completed)
-        // polls every 5 s, nothing after the 60 s window
-        assertTrue(run.values.size in 12..13)
+        // polls every 5 s, nothing after the 50 s window
+        assertTrue(run.values.size in 10..11)
     }
 
     @Test

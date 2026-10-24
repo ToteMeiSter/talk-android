@@ -61,12 +61,23 @@ object CallPushPayload {
         ASK_SERVER,
 
         /** The calls are end-to-end encrypted, which the app cannot answer: own notification, no stage 2. */
-        END_TO_END_ENCRYPTED
+        END_TO_END_ENCRYPTED,
+
+        /** The user is in this very call already: nothing rings, no stage 2. */
+        OWN_CALL
     }
 
-    fun stage1Action(stale: Boolean, endToEndEncrypted: Boolean): Stage1Action =
+    /** The call this process is in: the room token alone is not enough, the same room exists on every account. */
+    data class ActiveCall(val userId: Long, val roomToken: String)
+
+    /** A call push for the room the user is in already, on the same account. A call of another room still rings. */
+    fun isOwnCall(active: ActiveCall?, userId: Long?, roomToken: String?): Boolean =
+        active != null && active.userId == userId && active.roomToken == roomToken
+
+    fun stage1Action(stale: Boolean, endToEndEncrypted: Boolean, ownCall: Boolean = false): Stage1Action =
         when {
             endToEndEncrypted -> Stage1Action.END_TO_END_ENCRYPTED
+            ownCall -> Stage1Action.OWN_CALL
             stale -> Stage1Action.ASK_SERVER
             else -> Stage1Action.RING
         }
@@ -76,6 +87,10 @@ object CallPushPayload {
      * It rings only if the server confirms the call; otherwise, also without an answer, it is a missed call.
      */
     fun stateOfStalePush(hasCall: Boolean?): CallState = if (hasCall == true) CallState.RING else CallState.MISSED
+
+    /** Whether the call starts with the camera on: only when it is not answered as a voice call. */
+    fun startsWithCamera(voiceOnly: Boolean, cameraPermissionGranted: Boolean): Boolean =
+        !voiceOnly && cameraPermissionGranted
 
     /** What the call screen knows about the kind of the call. */
     enum class CallType(val showsVoiceButton: Boolean, val showsVideoButton: Boolean) {
@@ -158,6 +173,13 @@ object CallPushPayload {
          */
         fun toNotificationExtras(userId: Long, notificationTimestamp: Int): Bundle =
             toBundle(userId, notificationTimestamp).apply { remove(BundleKeys.KEY_ROOM_TOKEN) }
+
+        /**
+         * The extras of `CallActivity` for the answer action of the notification: a video call is answered with
+         * the camera on, a voice call without it.
+         */
+        fun toAnswerBundle(userId: Long, notificationTimestamp: Int): Bundle =
+            toBundle(userId, notificationTimestamp).apply { putBoolean(BundleKeys.KEY_CALL_VOICE_ONLY, !isVideoCall) }
 
         /** The extras of `CallNotificationActivity` and `CallActivity` (answer button). */
         fun toBundle(userId: Long, notificationTimestamp: Int): Bundle =
