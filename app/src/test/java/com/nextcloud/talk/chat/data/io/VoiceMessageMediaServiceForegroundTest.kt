@@ -8,6 +8,8 @@ package com.nextcloud.talk.chat.data.io
 
 import androidx.media3.session.MediaSessionService
 import org.junit.Assert.assertEquals
+import org.junit.After
+import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.Robolectric
@@ -22,6 +24,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [33])
 class VoiceMessageMediaServiceForegroundTest {
+    @Before
+    fun setUp() = VoiceMessageMediaServiceTestSupport.install()
+
+    @After
+    fun tearDown() = VoiceMessageMediaServiceTestSupport.uninstall()
+
     /** The timeout Media3 applies to the notification manager of [service], read by reflection (no getter). */
     private fun foregroundTimeoutMs(service: VoiceMessageMediaService): Long {
         val getManager = MediaSessionService::class.java.getDeclaredMethod("getMediaNotificationManager")

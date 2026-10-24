@@ -81,6 +81,7 @@ class VoiceMessageMediaService : MediaSessionService() {
     lateinit var appPreferences: AppPreferences
 
     private var mediaSession: MediaSession? = null
+    private var playbackAudioFocus: PlaybackAudioFocus? = null
     private val serviceScope = MainScope()
     private var retryJob: Job? = null
     private var automaticRetries = 0
@@ -96,10 +97,15 @@ class VoiceMessageMediaService : MediaSessionService() {
 
         val player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(dataSources.cacheDataSourceFactory))
-            .setAudioAttributes(audioAttributesFor(ChatAudioKind.VOICE_MESSAGE), true)
+            .setAudioAttributes(audioAttributesFor(ChatAudioKind.VOICE_MESSAGE), false)
             .setHandleAudioBecomingNoisy(true)
             .setWakeMode(C.WAKE_MODE_NETWORK)
             .build()
+        // A voice message takes a transient focus, so that the music of another app pauses and comes back afterwards.
+        // Audio files are music and let the player hold a permanent focus (see onItemStarted).
+        playbackAudioFocus = PlaybackAudioFocus(this, player) {
+            player.currentMediaItem?.chatAudioKind() != ChatAudioKind.AUDIO_FILE
+        }
         player.addListener(PlayerListener(player))
         player.addAnalyticsListener(LoadListener())
         serviceScope.launch {
@@ -124,6 +130,8 @@ class VoiceMessageMediaService : MediaSessionService() {
 
     override fun onDestroy() {
         serviceScope.cancel()
+        playbackAudioFocus?.release()
+        playbackAudioFocus = null
         mediaSession?.let { session ->
             rememberPosition(session.player)
             session.player.release()
@@ -169,7 +177,8 @@ class VoiceMessageMediaService : MediaSessionService() {
         }
         if (key != null && mediaItem != null) {
             val kind = mediaItem.chatAudioKind()
-            player.setAudioAttributes(audioAttributesFor(kind), true)
+            player.setAudioAttributes(audioAttributesFor(kind), kind == ChatAudioKind.AUDIO_FILE)
+            playbackAudioFocus?.refresh()
             applyPlaybackModes(player, kind, isNewQueue)
             store.forgetPosition(key)
             // A prebuffered item starts while the player stays ready, so its duration is only known here.
