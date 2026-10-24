@@ -177,8 +177,15 @@ class VoiceMessageMediaService : MediaSessionService() {
         }
         if (key != null && mediaItem != null) {
             val kind = mediaItem.chatAudioKind()
-            player.setAudioAttributes(audioAttributesFor(kind), kind == ChatAudioKind.AUDIO_FILE)
-            playbackAudioFocus?.refresh()
+            if (kind == ChatAudioKind.AUDIO_FILE) {
+                // Give the transient focus of a voice message back before the player asks for its own, so that the
+                // app never holds two requests and the file is not paused by the loss of the first.
+                playbackAudioFocus?.refresh()
+                player.setAudioAttributes(audioAttributesFor(kind), true)
+            } else {
+                player.setAudioAttributes(audioAttributesFor(kind), false)
+                playbackAudioFocus?.refresh()
+            }
             applyPlaybackModes(player, kind, isNewQueue)
             store.forgetPosition(key)
             // A prebuffered item starts while the player stays ready, so its duration is only known here.

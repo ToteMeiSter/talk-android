@@ -27,7 +27,10 @@ import org.mockito.kotlin.mock
  */
 internal object VoiceMessageMediaServiceTestSupport {
 
+    private var previousApplication: NextcloudTalkApplication? = null
+
     fun install() {
+        previousApplication = NextcloudTalkApplication.sharedApplication
         val dataSources = mock<ChatAudioDataSources> {
             on { cacheDataSourceFactory } doReturn mock<CacheDataSource.Factory>()
         }
@@ -47,7 +50,10 @@ internal object VoiceMessageMediaServiceTestSupport {
         setSharedApplication(mock<NextcloudTalkApplication> { on { componentApplication } doReturn component })
     }
 
-    fun uninstall() = setSharedApplication(null)
+    fun uninstall() {
+        setSharedApplication(previousApplication)
+        previousApplication = null
+    }
 
     // NextcloudTalkApplication.sharedApplication's setter is `protected` (only meant to be set
     // from onCreate()/onTerminate()); reflection is the only way in from a test.
