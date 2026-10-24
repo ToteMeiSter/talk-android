@@ -6,7 +6,6 @@
  */
 package com.nextcloud.talk.jobs
 
-import android.annotation.SuppressLint
 import android.content.Context
 import android.util.Log
 import androidx.annotation.VisibleForTesting
@@ -79,9 +78,6 @@ class ReadMarkerSyncWorker(context: Context, workerParams: WorkerParameters) :
         }
     }
 
-    // the read marker response carries nothing to act on; the old runCatching passed it out of the
-    // lambda, which is the only reason it counted as used before
-    @SuppressLint("CheckResult")
     @VisibleForTesting
     @Suppress("TooGenericExceptionCaught")
     internal suspend fun sendReadMarker(userId: Long, roomToken: String, lastReadMessage: Int): Result {
