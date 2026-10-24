@@ -121,7 +121,11 @@ object CallPushPayload {
         OFF
     }
 
-    /** It depends on the kind of the call only. Where the call was answered (notification or window) is no reason. */
+    /**
+     * [voiceOnly] is set by the button that answered: "voice" or "video" in the window of the incoming call
+     * (CallNotificationActivity), the kind of the call otherwise. The place of the answer (notification or window)
+     * is no reason to switch the camera off.
+     */
     fun cameraAtStart(voiceOnly: Boolean, cameraPermissionGranted: Boolean): CameraAtStart =
         when {
             voiceOnly -> CameraAtStart.NO_VIDEO
