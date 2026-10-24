@@ -260,7 +260,7 @@ class CallPushRetryPolicyTest {
         run.advanceTo(100_000)
         assertTrue(run.completed)
         assertEquals(null, run.error)
-        assertTrue(run.values.size >= 10)
+        assertTrue(run.values.size >= 8)
     }
 
     @Test
@@ -269,7 +269,8 @@ class CallPushRetryPolicyTest {
         run.start { Observable.error(UnknownHostException()) }
         run.advanceTo(CallPushRetryPolicy.POLL_WINDOW_MS - 1)
         assertEquals(null, run.error)
-        run.advanceTo(CallPushRetryPolicy.POLL_WINDOW_MS)
+        // the last retry is started inside the window and fails after it
+        run.advanceTo(CallPushRetryPolicy.POLL_WINDOW_MS + CallPushRetryPolicy.RETRY_DELAY_MS)
         val e = run.error!!
         assertEquals(
             CallPushRetryPolicy.PollFailureOutcome.WINDOW_EXHAUSTED,

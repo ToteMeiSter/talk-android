@@ -19,9 +19,7 @@ package com.nextcloud.talk.webrtc
  *
  * Not thread-safe, call it from one thread (the main thread).
  */
-internal class PublisherRejoinPolicy(
-    private val clockMillis: () -> Long = { System.nanoTime() / NANOS_PER_MILLI }
-) {
+internal class PublisherRejoinPolicy(private val clockMillis: () -> Long = { System.nanoTime() / NANOS_PER_MILLI }) {
 
     private var failuresSinceConnected = 0
     private var firstFailureAt = 0L
