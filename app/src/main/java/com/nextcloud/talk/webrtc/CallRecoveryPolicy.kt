@@ -6,6 +6,7 @@
  */
 package com.nextcloud.talk.webrtc
 
+import com.nextcloud.talk.activities.CallStatus
 import org.webrtc.PeerConnection.IceConnectionState
 
 /**
@@ -35,6 +36,20 @@ internal object CallRecoveryPolicy {
         /** A rejoin is already on its way (pause or join): its result is waited for, no second one starts. */
         IGNORE
     }
+
+    /**
+     * Whether the give-up deadline may still end the call. Not once the call is left ([CallStatus.LEAVING]) or the
+     * ring time ran out ([CallStatus.CALLING_TIMEOUT]): the screen of "call again" must stay.
+     */
+    fun giveUpApplies(status: CallStatus?): Boolean =
+        status != CallStatus.LEAVING && status != CallStatus.CALLING_TIMEOUT
+
+    /**
+     * Whether the ring time of the caller may end the dial. Only while nobody answered: not after the other side is
+     * in the call, and not when the call is over already.
+     */
+    fun ringTimeoutApplies(status: CallStatus?): Boolean =
+        status != null && status != CallStatus.IN_CONVERSATION && giveUpApplies(status)
 
     const val RECHECK_DELAY_MILLIS = 3_000L
     const val MAX_RECHECKS = 3

@@ -386,7 +386,13 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private val callingTimeoutRunnable = Runnable { setCallState(CallStatus.CALLING_TIMEOUT) }
+    // The ring time of the caller. It runs on [rejoinHandler], as "handler" drops its callbacks on every state change
+    // and the 55 s must not start over (or stop) while the call is joined again.
+    private val callingTimeoutRunnable = Runnable {
+        if (CallRecoveryPolicy.ringTimeoutApplies(currentCallStatus) && !isDestroyed) {
+            setCallState(CallStatus.CALLING_TIMEOUT)
+        }
+    }
 
     @Volatile
     private var currentCallStatus: CallStatus? = null
@@ -1315,15 +1321,19 @@ class CallActivity : CallBaseActivity() {
         }
 
         val cameraPermissionGranted = permissionUtil!!.isCameraPermissionGranted()
-        if (isVoiceOnlyCall) {
-            binding!!.selfVideoViewWrapper.visibility = View.GONE
-        } else if (cameraPermissionGranted) {
-            binding!!.selfVideoViewWrapper.visibility = View.VISIBLE
-            // answered by "video" (window or notification) or dialled as a video call: the camera is on
-            onCameraClick()
-            if (cameraEnumerator!!.deviceNames.isEmpty()) {
-                binding!!.cameraButton.visibility = View.GONE
+        when (CallPushPayload.cameraAtStart(isVoiceOnlyCall, cameraPermissionGranted)) {
+            CallPushPayload.CameraAtStart.NO_VIDEO -> binding!!.selfVideoViewWrapper.visibility = View.GONE
+
+            CallPushPayload.CameraAtStart.ON -> {
+                binding!!.selfVideoViewWrapper.visibility = View.VISIBLE
+                // answered by "video" (window or notification) or dialled as a video call: the camera is on
+                onCameraClick()
+                if (cameraEnumerator!!.deviceNames.isEmpty()) {
+                    binding!!.cameraButton.visibility = View.GONE
+                }
             }
+
+            CallPushPayload.CameraAtStart.OFF -> Unit
         }
     }
 
@@ -2209,7 +2219,8 @@ class CallActivity : CallBaseActivity() {
 
                     if (!webSocketCommunicationEvent.getHashMap()!!.containsKey("oldResumeId")) {
                         if (currentCallStatus === CallStatus.RECONNECTING) {
-                            hangup(false, false)
+                            // alone in the call the user stays in it, as in a rejoin after an ICE failure
+                            hangup(false, false, 0L, publisherRejoinPolicy.leavesCallOnRejoin())
                         } else if (currentCallStatus === CallStatus.PUBLISHER_FAILED) {
                             // The rejoin opened this session itself and joins the room and the call on it.
                             Log.d(TAG, "hello with a new session while rejoining, the rejoin is under way")
@@ -3076,17 +3087,25 @@ class CallActivity : CallBaseActivity() {
             handler!!.post { updateRemoteAudioPlayout() }
             when (callState) {
                 CallStatus.CONNECTING -> handler!!.post { handleCallStateConnected() }
-                CallStatus.CALLING_TIMEOUT -> handler!!.post { handleCallStateCallingTimeout() }
+                CallStatus.CALLING_TIMEOUT -> {
+                    // the call is given up: no later timer may end the screen of "call again"
+                    rejoinHandler.removeCallbacks(giveUpRunnable)
+                    rejoinHandler.removeCallbacks(rejoinRunnable)
+                    rejoinHandler.removeCallbacks(publisherRecheckRunnable)
+                    handler!!.post { handleCallStateCallingTimeout() }
+                }
                 CallStatus.PUBLISHER_FAILED -> handler!!.post { handleCallStatePublisherFailed() }
                 CallStatus.RECONNECTING -> handler!!.post { handleCallStateReconnecting() }
                 CallStatus.JOINED -> {
                     // what is left of the 55 s since the first join, a rejoin does not start the ring again
-                    handler!!.postDelayed(callingTimeoutRunnable, publisherRejoinPolicy.onJoined())
+                    rejoinHandler.removeCallbacks(callingTimeoutRunnable)
+                    rejoinHandler.postDelayed(callingTimeoutRunnable, publisherRejoinPolicy.onJoined())
                     handler!!.post { handleCallStateJoined() }
                 }
 
                 CallStatus.IN_CONVERSATION -> {
                     publisherRejoinPolicy.onPeerJoined()
+                    rejoinHandler.removeCallbacks(callingTimeoutRunnable)
                     handler!!.post { handleCallStateInConversation() }
                 }
 
@@ -3471,7 +3490,7 @@ class CallActivity : CallBaseActivity() {
     }
 
     private fun giveUpCall() {
-        if (isDestroyed || currentCallStatus === CallStatus.LEAVING) {
+        if (isDestroyed || !CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
             return
         }
         Log.w(TAG, "No connection in time, ending the call")

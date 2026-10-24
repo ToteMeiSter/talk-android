@@ -99,13 +99,35 @@ object CallPushPayload {
 
     /**
      * How old the ringing call is at [sinceArrivalMs] after the push reached the device: the time the push took
-     * (`sentTime` against `arrivalTime`, both 0 or unknown count as no delay) plus the time since.
+     * (`sentTime` against `arrivalTime`) plus the time since. Both are clocks of different devices, so only a travel
+     * time up to [MAX_PUSH_AGE_MS] counts, the limit of [isStale]. A longer one (or one below 0) is a clock that is
+     * off or a push the server confirms as live: it counts as no delay, and the call rings the whole time from its
+     * arrival, as before the rule. 0 or unknown count as no delay too.
      */
     fun ringAgeMs(sentTime: Long, arrivalTime: Long, sinceArrivalMs: Long): Long {
-        val maxTravel = NotificationUtils.CALL_NOTIFICATION_TIMEOUT_MS
-        val travel = if (sentTime > 0L) (arrivalTime - sentTime).coerceIn(0L, maxTravel) else 0L
-        return travel + sinceArrivalMs
+        val travel = if (sentTime > 0L) arrivalTime - sentTime else 0L
+        return (if (travel in 0L..MAX_PUSH_AGE_MS) travel else 0L) + sinceArrivalMs
     }
+
+    /** What the own camera does when the call screen starts. */
+    enum class CameraAtStart {
+        /** Voice call: the view of the own video is hidden. */
+        NO_VIDEO,
+
+        /** Video call, answered by "video" from the window or the notification, or dialled: the camera is on. */
+        ON,
+
+        /** Video call without the camera permission: the user is asked when the button is used. */
+        OFF
+    }
+
+    /** It depends on the kind of the call only. Where the call was answered (notification or window) is no reason. */
+    fun cameraAtStart(voiceOnly: Boolean, cameraPermissionGranted: Boolean): CameraAtStart =
+        when {
+            voiceOnly -> CameraAtStart.NO_VIDEO
+            cameraPermissionGranted -> CameraAtStart.ON
+            else -> CameraAtStart.OFF
+        }
 
     /**
      * The timeout of the call notification (and with it of the window of the incoming call, which closes with the
