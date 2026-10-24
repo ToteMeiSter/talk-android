@@ -122,7 +122,7 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
                 if (isLoginCanceled) return@launch
                 // Only reached when the poll ended. If this view model is cleared first, the login stays pending.
                 // The confirmed login stays pending until the screen has shown the result, see onPostLoginShown.
-                if (polled == null) PendingBrowserLoginStore.clear()
+                if (polled == null) PendingBrowserLoginStore.clearIf(response)
 
                 _postLoginState.value = postLoginStateFor(polled)
             }
@@ -146,7 +146,7 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
 
     /** The login screen has shown the [state], so a result of the login is not pending anymore. */
     fun onPostLoginShown(state: PostLoginViewState) {
-        if (state != PostLoginViewState.None) PendingBrowserLoginStore.clear()
+        if (state != PostLoginViewState.None) savedResponse?.let { PendingBrowserLoginStore.clearIf(it) }
     }
 
     fun loginWithQR(dataString: String, reAuth: Boolean = false, accountToReauthorize: Long? = null) {

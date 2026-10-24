@@ -327,6 +327,82 @@ class BrowserLoginActivityViewModelTest {
     }
 
     @Test
+    fun `a confirmed login outlives the lifetime of the login flow`() {
+        var now = 1_000L
+        PendingBrowserLoginStore.clock = { now }
+        val completion = startPollingWithRealRepository()
+        whenever(network.performLoginFlowV2(any())).thenReturn(completion)
+        viewModel.resumeWebBrowserLogin()
+        scheduler.advanceUntilIdle()
+
+        // The screen is destroyed before it shows the result, and the app is opened again after the 20 minutes.
+        now += PendingBrowserLoginStore.LIFETIME_MILLIS
+        val second = nextViewModel()
+        assertTrue(second.resumeWebBrowserLogin())
+        scheduler.advanceUntilIdle()
+
+        assertEquals(
+            BrowserLoginActivityViewModel.PostLoginViewState.PostLoginRestartApp,
+            second.postLoginState.value
+        )
+        verify(network, times(1)).performLoginFlowV2(any())
+    }
+
+    @Test
+    fun `a confirmed login that nobody showed is dropped after its own lifetime`() {
+        var now = 1_000L
+        PendingBrowserLoginStore.clock = { now }
+        startAndLoseActivity()
+        PendingBrowserLoginStore.complete(loginResponse, LoginCompletion(HTTP_OK, BASE_URL, "user", "app-password"))
+
+        now += PendingBrowserLoginStore.COMPLETED_LIFETIME_MILLIS
+
+        assertNull(PendingBrowserLoginStore.active())
+    }
+
+    @Test
+    fun `a waiting poll uses the login that a poll still in flight confirmed`() {
+        startAndLoseActivity()
+        val completion = LoginCompletion(HTTP_OK, BASE_URL, "user", "app-password")
+        val stillNotFound = CompletableDeferred<Unit>()
+        val newRepository: LoginRepository = mock()
+        // The new view model polls, gets 404 and waits to retry, while the request of the old one is in flight.
+        wheneverBlocking { newRepository.pollLogin(any(), any(), any()) }.doSuspendableAnswer { invocation ->
+            @Suppress("UNCHECKED_CAST")
+            val keepPolling = invocation.arguments[2] as () -> Boolean
+            stillNotFound.await()
+            if (keepPolling()) error("The poll must stop, the login is confirmed")
+            null
+        }
+        wheneverBlocking { newRepository.parseAndLogin(completion) }
+            .thenReturn(LoginRepository.LoginResult.ExistingAccount)
+        val second = BrowserLoginActivityViewModel(newRepository)
+        second.resumeWebBrowserLogin()
+
+        // The request of the old view model returns the login now.
+        PendingBrowserLoginStore.complete(loginResponse, completion)
+        stillNotFound.complete(Unit)
+
+        assertEquals(
+            BrowserLoginActivityViewModel.PostLoginViewState.PostLoginRestartApp,
+            second.postLoginState.value
+        )
+    }
+
+    @Test
+    fun `a screen showing its result does not end a newer login`() {
+        startAndLoseActivity()
+        wheneverBlocking { repository.pollLogin(any(), any(), any()) }.thenReturn(null)
+        viewModel.handleWebBrowserLogin()
+        val newer = LoginResponse(token = "newer", pollUrl = "https://example.com/poll2", loginUrl = URL)
+        PendingBrowserLoginStore.save(newer, BASE_URL, false, null)
+
+        viewModel.onPostLoginShown(viewModel.postLoginState.value)
+
+        assertEquals(newer, PendingBrowserLoginStore.active()?.response)
+    }
+
+    @Test
     fun `a login confirmed after cancel is not kept`() {
         val completion = startPollingWithRealRepository()
         val first = viewModel
