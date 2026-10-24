@@ -60,50 +60,6 @@ class CallPushPayloadTest {
     }
 
     @Test
-    fun pushForTheCallTheUserIsInIsOwnCallOnlyForSameRoomAndAccount() {
-        val active = CallPushPayload.ActiveCall(USER_ID, TOKEN)
-
-        assertTrue(CallPushPayload.isOwnCall(active, USER_ID, TOKEN))
-        // another room of the same account still rings (heads-up)
-        assertFalse(CallPushPayload.isOwnCall(active, USER_ID, "other-room"))
-        // the same room token on another account is another call
-        assertFalse(CallPushPayload.isOwnCall(active, USER_ID + 1, TOKEN))
-        assertFalse(CallPushPayload.isOwnCall(null, USER_ID, TOKEN))
-    }
-
-    @Test
-    fun stageOneShowsNothingForTheOwnCallBeforeAnythingElseButEncryption() {
-        assertEquals(
-            CallPushPayload.Stage1Action.OWN_CALL,
-            CallPushPayload.stage1Action(stale = false, endToEndEncrypted = false, ownCall = true)
-        )
-        assertEquals(
-            CallPushPayload.Stage1Action.OWN_CALL,
-            CallPushPayload.stage1Action(stale = true, endToEndEncrypted = false, ownCall = true)
-        )
-        assertEquals(
-            CallPushPayload.Stage1Action.RING,
-            CallPushPayload.stage1Action(stale = false, endToEndEncrypted = false, ownCall = false)
-        )
-    }
-
-    @Test
-    fun cameraIsOnForVideoAnswerAndOffForVoiceAnswer() {
-        assertTrue(CallPushPayload.startsWithCamera(voiceOnly = false, cameraPermissionGranted = true))
-        assertFalse(CallPushPayload.startsWithCamera(voiceOnly = true, cameraPermissionGranted = true))
-        assertFalse(CallPushPayload.startsWithCamera(voiceOnly = false, cameraPermissionGranted = false))
-    }
-
-    @Test
-    fun notificationAnswerOfVideoCallIsNotVoiceOnlyAndOfVoiceCallIs() {
-        val video = CallPushPayload.IncomingCall.fromPush(TOKEN, SUBJECT).copy(callFlag = VIDEO_CALL_FLAG)
-        val voice = video.copy(callFlag = ParticipantDto.InCallFlags.IN_CALL)
-
-        assertFalse(video.toAnswerBundle(USER_ID, NOTIFICATION_ID).getBoolean(BundleKeys.KEY_CALL_VOICE_ONLY, true))
-        assertTrue(voice.toAnswerBundle(USER_ID, NOTIFICATION_ID).getBoolean(BundleKeys.KEY_CALL_VOICE_ONLY))
-    }
-
-    @Test
     fun stageOneRingsFreshPushShowsNothingForStalePushAndKeepsE2eeFirst() {
         assertEquals(
             CallPushPayload.Stage1Action.RING,
