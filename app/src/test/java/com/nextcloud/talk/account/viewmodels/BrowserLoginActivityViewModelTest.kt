@@ -6,6 +6,7 @@
  */
 package com.nextcloud.talk.account.viewmodels
 
+import androidx.lifecycle.viewModelScope
 import com.nextcloud.talk.account.data.LoginRepository
 import com.nextcloud.talk.account.data.PendingBrowserLoginStore
 import com.nextcloud.talk.account.data.io.LocalLoginDataSource
@@ -16,6 +17,7 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
@@ -113,13 +115,13 @@ class BrowserLoginActivityViewModelTest {
     fun `resuming polls the saved response without a new login request`() {
         startAndLoseActivity()
         val newRepository: LoginRepository = mock()
-        wheneverBlocking { newRepository.pollLogin(any(), any()) }.thenReturn(null)
+        wheneverBlocking { newRepository.pollLogin(any(), any(), any()) }.thenReturn(null)
         val newViewModel = BrowserLoginActivityViewModel(newRepository)
 
         newViewModel.resumeWebBrowserLogin()
 
         verify(newRepository).resumeLoginFlow(true, ACCOUNT)
-        verifyBlocking(newRepository) { pollLogin(eq(loginResponse), any()) }
+        verifyBlocking(newRepository) { pollLogin(eq(loginResponse), any(), any()) }
         verifyBlocking(newRepository, never()) { startLoginFlow(any(), any(), anyOrNull()) }
     }
 
@@ -127,19 +129,19 @@ class BrowserLoginActivityViewModelTest {
     fun `resuming twice polls once`() {
         startAndLoseActivity()
         val newRepository: LoginRepository = mock()
-        wheneverBlocking { newRepository.pollLogin(any(), any()) }.thenReturn(null)
+        wheneverBlocking { newRepository.pollLogin(any(), any(), any()) }.thenReturn(null)
         val newViewModel = BrowserLoginActivityViewModel(newRepository)
 
         assertTrue(newViewModel.resumeWebBrowserLogin())
         assertTrue(newViewModel.resumeWebBrowserLogin())
 
-        verifyBlocking(newRepository, times(1)) { pollLogin(any(), any()) }
+        verifyBlocking(newRepository, times(1)) { pollLogin(any(), any(), any()) }
     }
 
     @Test
     fun `the pending login is gone after the poll ended`() {
         startAndLoseActivity()
-        wheneverBlocking { repository.pollLogin(any(), any()) }.thenReturn(null)
+        wheneverBlocking { repository.pollLogin(any(), any(), any()) }.thenReturn(null)
 
         viewModel.handleWebBrowserLogin()
 
@@ -164,7 +166,7 @@ class BrowserLoginActivityViewModelTest {
     fun `cancel ends the pending login, also when the poll answers after it`() {
         startAndLoseActivity()
         val answer = CompletableDeferred<LoginCompletion?>()
-        wheneverBlocking { repository.pollLogin(any(), any()) }.doSuspendableAnswer { answer.await() }
+        wheneverBlocking { repository.pollLogin(any(), any(), any()) }.doSuspendableAnswer { answer.await() }
         viewModel.handleWebBrowserLogin()
 
         viewModel.cancelLogin()
@@ -179,7 +181,8 @@ class BrowserLoginActivityViewModelTest {
     @Test
     fun `a poll that ended for good ends the pending login with an error`() {
         startAndLoseActivity()
-        wheneverBlocking { repository.pollLogin(any(), any()) }.thenThrow(IllegalArgumentException("bad poll url"))
+        wheneverBlocking { repository.pollLogin(any(), any(), any()) }
+            .thenThrow(IllegalArgumentException("bad poll url"))
 
         viewModel.handleWebBrowserLogin()
 
@@ -190,7 +193,8 @@ class BrowserLoginActivityViewModelTest {
     @Test
     fun `a canceled poll keeps the login pending`() {
         startAndLoseActivity()
-        wheneverBlocking { repository.pollLogin(any(), any()) }.thenThrow(CancellationException("view model cleared"))
+        wheneverBlocking { repository.pollLogin(any(), any(), any()) }
+            .thenThrow(CancellationException("view model cleared"))
 
         viewModel.handleWebBrowserLogin()
 
@@ -210,7 +214,7 @@ class BrowserLoginActivityViewModelTest {
         assertFalse(newViewModel.resumeWebBrowserLogin())
 
         assertNull(PendingBrowserLoginStore.active())
-        verifyBlocking(newRepository, never()) { pollLogin(any(), any()) }
+        verifyBlocking(newRepository, never()) { pollLogin(any(), any(), any()) }
         assertEquals(BrowserLoginActivityViewModel.PostLoginViewState.None, newViewModel.postLoginState.value)
     }
 
@@ -254,12 +258,101 @@ class BrowserLoginActivityViewModelTest {
 
         scheduler.advanceUntilIdle()
 
-        assertNull(PendingBrowserLoginStore.active())
         assertEquals(
             BrowserLoginActivityViewModel.PostLoginViewState.PostLoginRestartApp,
             viewModel.postLoginState.value
         )
+        // The confirmed login is pending until the screen has shown the result.
+        assertNotNull(PendingBrowserLoginStore.active())
+        viewModel.onPostLoginShown(viewModel.postLoginState.value)
+        assertNull(PendingBrowserLoginStore.active())
         verify(network, times(3)).performLoginFlowV2(any())
+    }
+
+    private fun nextViewModel() =
+        BrowserLoginActivityViewModel(LoginRepository(network, local, StandardTestDispatcher(scheduler)))
+
+    @Test
+    fun `a login confirmed while its view model is canceled is finished by the next view model`() {
+        var now = 1_000L
+        PendingBrowserLoginStore.clock = { now }
+        val completion = startPollingWithRealRepository()
+        val first = viewModel
+        // The server answers once: the blocking request returns the login while the screen is already destroyed.
+        // Any further poll of the used token is answered with 404 until the login expires.
+        whenever(network.performLoginFlowV2(any()))
+            .thenAnswer {
+                first.viewModelScope.cancel()
+                completion
+            }
+            .thenAnswer {
+                now += PendingBrowserLoginStore.LIFETIME_MILLIS
+                LoginCompletion(NOT_FOUND, "", "", "")
+            }
+        first.resumeWebBrowserLogin()
+        scheduler.advanceUntilIdle()
+        assertEquals(BrowserLoginActivityViewModel.PostLoginViewState.None, first.postLoginState.value)
+
+        val second = nextViewModel()
+        assertTrue(second.resumeWebBrowserLogin())
+        scheduler.advanceUntilIdle()
+
+        assertEquals(
+            BrowserLoginActivityViewModel.PostLoginViewState.PostLoginRestartApp,
+            second.postLoginState.value
+        )
+    }
+
+    @Test
+    fun `a confirmed login that no screen showed is finished by the next view model`() {
+        val completion = startPollingWithRealRepository()
+        whenever(network.performLoginFlowV2(any())).thenReturn(completion)
+        viewModel.resumeWebBrowserLogin()
+        scheduler.advanceUntilIdle()
+        assertEquals(
+            BrowserLoginActivityViewModel.PostLoginViewState.PostLoginRestartApp,
+            viewModel.postLoginState.value
+        )
+
+        // The screen was destroyed before it showed the result.
+        val second = nextViewModel()
+        assertTrue(second.resumeWebBrowserLogin())
+        scheduler.advanceUntilIdle()
+
+        assertEquals(
+            BrowserLoginActivityViewModel.PostLoginViewState.PostLoginRestartApp,
+            second.postLoginState.value
+        )
+        verify(network, times(1)).performLoginFlowV2(any())
+    }
+
+    @Test
+    fun `a login confirmed after cancel is not kept`() {
+        val completion = startPollingWithRealRepository()
+        val first = viewModel
+        whenever(network.performLoginFlowV2(any())).thenAnswer {
+            first.cancelLogin()
+            completion
+        }
+        first.resumeWebBrowserLogin()
+        scheduler.advanceUntilIdle()
+
+        assertNull(PendingBrowserLoginStore.active())
+        assertFalse(nextViewModel().resumeWebBrowserLogin())
+        assertEquals(BrowserLoginActivityViewModel.PostLoginViewState.None, first.postLoginState.value)
+    }
+
+    @Test
+    fun `cancel erases a confirmed login that no screen showed`() {
+        val completion = startPollingWithRealRepository()
+        whenever(network.performLoginFlowV2(any())).thenReturn(completion)
+        viewModel.resumeWebBrowserLogin()
+        scheduler.advanceUntilIdle()
+
+        viewModel.cancelLogin()
+
+        assertNull(PendingBrowserLoginStore.active())
+        assertFalse(nextViewModel().resumeWebBrowserLogin())
     }
 
     @Test
@@ -326,6 +419,7 @@ class BrowserLoginActivityViewModelTest {
     companion object {
         private const val ACCOUNT = 7L
         private const val HTTP_OK = 200
+        private const val NOT_FOUND = 404
         private const val BASE_URL = "https://example.com"
         private const val URL = "https://example.com/login"
     }

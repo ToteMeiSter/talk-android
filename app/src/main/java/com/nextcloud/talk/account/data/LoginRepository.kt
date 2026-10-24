@@ -75,13 +75,22 @@ class LoginRepository(
      * request (no network, interrupted connection), which is retried after a longer pause. The poll ends with null
      * when the server answers 200 with an unusable body, when the login is canceled, or when [keepPolling] is false.
      * It is checked again after every pause.
+     *
+     * The server hands out the login data only once, and the blocking request is not interrupted when the caller is
+     * canceled. [onConfirmed] is therefore called with the data as soon as it arrived, before the cancellation of
+     * the caller can discard it.
      */
-    suspend fun pollLogin(response: LoginResponse, keepPolling: () -> Boolean = { true }): LoginCompletion? =
+    suspend fun pollLogin(
+        response: LoginResponse,
+        onConfirmed: (LoginCompletion) -> Unit = {},
+        keepPolling: () -> Boolean = { true }
+    ): LoginCompletion? =
         withContext(ioDispatcher) {
             while (shouldLoop && keepPolling()) {
                 val pause = try {
                     val loginData = network.performLoginFlowV2(response) ?: return@withContext null
                     if (loginData.status == HTTP_OK) {
+                        onConfirmed(loginData)
                         return@withContext loginData
                     }
                     INTERVAL // No response yet, retry
