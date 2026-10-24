@@ -6,6 +6,7 @@
  */
 package com.nextcloud.talk.webrtc
 
+import androidx.annotation.VisibleForTesting
 import com.nextcloud.talk.logger.AppLog as Log
 import org.webrtc.SSLCertificateVerifier
 import java.io.ByteArrayInputStream
@@ -67,13 +68,15 @@ class SystemTrustSslCertificateVerifier(
     @Suppress("SwallowedException")
     private fun isTrusted(chain: Array<X509Certificate>): Boolean =
         try {
-            trustManager?.checkServerTrusted(chain, AUTH_TYPE)
+            val manager = trustManager ?: return false
+            manager.checkServerTrusted(chain, AUTH_TYPE)
             true
         } catch (e: CertificateException) {
             false
         }
 
-    private fun isTrustedLeaf(leaf: X509Certificate): Boolean {
+    @VisibleForTesting
+    internal fun isTrustedLeaf(leaf: X509Certificate): Boolean {
         // The leaf alone: the server certificate may be issued by an anchor directly.
         return isTrusted(arrayOf(leaf)) || extendChain(listOf(leaf))
     }

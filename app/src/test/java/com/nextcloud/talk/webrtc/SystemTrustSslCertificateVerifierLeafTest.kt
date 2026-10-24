@@ -45,6 +45,11 @@ class SystemTrustSslCertificateVerifierLeafTest {
     }
 
     @Test
+    fun anchorWithSameNameButOtherKeyIsRejected() {
+        assertFalse(verifierTrusting(pem("le-like-foreign-root"), leLikeIntermediates).verify(pem("le-like-leaf")))
+    }
+
+    @Test
     fun leafOfAnotherRootWithSameNamesIsRejected() {
         assertFalse(leLikeVerifier.verify(pem("le-like-foreign-leaf")))
     }
@@ -73,6 +78,29 @@ class SystemTrustSslCertificateVerifierLeafTest {
         assertTrue(bundle.size >= 18)
         assertTrue(bundle.any { it.subjectX500Principal.name.contains("CN=YE1") })
         assertTrue(bundled.verify(bundle.first { it.subjectX500Principal.name.contains("CN=R12") }.encoded))
+    }
+
+    private fun bundle(): List<X509Certificate> =
+        javaClass.classLoader!!.getResourceAsStream("turns-tls/lets-encrypt-intermediates.pem")!!.use {
+            CertificateFactory.getInstance("X.509").generateCertificates(it).filterIsInstance<X509Certificate>()
+        }
+
+    private fun ye1() = bundle().first { it.subjectX500Principal.name.contains("CN=YE1") }
+
+    @Test
+    fun bundledYe1ReachesIsrgRootX1ThroughTheCrossSignedX2() {
+        // YE1 -> Root YE (by X2) -> ISRG Root X2 (by X1) -> X1: the chain of the stand, without its leaf.
+        assertTrue(verifierTrusting(pem("isrg-root-x1")).isTrustedLeaf(ye1()))
+    }
+
+    @Test
+    fun bundledYe1IsRejectedWithoutTheX2CrossSignedByX1() {
+        val withoutX2ByX1 = bundle().filterNot {
+            it.subjectX500Principal.name.contains("ISRG Root X2") &&
+                it.issuerX500Principal.name.contains("ISRG Root X1")
+        }
+        assertTrue(withoutX2ByX1.size == bundle().size - 1)
+        assertFalse(verifierTrusting(pem("isrg-root-x1"), withoutX2ByX1).isTrustedLeaf(ye1()))
     }
 
     /**
