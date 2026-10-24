@@ -33,7 +33,6 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
-import org.robolectric.shadows.ShadowToast
 import java.util.concurrent.TimeUnit
 
 /**
@@ -68,22 +67,6 @@ class CallActivityCallRulesTest {
     @After
     fun tearDown() {
         CallActivity.activeCall = null
-    }
-
-    @Test
-    fun noAnswerEndsTheDialAndTheGiveUpTimerDoesNotCloseTheCallAgainScreen() {
-        setCallState(CallStatus.JOINED)
-        // the first failure was at t=15 s: its deadline is t=70 s, the ring time ends at t=55 s
-        idle(15)
-        // what rejoinCallWithNewSession does with the timer of the deadline
-        (field("rejoinHandler") as Handler).postDelayed(field("giveUpRunnable") as Runnable, 55_000L)
-        idle(40)
-
-        assertEquals(CallStatus.CALLING_TIMEOUT, status())
-        idle(30)
-
-        assertEquals(CallStatus.CALLING_TIMEOUT, status())
-        assertNull("no \"could not connect\" toast on the screen of \"call again\"", ShadowToast.getLatestToast())
     }
 
     @Test

@@ -1924,6 +1924,10 @@ class CallActivity : CallBaseActivity() {
     }
 
     private fun performCall() {
+        if (!CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
+            Log.d(TAG, "performCall: the call is over or unanswered, not joining")
+            return
+        }
         fun getRoomAndContinue() {
             val getRoomApiVersion = ApiUtils.getConversationApiVersion(
                 conversationUser,
@@ -1948,7 +1952,7 @@ class CallActivity : CallBaseActivity() {
 
                         startCallTimeCounter(conversation.callStartTime)
 
-                        if (currentCallStatus !== CallStatus.LEAVING) {
+                        if (CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
                             if (currentCallStatus !== CallStatus.IN_CONVERSATION) {
                                 setCallState(CallStatus.JOINED)
                             }
@@ -2009,6 +2013,14 @@ class CallActivity : CallBaseActivity() {
                 }
 
                 override fun onNext(genericOverall: GenericOverall) {
+                    if (!CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
+                        // the dial ran out while joining: the server call is left again, "call again" restarts it
+                        Log.d(TAG, "Joined the call after the end of the dial, leaving it again")
+                        if (currentCallStatus === CallStatus.CALLING_TIMEOUT) {
+                            sendLeaveCall(apiVersion, null)
+                        }
+                        return
+                    }
                     getRoomAndContinue()
                 }
 
@@ -2191,7 +2203,8 @@ class CallActivity : CallBaseActivity() {
     @Suppress("Detekt.NestedBlockDepth")
     @Subscribe(threadMode = ThreadMode.BACKGROUND)
     fun onMessageEvent(webSocketCommunicationEvent: WebSocketCommunicationEvent) {
-        if (currentCallStatus === CallStatus.LEAVING) {
+        // after "no answer" only the user's "call again" may leave that screen; a late event must not dial anew
+        if (!CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
             return
         }
         if (webSocketCommunicationEvent.getHashMap() != null) {
@@ -3481,6 +3494,9 @@ class CallActivity : CallBaseActivity() {
 
     // Counts the failure: joins again after the pause of the policy, or ends the call when the tries are used up.
     private fun rejoinAfterFailure() {
+        if (!CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
+            return
+        }
         val pause = publisherRejoinPolicy.onPublisherFailed()
         if (pause == PublisherRejoinPolicy.GIVE_UP) {
             giveUpCall()
