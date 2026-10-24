@@ -25,7 +25,7 @@ fun playerNeedsAudioFocus(playWhenReady: Boolean, playbackState: Int): Boolean =
 /**
  * Holds the audio focus of the app while a player plays, so that the music of another app pauses and, after the
  * playback, comes back: the focus is transient. The player is paused when the focus is lost.
- * [release] gives the focus back.
+ * [refresh] checks [applies] again after the media changed. [release] gives the focus back.
  */
 class PlaybackAudioFocus(context: Context, private val player: Player) : Player.Listener {
     private val focusManager = AudioFocusRequestManager(
@@ -35,17 +35,20 @@ class PlaybackAudioFocus(context: Context, private val player: Player) : Player.
     private val focusLostObserver = Observer<AudioFocusRequestManager.ManagerState> { player.pause() }
     private var held = false
 
+    /** Tells whether what plays now needs the focus held here. */
+    var applies: () -> Boolean = { true }
+
     init {
         focusManager.getManagerState.observeForever(focusLostObserver)
         player.addListener(this)
     }
 
-    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = update()
+    override fun onPlayWhenReadyChanged(playWhenReady: Boolean, reason: Int) = refresh()
 
-    override fun onPlaybackStateChanged(playbackState: Int) = update()
+    override fun onPlaybackStateChanged(playbackState: Int) = refresh()
 
-    private fun update() {
-        val needed = playerNeedsAudioFocus(player.playWhenReady, player.playbackState)
+    fun refresh() {
+        val needed = applies() && playerNeedsAudioFocus(player.playWhenReady, player.playbackState)
         if (needed != held) {
             NextcloudTalkApplication.sharedApplication?.logger
                 ?.i(TAG, "playback needs focus: $needed (state ${player.playbackState})")

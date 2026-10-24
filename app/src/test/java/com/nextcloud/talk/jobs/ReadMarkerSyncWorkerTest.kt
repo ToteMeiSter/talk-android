@@ -8,9 +8,7 @@
 package com.nextcloud.talk.jobs
 
 import android.app.Application
-import android.content.Context
 import androidx.test.core.app.ApplicationProvider
-import androidx.work.Data
 import androidx.work.ListenableWorker
 import androidx.work.testing.TestListenableWorkerBuilder
 import com.nextcloud.talk.chat.data.network.ChatNetworkDataSource
@@ -20,22 +18,18 @@ import com.nextcloud.talk.models.json.capabilities.CapabilitiesDto
 import com.nextcloud.talk.models.json.capabilities.SpreedCapabilityDto
 import com.nextcloud.talk.models.json.generic.GenericOverall
 import com.nextcloud.talk.users.UserManager
-import com.nextcloud.talk.utils.SpreedFeatures
-import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_INTERNAL_USER_ID
-import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_ROOM_TOKEN
 import io.reactivex.Observable
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.runBlocking
-import okhttp3.Headers
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.mockito.kotlin.any
+import org.mockito.kotlin.eq
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
-import org.mockito.kotlin.verifyBlocking
+import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.mockito.kotlin.wheneverBlocking
 import org.robolectric.RobolectricTestRunner
@@ -43,122 +37,96 @@ import org.robolectric.annotation.Config
 import retrofit2.Response
 
 /**
- * The answer to a read marker carries the last message read by all participants. It has to reach the
- * database, otherwise the check marks of the own messages stay behind until the next sync.
+ * Marking read or unread in the conversation list goes through the same work slot as this worker, so
+ * the list replaces the chat's read marker. Releasing a guard on the way out of work that was replaced
+ * would hand back the guard its replacement has just set, and the next room list sync would then undo
+ * what the user did last.
  */
 @RunWith(RobolectricTestRunner::class)
 @Config(application = Application::class, sdk = [33])
 class ReadMarkerSyncWorkerTest {
 
-    private val userManager: UserManager = mock()
     private val chatNetworkDataSource: ChatNetworkDataSource = mock()
     private val conversationListUpdater: ConversationListUpdater = mock()
 
     @Test
-    fun `last common read is taken from the header of the read marker response`() {
-        val response = responseWithHeader("2624")
+    fun `a read marker the list replaced does not release the guard of what replaced it`() {
+        val worker = worker()
+        whenever(chatNetworkDataSource.setChatReadMarker(any(), any(), any()))
+            .thenThrow(CancellationException("replaced by marking unread in the list"))
 
-        assertEquals(2624, ReadMarkerSyncWorker.lastCommonReadOf(response))
+        assertThrows(CancellationException::class.java) {
+            runBlocking { worker.sendReadMarker(USER_ID, ROOM_TOKEN, LAST_READ_MESSAGE) }
+        }
+
+        verify(conversationListUpdater, never()).clearPendingReadMarker(any(), any())
+        verify(conversationListUpdater, never()).clearPendingUnread(any())
     }
 
     @Test
-    fun `missing or broken header gives no last common read`() {
-        assertNull(ReadMarkerSyncWorker.lastCommonReadOf(responseWithHeader(null)))
-        assertNull(ReadMarkerSyncWorker.lastCommonReadOf(responseWithHeader("abc")))
-    }
+    fun `a read marker the server refuses is retried while attempts are left`() {
+        val worker = worker()
+        whenever(chatNetworkDataSource.setChatReadMarker(any(), any(), any()))
+            .thenThrow(IllegalStateException("refused"))
 
-    @Test
-    fun `a delivered read marker stores the last common read of its response`() {
-        givenMarkerAnswer(responseWithHeader("2624"))
-
-        val result = runBlocking { worker().send() }
-
-        assertEquals(ListenableWorker.Result.success(), result)
-        verifyBlocking(conversationListUpdater) { updateLastCommonRead(USER_ID, "$USER_ID@$ROOM_TOKEN", 2624) }
-    }
-
-    @Test
-    fun `a response without the header stores nothing but still counts as delivered`() {
-        givenMarkerAnswer(responseWithHeader(null))
-
-        val result = runBlocking { worker().send() }
-
-        assertEquals(ListenableWorker.Result.success(), result)
-        verifyBlocking(conversationListUpdater, never()) { updateLastCommonRead(any(), any(), any()) }
-    }
-
-    @Test
-    fun `a failed answer stores nothing and asks for another attempt`() {
-        givenMarkerAnswer(responseWithHeader("2624", code = 500))
-
-        val result = runBlocking { worker().send() }
+        val result = runBlocking { worker.sendReadMarker(USER_ID, ROOM_TOKEN, LAST_READ_MESSAGE) }
 
         assertEquals(ListenableWorker.Result.retry(), result)
-        verifyBlocking(conversationListUpdater, never()) { updateLastCommonRead(any(), any(), any()) }
+        verify(conversationListUpdater, never()).clearPendingReadMarker(any(), any())
     }
 
     @Test
-    fun `a failing database write does not send the delivered marker again`() {
-        givenMarkerAnswer(responseWithHeader("2624"))
-        wheneverBlocking { conversationListUpdater.updateLastCommonRead(any(), any(), any()) }
-            .thenThrow(IllegalStateException("database closed"))
+    fun `a read marker that was sent keeps its guard for the next sync to clear`() {
+        val worker = worker()
+        whenever(chatNetworkDataSource.setChatReadMarker(any(), any(), any()))
+            .thenReturn(Observable.just(Response.success(GenericOverall())))
 
-        val result = runBlocking { worker().send() }
+        val result = runBlocking { worker.sendReadMarker(USER_ID, ROOM_TOKEN, LAST_READ_MESSAGE) }
 
         assertEquals(ListenableWorker.Result.success(), result)
+        verify(conversationListUpdater, never()).clearPendingReadMarker(any(), any())
     }
 
-    private fun givenMarkerAnswer(response: Response<GenericOverall>) {
-        wheneverBlocking { userManager.getUserWithId(USER_ID) }.thenReturn(user())
-        whenever(chatNetworkDataSource.setChatReadMarker(any(), any(), any())).thenReturn(Observable.just(response))
+    @Test
+    fun `a read marker for a user that is gone releases both read state guards`() {
+        val worker = worker(user = null)
+
+        val result = runBlocking { worker.sendReadMarker(USER_ID, ROOM_TOKEN, LAST_READ_MESSAGE) }
+
+        assertEquals(ListenableWorker.Result.failure(), result)
+        verify(conversationListUpdater).clearPendingReadMarker(eq(INTERNAL_ID), eq(LAST_READ_MESSAGE))
+        verify(conversationListUpdater).clearPendingUnread(eq(INTERNAL_ID))
     }
 
-    private fun worker(): ReadMarkerSyncWorker =
-        TestListenableWorkerBuilder<ReadMarkerSyncWorker>(applicationContext())
-            .setInputData(
-                Data.Builder()
-                    .putLong(KEY_INTERNAL_USER_ID, USER_ID)
-                    .putString(KEY_ROOM_TOKEN, ROOM_TOKEN)
-                    .putInt("KEY_LAST_READ_MESSAGE", MARKER)
-                    .build()
-            )
+    private fun worker(user: User? = USER): ReadMarkerSyncWorker {
+        val userManager: UserManager = mock()
+        wheneverBlocking { userManager.getUserWithId(USER_ID) }.thenReturn(user)
+        return TestListenableWorkerBuilder<ReadMarkerSyncWorker>(ApplicationProvider.getApplicationContext())
             .build()
-            .also {
-                it.userManager = userManager
-                it.chatNetworkDataSource = chatNetworkDataSource
-                it.conversationListUpdater = conversationListUpdater
+            .apply {
+                this.userManager = userManager
+                this.chatNetworkDataSource = this@ReadMarkerSyncWorkerTest.chatNetworkDataSource
+                this.conversationListUpdater = this@ReadMarkerSyncWorkerTest.conversationListUpdater
             }
+    }
 
-    private fun applicationContext(): Context = ApplicationProvider.getApplicationContext()
+    private companion object {
+        const val USER_ID = 1L
+        const val ROOM_TOKEN = "room1"
+        const val INTERNAL_ID = "1@room1"
+        const val LAST_READ_MESSAGE = 42
 
-    private fun user(): User =
-        User(
+        val USER = User(
             id = USER_ID,
             userId = "me",
             username = "me",
-            baseUrl = "https://cloud.example",
             token = "app-password",
+            baseUrl = "https://server.example.com",
             capabilities = CapabilitiesDto().apply {
-                spreedCapability = SpreedCapabilityDto().apply { features = listOf(SpreedFeatures.CHAT_V2.value) }
+                spreedCapability = SpreedCapabilityDto().apply {
+                    features = listOf("conversation-v4", "chat-v2")
+                }
             }
         )
-
-    private fun responseWithHeader(value: String?, code: Int = 200): Response<GenericOverall> {
-        val headers = Headers.Builder().apply { value?.let { add("X-Chat-Last-Common-Read", it) } }.build()
-        val raw = okhttp3.Response.Builder()
-            .request(okhttp3.Request.Builder().url("https://cloud.example/").build())
-            .protocol(okhttp3.Protocol.HTTP_1_1)
-            .code(code)
-            .message("message")
-            .headers(headers)
-            .body("".toResponseBody("application/json".toMediaType()))
-            .build()
-        return if (code in 200..299) Response.success(null, raw) else Response.error(raw.body!!, raw)
-    }
-
-    companion object {
-        private const val USER_ID = 7L
-        private const val ROOM_TOKEN = "token"
-        private const val MARKER = 2624
     }
 }
