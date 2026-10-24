@@ -2026,6 +2026,10 @@ class CallActivity : CallBaseActivity() {
 
                 override fun onError(e: Throwable) {
                     logger.e(TAG, "Failed to join call", e)
+                    if (currentCallStatus === CallStatus.CALLING_TIMEOUT) {
+                        // the dial ran out while joining: the screen of "call again" stays
+                        return
+                    }
                     if (webSocketClient != null && shouldRetryRejoin(currentCallStatus, e)) {
                         // A rejoin that fails on a bad network must not end the call: the user would find the call
                         // screen gone and join again by hand.
@@ -2203,8 +2207,9 @@ class CallActivity : CallBaseActivity() {
     @Suppress("Detekt.NestedBlockDepth")
     @Subscribe(threadMode = ThreadMode.BACKGROUND)
     fun onMessageEvent(webSocketCommunicationEvent: WebSocketCommunicationEvent) {
-        // after "no answer" only the user's "call again" may leave that screen; a late event must not dial anew
-        if (!CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
+        // The call is over: nothing to do. After "no answer" the service part of "hello" still runs (the signaling
+        // may reconnect on that screen and "call again" reuses the sender), but a late event must not dial anew.
+        if (currentCallStatus === CallStatus.LEAVING) {
             return
         }
         if (webSocketCommunicationEvent.getHashMap() != null) {
@@ -2230,7 +2235,8 @@ class CallActivity : CallBaseActivity() {
                         )
                     }
 
-                    if (!webSocketCommunicationEvent.getHashMap()!!.containsKey("oldResumeId")) {
+                    val newSession = !webSocketCommunicationEvent.getHashMap()!!.containsKey("oldResumeId")
+                    if (newSession && CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
                         if (currentCallStatus === CallStatus.RECONNECTING) {
                             // alone in the call the user stays in it, as in a rejoin after an ICE failure
                             hangup(false, false, 0L, publisherRejoinPolicy.leavesCallOnRejoin())
@@ -2245,8 +2251,13 @@ class CallActivity : CallBaseActivity() {
                                 "hello with a new session, ending ${peerConnectionWrapperList.size} peer connections"
                             )
                             endAllPeerConnectionsAndParticipants()
-                            setCallState(CallStatus.RECONNECTING)
-                            runOnUiThread { initiateCall() }
+                            runOnUiThread {
+                                // the dial may have run out on the main thread meanwhile
+                                if (CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
+                                    setCallState(CallStatus.RECONNECTING)
+                                    initiateCall()
+                                }
+                            }
                         }
                     }
                 }

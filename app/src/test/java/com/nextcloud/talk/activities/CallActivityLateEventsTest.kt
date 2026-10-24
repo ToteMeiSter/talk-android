@@ -11,16 +11,27 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import com.nextcloud.talk.api.NcApi
+import com.nextcloud.talk.call.MessageSenderNoMcu
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
+import com.nextcloud.talk.models.json.capabilities.CapabilitiesDto
+import com.nextcloud.talk.models.json.capabilities.SpreedCapabilityDto
 import com.nextcloud.talk.models.json.generic.GenericOverall
+import com.nextcloud.talk.signaling.SignalingMessageReceiver
 import com.nextcloud.talk.signaling.SignalingMessageSender
 import com.nextcloud.talk.webrtc.PublisherRejoinPolicy
 import com.nextcloud.talk.webrtc.WebSocketInstance
 import io.reactivex.Observable
+import io.reactivex.android.plugins.RxAndroidPlugins
+import io.reactivex.plugins.RxJavaPlugins
+import io.reactivex.schedulers.Schedulers
+import io.reactivex.subjects.PublishSubject
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
+import org.junit.After
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -55,19 +66,37 @@ class CallActivityLateEventsTest {
         val user: User = mock()
         whenever(user.id).thenReturn(7L)
         whenever(user.hasSpreedFeatureCapability(any())).thenReturn(true)
+        val spreed: SpreedCapabilityDto = mock()
+        whenever(spreed.features).thenReturn(listOf("signaling-v3"))
+        val capabilities: CapabilitiesDto = mock()
+        whenever(capabilities.spreedCapability).thenReturn(spreed)
+        whenever(user.capabilities).thenReturn(capabilities)
         setField("conversationUser", user)
         setField("roomToken", "abc123")
         setField("baseUrl", "https://test.example.com")
+        activity.logger = mock()
         setField("ncApi", ncApi)
         setField("webSocketClient", webSocketClient)
         val callViewModel: CallViewModel = mock()
         whenever(callViewModel.participants).thenReturn(MutableStateFlow(emptyList()))
         setField("callViewModel", callViewModel)
         setField("signalingMessageSender", mock<SignalingMessageSender>())
+        setField("signalingMessageReceiver", mock<SignalingMessageReceiver>())
         setField("isCallSetUp", true)
         setField("handler", mock<Handler>())
         setField("publisherRejoinPolicy", PublisherRejoinPolicy { SystemClock.uptimeMillis() })
         whenever(ncApi.leaveCall(anyOrNull(), any(), anyOrNull())).thenReturn(Observable.never<GenericOverall>())
+        // the start of a join (initiateCall) only asks for the signaling settings: never answered here
+        whenever(ncApi.getSignalingSettings(anyOrNull(), any())).thenReturn(Observable.never())
+        RxJavaPlugins.setIoSchedulerHandler { Schedulers.trampoline() }
+        RxAndroidPlugins.setInitMainThreadSchedulerHandler { Schedulers.trampoline() }
+        RxAndroidPlugins.setMainThreadSchedulerHandler { Schedulers.trampoline() }
+    }
+
+    @After
+    fun tearDown() {
+        RxJavaPlugins.reset()
+        RxAndroidPlugins.reset()
     }
 
     @Test
@@ -92,7 +121,7 @@ class CallActivityLateEventsTest {
 
         // a late "hello" of the rejoin chain, a late join, a late ICE failure
         val hello = WebSocketCommunicationEvent("hello", hashMapOf("version" to "1"))
-        sendHello(hello)
+        activity.onMessageEvent(hello)
         invoke("performCall")
         invoke("rejoinAfterFailure")
 
@@ -122,18 +151,60 @@ class CallActivityLateEventsTest {
         val hello = WebSocketCommunicationEvent("hello", hashMapOf("version" to "1"))
 
         invoke("setCallState", CallStatus.RECONNECTING)
-        sendHello(hello)
+        activity.onMessageEvent(hello)
         verify(ncApi, never()).leaveCall(anyOrNull(), any(), anyOrNull())
 
         policy.onPeerJoined()
         invoke("setCallState", CallStatus.RECONNECTING)
-        sendHello(hello)
+        activity.onMessageEvent(hello)
         verify(ncApi).leaveCall(anyOrNull(), any(), anyOrNull())
     }
 
-    // After the leave the branch starts the join (initiateCall), which needs the whole call screen: not set up here.
-    private fun sendHello(hello: WebSocketCommunicationEvent) {
-        runCatching { activity.onMessageEvent(hello) }
+    @Test
+    fun aHelloAfterNoAnswerRefreshesTheSenderButDoesNotJoinOrChangeTheState() {
+        whenever(webSocketClient.hasMCU()).thenReturn(false)
+        invoke("setCallState", CallStatus.CALLING_TIMEOUT)
+        assertNull(field("messageSender"))
+
+        activity.onMessageEvent(WebSocketCommunicationEvent("hello", hashMapOf("version" to "1")))
+
+        assertNotNull("\"call again\" reuses the sender of the reconnected signaling", field("messageSender"))
+        assertEquals(CallStatus.CALLING_TIMEOUT, status())
+        verify(webSocketClient, never()).clearResumeId()
+        verify(ncApi, never()).getSignalingSettings(anyOrNull(), any())
+        verify(ncApi, never()).joinCall(anyOrNull(), any(), any(), any(), anyOrNull())
+    }
+
+    @Test
+    fun aJoinAnsweredAfterNoAnswerLeavesTheCallAgainAndDoesNotAskForTheRoom() {
+        val join = PublishSubject.create<GenericOverall>()
+        whenever(ncApi.joinCall(anyOrNull(), any(), any(), any(), anyOrNull())).thenReturn(join)
+        setField("messageSender", MessageSenderNoMcu(mock(), emptySet(), mutableListOf()))
+        invoke("setCallState", CallStatus.PUBLISHER_FAILED)
+        invoke("performCall")
+
+        invoke("setCallState", CallStatus.CALLING_TIMEOUT)
+        join.onNext(GenericOverall())
+
+        verify(ncApi).leaveCall(anyOrNull(), any(), anyOrNull())
+        verify(ncApi, never()).getRoom(anyOrNull(), any())
+        assertEquals(CallStatus.CALLING_TIMEOUT, status())
+    }
+
+    @Test
+    fun aJoinThatFailsAfterNoAnswerKeepsTheScreenOfCallAgain() {
+        val join = PublishSubject.create<GenericOverall>()
+        whenever(ncApi.joinCall(anyOrNull(), any(), any(), any(), anyOrNull())).thenReturn(join)
+        setField("messageSender", MessageSenderNoMcu(mock(), emptySet(), mutableListOf()))
+        invoke("setCallState", CallStatus.PUBLISHER_FAILED)
+        invoke("performCall")
+
+        invoke("setCallState", CallStatus.CALLING_TIMEOUT)
+        join.onError(java.io.IOException("late"))
+
+        assertEquals(CallStatus.CALLING_TIMEOUT, status())
+        assertTrue("the activity is not finished", !activity.isFinishing)
+        verify(ncApi, never()).getRoom(anyOrNull(), any())
     }
 
     private fun status(): CallStatus? = field("currentCallStatus") as CallStatus?
