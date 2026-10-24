@@ -131,6 +131,19 @@ class CallActivityLateEventsTest {
     }
 
     @Test
+    fun aLateRoomJoinFailureAfterNoAnswerNeitherJoinsNorLeavesTheScreen() {
+        invoke("setCallState", CallStatus.CALLING_TIMEOUT)
+
+        invoke("handleRoomJoinFailed")
+
+        assertEquals(CallStatus.CALLING_TIMEOUT, status())
+        assertEquals("no new join was started", false, field("joinRoomInitiated"))
+        assertEquals("no refresh of the room session was counted", 0, field("roomJoinRefreshes"))
+        assertNull("no \"join failed\" toast on the screen of \"call again\"", ShadowToast.getLatestToast())
+        assertEquals("the screen stays", false, activity.isFinishing)
+    }
+
+    @Test
     fun aRejoinLeavesTheCallOnTheServerOnlyAfterTheOtherSideWasInIt() {
         val policy = field("publisherRejoinPolicy") as PublisherRejoinPolicy
         invoke("setCallState", CallStatus.JOINED)
