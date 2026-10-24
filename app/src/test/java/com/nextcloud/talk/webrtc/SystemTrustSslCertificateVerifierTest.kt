@@ -6,16 +6,12 @@
  */
 package com.nextcloud.talk.webrtc
 
+import com.nextcloud.talk.webrtc.TurnsTlsFixtures.pem
+import com.nextcloud.talk.webrtc.TurnsTlsFixtures.verifierTrusting
 import okhttp3.tls.HeldCertificate
-import org.conscrypt.Conscrypt
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
-import java.security.KeyStore
-import java.security.cert.CertificateFactory
-import java.security.cert.X509Certificate
-import javax.net.ssl.TrustManagerFactory
-import javax.net.ssl.X509TrustManager
 
 /**
  * Runs against the Conscrypt trust manager, which Android uses. The PEM fixtures in `resources/turns-tls` have
@@ -27,25 +23,6 @@ class SystemTrustSslCertificateVerifierTest {
         .certificateAuthority(2)
         .commonName("Test Root")
         .build()
-
-    private fun pem(name: String): ByteArray {
-        val stream = javaClass.classLoader!!.getResourceAsStream("turns-tls/$name.pem")!!
-        return CertificateFactory.getInstance("X.509").generateCertificate(stream).encoded
-    }
-
-    private fun verifierTrusting(anchor: ByteArray): SystemTrustSslCertificateVerifier {
-        val cert = CertificateFactory.getInstance("X.509").generateCertificate(anchor.inputStream()) as X509Certificate
-        val keyStore = KeyStore.getInstance(KeyStore.getDefaultType()).apply {
-            load(null, null)
-            setCertificateEntry("anchor", cert)
-        }
-        val factory = TrustManagerFactory.getInstance(
-            TrustManagerFactory.getDefaultAlgorithm(),
-            Conscrypt.newProvider()
-        )
-        factory.init(keyStore)
-        return SystemTrustSslCertificateVerifier(factory.trustManagers.filterIsInstance<X509TrustManager>().first())
-    }
 
     private val verifier by lazy { verifierTrusting(pem("root")) }
 
@@ -73,15 +50,15 @@ class SystemTrustSslCertificateVerifierTest {
     }
 
     @Test
-    fun nonCaCertificateIssuedByAnchorIsRejected() {
+    fun leafIssuedByAnchorIsAccepted() {
         val leaf = HeldCertificate.Builder()
             .commonName("turn.example.org")
             .addSubjectAlternativeName("turn.example.org")
             .signedBy(heldRoot)
             .build()
 
-        assertFalse(verifierTrusting(heldRoot.certificate.encoded).verify(leaf.certificate.encoded))
-        assertFalse(verifier.verify(pem("not-ca-under-root")))
+        assertTrue(verifierTrusting(heldRoot.certificate.encoded).verify(leaf.certificate.encoded))
+        assertTrue(verifier.verify(pem("not-ca-under-root")))
     }
 
     @Test
@@ -95,7 +72,7 @@ class SystemTrustSslCertificateVerifierTest {
     }
 
     @Test
-    fun leafBelowUntrustedIntermediateIsRejected() {
+    fun leafBelowUnknownIntermediateIsRejected() {
         val intermediate = HeldCertificate.Builder()
             .certificateAuthority(1)
             .commonName("Test Intermediate")
