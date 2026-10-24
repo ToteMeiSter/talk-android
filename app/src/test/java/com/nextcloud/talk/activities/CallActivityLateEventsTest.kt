@@ -11,6 +11,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import com.nextcloud.talk.api.NcApi
+import com.nextcloud.talk.call.MessageSenderNoMcu
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
 import com.nextcloud.talk.models.json.capabilities.CapabilitiesDto
@@ -39,7 +40,6 @@ import org.mockito.kotlin.anyOrNull
 import org.mockito.kotlin.mock
 import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
-import org.mockito.kotlin.verifyNoInteractions
 import org.mockito.kotlin.whenever
 import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
@@ -208,7 +208,8 @@ class CallActivityLateEventsTest {
     }
 
     private fun prepareForPerformCall() {
-        setField("messageSender", com.nextcloud.talk.call.MessageSenderNoMcu(mock<SignalingMessageSender>(), emptySet(), mutableListOf()))
+        val sender = MessageSenderNoMcu(mock<SignalingMessageSender>(), emptySet(), mutableListOf())
+        setField("messageSender", sender)
     }
 
     private fun sendHello(hello: WebSocketCommunicationEvent) {
