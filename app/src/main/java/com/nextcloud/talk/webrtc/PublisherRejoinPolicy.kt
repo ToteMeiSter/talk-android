@@ -22,10 +22,14 @@ import com.nextcloud.talk.utils.NotificationUtils
  *   starts over, as the other side has to be seen again.
  * - Leave and silent: a rejoin leaves the call on the server only when the other side joined it. Alone in the call
  *   the user stays in it (`CallController::leaveCall` ends a call without active sessions, which would take the
- *   ringing away from the callee); the old session ends by itself. The join is silent only after the other side
- *   joined, since the call is on and nobody is to be rung again.
+ *   ringing away from the callee). The Nextcloud session is the same one (the join and the room session are kept);
+ *   only the session at the signaling server (HPB) is replaced, and the old one of it ends there by itself. Once the
+ *   other side was in the call and left again, the user is alone in the call but no longer ringing it: the rejoin
+ *   leaves the call then ([leavesCallOnRejoin] stays true after [onPeerJoined]). The join is silent only after the
+ *   other side joined, since the call is on and nobody is to be rung again.
  *
- * Not thread-safe, call it from one thread (the main thread).
+ * The state is touched from the main thread and from the thread of the participant list (the call status changes),
+ * so every method is synchronized.
  */
 internal class PublisherRejoinPolicy(private val clockMillis: () -> Long = { System.nanoTime() / NANOS_PER_MILLI }) {
 
@@ -39,6 +43,7 @@ internal class PublisherRejoinPolicy(private val clockMillis: () -> Long = { Sys
      *
      * @return pause in milliseconds before the rejoin (0 means at once), or [GIVE_UP]
      */
+    @Synchronized
     fun onPublisherFailed(): Long {
         if (remainingUntilGiveUp() == 0L) {
             return GIVE_UP
@@ -48,6 +53,7 @@ internal class PublisherRejoinPolicy(private val clockMillis: () -> Long = { Sys
     }
 
     /** Opens the give-up window if it is closed; returns the time left until the call is given up. */
+    @Synchronized
     fun remainingUntilGiveUp(): Long {
         val now = clockMillis()
         if (windowOpenedAt == NONE) {
@@ -57,28 +63,33 @@ internal class PublisherRejoinPolicy(private val clockMillis: () -> Long = { Sys
     }
 
     /** A new network starts the pauses over; the give-up window stays. */
+    @Synchronized
     fun reset() {
         failuresSinceConnected = 0
     }
 
     /** The publisher connected: the failures are over, the give-up window is closed. */
+    @Synchronized
     fun onConnected() {
         failuresSinceConnected = 0
         windowOpenedAt = NONE
     }
 
     /** The user dials again by hand: a new dial, everything starts over. */
+    @Synchronized
     fun onRedial() {
         onConnected()
         firstJoinedAt = NONE
         peerJoined = false
     }
 
+    @Synchronized
     fun onPeerJoined() {
         peerJoined = true
     }
 
     /** Joined (again): the time the callee has left to answer. */
+    @Synchronized
     fun onJoined(): Long {
         val now = clockMillis()
         if (firstJoinedAt == NONE || peerJoined) {
@@ -88,6 +99,7 @@ internal class PublisherRejoinPolicy(private val clockMillis: () -> Long = { Sys
     }
 
     /** A rejoin leaves the call first only if somebody else is in it, else the call would end on the server. */
+    @Synchronized
     fun leavesCallOnRejoin(): Boolean = peerJoined
 
     /**
@@ -95,6 +107,7 @@ internal class PublisherRejoinPolicy(private val clockMillis: () -> Long = { Sys
      * sides were out of it at once and then sends the call notification (`Notification/Listener.php`,
      * `afterCallStarted`) unless the join is silent (`RoomService::setActiveSince`, `DETAIL_IN_CALL_SILENT`).
      */
+    @Synchronized
     fun joinsSilently(initiallySilent: Boolean): Boolean = initiallySilent || peerJoined
 
     companion object {

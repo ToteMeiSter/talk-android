@@ -6,6 +6,7 @@
  */
 package com.nextcloud.talk.webrtc
 
+import com.nextcloud.talk.activities.CallStatus
 import com.nextcloud.talk.webrtc.CallRecoveryPolicy.Action
 import org.junit.Assert.assertEquals
 import org.junit.Test
@@ -94,5 +95,29 @@ class CallRecoveryPolicyTest {
     @Test
     fun `recheck waits while a phone call goes on`() {
         assertEquals(Action.DEFER, CallRecoveryPolicy.onRecheck(true, IceConnectionState.FAILED, 0))
+    }
+
+    @Test
+    fun `the give-up deadline does not end a call that is left or timed out`() {
+        assertEquals(false, CallRecoveryPolicy.giveUpApplies(CallStatus.LEAVING))
+        assertEquals(false, CallRecoveryPolicy.giveUpApplies(CallStatus.CALLING_TIMEOUT))
+        assertEquals(true, CallRecoveryPolicy.giveUpApplies(CallStatus.PUBLISHER_FAILED))
+        assertEquals(true, CallRecoveryPolicy.giveUpApplies(CallStatus.RECONNECTING))
+    }
+
+    @Test
+    fun `the ring time ends the dial only while nobody answered`() {
+        val applies = listOf(
+            CallStatus.CONNECTING,
+            CallStatus.JOINED,
+            CallStatus.RECONNECTING,
+            CallStatus.PUBLISHER_FAILED,
+            CallStatus.OFFLINE
+        )
+        applies.forEach { assertEquals(it.name, true, CallRecoveryPolicy.ringTimeoutApplies(it)) }
+        assertEquals(false, CallRecoveryPolicy.ringTimeoutApplies(CallStatus.IN_CONVERSATION))
+        assertEquals(false, CallRecoveryPolicy.ringTimeoutApplies(CallStatus.LEAVING))
+        assertEquals(false, CallRecoveryPolicy.ringTimeoutApplies(CallStatus.CALLING_TIMEOUT))
+        assertEquals(false, CallRecoveryPolicy.ringTimeoutApplies(null))
     }
 }
