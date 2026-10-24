@@ -140,7 +140,8 @@ object CallPushRetryPolicy {
     /**
      * Tail of the participants poll. A failed or hanging request is retried while the call is still shown and
      * [POLL_WINDOW_MS] is not used up; the retry does not use up the repeat counter. Successful polls repeat every
-     * 5 s up to 12 times (at most the window) while [shouldKeepPolling] holds and the window lasts. The stream completes on the window's
+     * 5 s up to 12 times (at most the window) while [shouldKeepPolling] holds and the window lasts. The stream
+     * completes on the window's
      * end and fails with the last error otherwise: classify it with [pollFailureOutcome].
      */
     fun <T : Any> pollTransformer(
