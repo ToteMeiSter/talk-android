@@ -121,7 +121,7 @@ class CallActivityLateEventsTest {
 
         // a late "hello" of the rejoin chain, a late join, a late ICE failure
         val hello = WebSocketCommunicationEvent("hello", hashMapOf("version" to "1"))
-        sendHello(hello)
+        activity.onMessageEvent(hello)
         invoke("performCall")
         invoke("rejoinAfterFailure")
 
@@ -151,12 +151,12 @@ class CallActivityLateEventsTest {
         val hello = WebSocketCommunicationEvent("hello", hashMapOf("version" to "1"))
 
         invoke("setCallState", CallStatus.RECONNECTING)
-        sendHello(hello)
+        activity.onMessageEvent(hello)
         verify(ncApi, never()).leaveCall(anyOrNull(), any(), anyOrNull())
 
         policy.onPeerJoined()
         invoke("setCallState", CallStatus.RECONNECTING)
-        sendHello(hello)
+        activity.onMessageEvent(hello)
         verify(ncApi).leaveCall(anyOrNull(), any(), anyOrNull())
     }
 
@@ -166,7 +166,7 @@ class CallActivityLateEventsTest {
         invoke("setCallState", CallStatus.CALLING_TIMEOUT)
         assertNull(field("messageSender"))
 
-        sendHello(WebSocketCommunicationEvent("hello", hashMapOf("version" to "1")))
+        activity.onMessageEvent(WebSocketCommunicationEvent("hello", hashMapOf("version" to "1")))
 
         assertNotNull("\"call again\" reuses the sender of the reconnected signaling", field("messageSender"))
         assertEquals(CallStatus.CALLING_TIMEOUT, status())
@@ -210,10 +210,6 @@ class CallActivityLateEventsTest {
     private fun prepareForPerformCall() {
         val sender = MessageSenderNoMcu(mock<SignalingMessageSender>(), emptySet(), mutableListOf())
         setField("messageSender", sender)
-    }
-
-    private fun sendHello(hello: WebSocketCommunicationEvent) {
-        activity.onMessageEvent(hello)
     }
 
     private fun status(): CallStatus? = field("currentCallStatus") as CallStatus?
