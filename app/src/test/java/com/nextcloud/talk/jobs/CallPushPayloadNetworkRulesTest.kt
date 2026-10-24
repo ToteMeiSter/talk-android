@@ -80,10 +80,27 @@ class CallPushPayloadNetworkRulesTest {
 
     @Test
     fun theCameraDependsOnTheKindOfTheCallNotOnWhereItWasAnswered() {
-        assertEquals(CallPushPayload.CameraAtStart.NO_VIDEO, CallPushPayload.cameraAtStart(true, true))
-        assertEquals(CallPushPayload.CameraAtStart.NO_VIDEO, CallPushPayload.cameraAtStart(true, false))
-        assertEquals(CallPushPayload.CameraAtStart.ON, CallPushPayload.cameraAtStart(false, true))
-        assertEquals(CallPushPayload.CameraAtStart.OFF, CallPushPayload.cameraAtStart(false, false))
+        assertEquals(CallPushPayload.CameraAtStart.NO_VIDEO, CallPushPayload.cameraAtStart(false, true, true))
+        assertEquals(CallPushPayload.CameraAtStart.NO_VIDEO, CallPushPayload.cameraAtStart(false, true, false))
+        assertEquals(CallPushPayload.CameraAtStart.ON, CallPushPayload.cameraAtStart(true, false, true))
+        assertEquals(CallPushPayload.CameraAtStart.OFF, CallPushPayload.cameraAtStart(true, false, false))
+    }
+
+    @Test
+    fun aVideoCallAnsweredByVoiceKeepsItsCameraSwitchedOff() {
+        // answered by "voice" in the window or the notification: the camera button stays, the camera starts off
+        assertEquals(CallPushPayload.CameraAtStart.OFF, CallPushPayload.cameraAtStart(true, true, true))
+        assertEquals(CallPushPayload.CameraAtStart.OFF, CallPushPayload.cameraAtStart(true, true, false))
+
+        val video = ParticipantDto.InCallFlags.IN_CALL + ParticipantDto.InCallFlags.WITH_VIDEO
+        val voice = ParticipantDto.InCallFlags.IN_CALL
+        // video call and call of unknown kind (stage 1 of the notification), answered by voice: camera exists
+        assertTrue(CallPushPayload.hasOwnCamera(voiceOnly = true, fromNotification = true, callFlag = video))
+        assertTrue(CallPushPayload.hasOwnCamera(voiceOnly = true, fromNotification = true, callFlag = 0))
+        // a call known to be voice, and a call dialled as voice: no camera
+        assertFalse(CallPushPayload.hasOwnCamera(voiceOnly = true, fromNotification = true, callFlag = voice))
+        assertFalse(CallPushPayload.hasOwnCamera(voiceOnly = true, fromNotification = false, callFlag = video))
+        assertTrue(CallPushPayload.hasOwnCamera(voiceOnly = false, fromNotification = false, callFlag = 0))
     }
 
     @Test

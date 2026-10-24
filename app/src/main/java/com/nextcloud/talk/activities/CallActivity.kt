@@ -132,6 +132,7 @@ import com.nextcloud.talk.utils.ReceiverFlag
 import com.nextcloud.talk.utils.SpreedFeatures
 import com.nextcloud.talk.utils.VibrationUtils.vibrateShort
 import com.nextcloud.talk.utils.animations.PulseAnimation
+import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_FLAG
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_VOICE_ONLY
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CALL_WITHOUT_NOTIFICATION
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_CONVERSATION_NAME
@@ -273,6 +274,11 @@ class CallActivity : CallBaseActivity() {
     var isVoiceOnlyCall = false
     private var isCallWithoutNotification = false
     private var isIncomingCallFromNotification = false
+    private var callFlag = 0
+
+    /** The own camera exists also in a video call that was answered by voice: it starts switched off. */
+    private val hasOwnCamera: Boolean
+        get() = CallPushPayload.hasOwnCamera(isVoiceOnlyCall, isIncomingCallFromNotification, callFlag)
 
     /**
      * Answering an incoming call by voice only gives up the own camera, not the video of the caller:
@@ -755,6 +761,7 @@ class CallActivity : CallBaseActivity() {
 
         if (extras.containsKey(KEY_FROM_NOTIFICATION_START_CALL)) {
             isIncomingCallFromNotification = extras.getBoolean(KEY_FROM_NOTIFICATION_START_CALL)
+            callFlag = extras.getInt(KEY_CALL_FLAG, 0)
             val notificationId = extras.getInt(KEY_NOTIFICATION_TIMESTAMP, 0)
             if (notificationId != 0) {
                 // cancel the notification to stop the call ringing
@@ -1118,7 +1125,7 @@ class CallActivity : CallBaseActivity() {
         sdpConstraintsForMCUPublisher!!.optional.add(MediaConstraints.KeyValuePair("DtlsSrtpKeyAgreement", "true"))
         sdpConstraints!!.optional.add(MediaConstraints.KeyValuePair("internalSctpDataChannels", "true"))
         sdpConstraints!!.optional.add(MediaConstraints.KeyValuePair("DtlsSrtpKeyAgreement", "true"))
-        if (!isVoiceOnlyCall) {
+        if (hasOwnCamera) {
             cameraInitialization()
         }
         microphoneInitialization()
@@ -1193,7 +1200,7 @@ class CallActivity : CallBaseActivity() {
             binding!!.pictureInPictureButton.visibility = View.GONE
         }
 
-        if (isVoiceOnlyCall) {
+        if (!hasOwnCamera) {
             binding!!.cameraButton.visibility = View.GONE
             binding!!.selfVideoViewWrapper.visibility = View.GONE
         } else {
@@ -1321,7 +1328,7 @@ class CallActivity : CallBaseActivity() {
         }
 
         val cameraPermissionGranted = permissionUtil!!.isCameraPermissionGranted()
-        when (CallPushPayload.cameraAtStart(isVoiceOnlyCall, cameraPermissionGranted)) {
+        when (CallPushPayload.cameraAtStart(hasOwnCamera, isVoiceOnlyCall, cameraPermissionGranted)) {
             CallPushPayload.CameraAtStart.NO_VIDEO -> binding!!.selfVideoViewWrapper.visibility = View.GONE
 
             CallPushPayload.CameraAtStart.ON -> {
@@ -1333,7 +1340,7 @@ class CallActivity : CallBaseActivity() {
                 }
             }
 
-            CallPushPayload.CameraAtStart.OFF -> Unit
+            CallPushPayload.CameraAtStart.OFF -> binding!!.selfVideoViewWrapper.visibility = View.INVISIBLE
         }
     }
 
@@ -1894,6 +1901,10 @@ class CallActivity : CallBaseActivity() {
      */
     private fun handleRoomJoinFailed() {
         Log.d(TAG, "onMessageEvent 'roomJoinFailed'")
+        if (!CallRecoveryPolicy.giveUpApplies(currentCallStatus)) {
+            Log.d(TAG, "roomJoinFailed: the call is over or unanswered, not joining again")
+            return
+        }
         if (!shouldRefreshRoomSession(currentCallStatus, roomJoinRefreshes)) {
             if (currentCallStatus !== CallStatus.IN_CONVERSATION) {
                 Log.e(TAG, "Joining the room for the call failed repeatedly, leaving")
@@ -1978,7 +1989,7 @@ class CallActivity : CallBaseActivity() {
         if (canPublishAudioStream) {
             inCallFlag += ParticipantDto.InCallFlags.WITH_AUDIO
         }
-        if (!isVoiceOnlyCall && canPublishVideoStream) {
+        if (hasOwnCamera && canPublishVideoStream) {
             inCallFlag += ParticipantDto.InCallFlags.WITH_VIDEO
         }
         // A call joined while the signaling socket is down (a reconnect is on its way) gets its events late.
@@ -3039,7 +3050,7 @@ class CallActivity : CallBaseActivity() {
 
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun onMessageEvent(proximitySensorEvent: ProximitySensorEvent) {
-        if (!isVoiceOnlyCall) {
+        if (hasOwnCamera) {
             val enableVideo = proximitySensorEvent.proximitySensorEventType ==
                 ProximitySensorEvent.ProximitySensorEventType.SENSOR_FAR &&
                 videoOn

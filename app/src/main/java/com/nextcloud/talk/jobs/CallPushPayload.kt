@@ -117,18 +117,31 @@ object CallPushPayload {
         /** Video call, answered by "video" from the window or the notification, or dialled: the camera is on. */
         ON,
 
-        /** Video call without the camera permission: the user is asked when the button is used. */
+        /** Video call answered by voice, or without the camera permission: the button of the call turns it on. */
         OFF
     }
 
     /**
-     * [voiceOnly] is set by the button that answered: "voice" or "video" in the window of the incoming call
-     * (CallNotificationActivity), the kind of the call otherwise. The place of the answer (notification or window)
-     * is no reason to switch the camera off.
+     * Whether the call has an own camera that can be switched on: a video call, or a call of unknown or video kind
+     * that is answered by "voice" (window or notification). Only a call known to be voice
+     * (call flag without video) answered from the notification, and a call dialled as voice, have no camera.
      */
-    fun cameraAtStart(voiceOnly: Boolean, cameraPermissionGranted: Boolean): CameraAtStart =
+    fun hasOwnCamera(voiceOnly: Boolean, fromNotification: Boolean, callFlag: Int): Boolean =
         when {
-            voiceOnly -> CameraAtStart.NO_VIDEO
+            !voiceOnly -> true
+            !fromNotification -> false
+            else -> !isCallTypeKnown(callFlag) || (callFlag and ParticipantDto.InCallFlags.WITH_VIDEO) > 0
+        }
+
+    /**
+     * [voiceOnly] is set by the button that answered: "voice" or "video" in the window of the incoming call
+     * (CallNotificationActivity), the kind of the call otherwise. Answered by voice, a video call keeps its camera,
+     * switched off: the button of the call turns it on. [hasOwnCamera] is false for a real voice call.
+     */
+    fun cameraAtStart(hasOwnCamera: Boolean, voiceOnly: Boolean, cameraPermissionGranted: Boolean): CameraAtStart =
+        when {
+            !hasOwnCamera -> CameraAtStart.NO_VIDEO
+            voiceOnly -> CameraAtStart.OFF
             cameraPermissionGranted -> CameraAtStart.ON
             else -> CameraAtStart.OFF
         }
