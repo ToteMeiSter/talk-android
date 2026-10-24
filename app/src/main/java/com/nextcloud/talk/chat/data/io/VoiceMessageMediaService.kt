@@ -103,8 +103,8 @@ class VoiceMessageMediaService : MediaSessionService() {
             .build()
         // A voice message takes a transient focus, so that the music of another app pauses and comes back afterwards.
         // Audio files are music and let the player hold a permanent focus (see onItemStarted).
-        playbackAudioFocus = PlaybackAudioFocus(this, player) {
-            player.currentMediaItem?.chatAudioKind() != ChatAudioKind.AUDIO_FILE
+        playbackAudioFocus = PlaybackAudioFocus(this, player).also { focus ->
+            focus.applies = { player.currentMediaItem?.chatAudioKind() != ChatAudioKind.AUDIO_FILE }
         }
         player.addListener(PlayerListener(player))
         player.addAnalyticsListener(LoadListener())

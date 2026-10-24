@@ -25,20 +25,18 @@ fun playerNeedsAudioFocus(playWhenReady: Boolean, playbackState: Int): Boolean =
 /**
  * Holds the audio focus of the app while a player plays, so that the music of another app pauses and, after the
  * playback, comes back: the focus is transient. The player is paused when the focus is lost.
- * [applies] tells whether what plays now needs the focus held here; [refresh] checks it again after the media
- * changed. [release] gives the focus back.
+ * [refresh] checks [applies] again after the media changed. [release] gives the focus back.
  */
-class PlaybackAudioFocus(
-    context: Context,
-    private val player: Player,
-    private val applies: () -> Boolean = { true }
-) : Player.Listener {
+class PlaybackAudioFocus(context: Context, private val player: Player) : Player.Listener {
     private val focusManager = AudioFocusRequestManager(
         context.applicationContext,
         AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
     )
     private val focusLostObserver = Observer<AudioFocusRequestManager.ManagerState> { player.pause() }
     private var held = false
+
+    /** Tells whether what plays now needs the focus held here. */
+    var applies: () -> Boolean = { true }
 
     init {
         focusManager.getManagerState.observeForever(focusLostObserver)
