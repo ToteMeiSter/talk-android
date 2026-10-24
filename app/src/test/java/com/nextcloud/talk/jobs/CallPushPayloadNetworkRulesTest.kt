@@ -7,6 +7,7 @@
 package com.nextcloud.talk.jobs
 
 import android.app.Application
+import com.nextcloud.talk.activities.CallStatus
 import com.nextcloud.talk.models.json.participants.ParticipantDto
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import org.junit.Assert.assertEquals
@@ -50,10 +51,33 @@ class CallPushPayloadNetworkRulesTest {
     }
 
     @Test
-    fun cameraIsOnForVideoAnswerAndOffForVoiceAnswer() {
-        assertTrue(CallPushPayload.startsWithCamera(voiceOnly = false, cameraPermissionGranted = true))
-        assertFalse(CallPushPayload.startsWithCamera(voiceOnly = true, cameraPermissionGranted = true))
-        assertFalse(CallPushPayload.startsWithCamera(voiceOnly = false, cameraPermissionGranted = false))
+    fun theCallIsHeldUntilTheRingTimeRunsOutOrTheCallEnds() {
+        CallStatus.values().forEach { status ->
+            val expected = status != CallStatus.CALLING_TIMEOUT && status != CallStatus.LEAVING
+            assertEquals(status.name, expected, CallPushPayload.holdsCall(status))
+        }
+        // a call from the other side to the room we gave up on is a new call, not our own
+        val call = CallPushPayload.ActiveCall(USER_ID, TOKEN)
+        val held = call.takeIf { CallPushPayload.holdsCall(CallStatus.CALLING_TIMEOUT) }
+        assertFalse(CallPushPayload.isOwnCall(held, USER_ID, TOKEN))
+    }
+
+    @Test
+    fun notificationTimeoutIsWhatIsLeftOfFiftyFiveSecondsFromThePush() {
+        assertEquals(55_000L, CallPushPayload.notificationTimeoutMs(0L))
+        assertEquals(35_000L, CallPushPayload.notificationTimeoutMs(20_000L))
+        // the stage-2 post after a slow room lookup must not give the window the whole time again
+        val age = CallPushPayload.ringAgeMs(sentTime = 1_000L, arrivalTime = 4_000L, sinceArrivalMs = 40_000L)
+        assertEquals(43_000L, age)
+        assertEquals(12_000L, CallPushPayload.notificationTimeoutMs(age))
+        assertEquals(1_000L, CallPushPayload.notificationTimeoutMs(70_000L))
+    }
+
+    @Test
+    fun unknownOrSkewedPushTimeCountsAsNoDelay() {
+        assertEquals(5_000L, CallPushPayload.ringAgeMs(sentTime = 0L, arrivalTime = 9_000L, sinceArrivalMs = 5_000L))
+        val skewed = CallPushPayload.ringAgeMs(sentTime = 99_000L, arrivalTime = 9_000L, sinceArrivalMs = 5_000L)
+        assertEquals(5_000L, skewed)
     }
 
     @Test

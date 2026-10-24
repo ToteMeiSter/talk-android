@@ -370,9 +370,8 @@ class CallActivity : CallBaseActivity() {
     private val publisherRejoinPolicy = PublisherRejoinPolicy()
     private var isRejoinPaused = false
 
-    // The call was joined before and is joined again after a failure: the others must not be called a second time.
-    // Cleared when the user dials again by hand after the ring time ran out.
-    private var isRejoining = false
+    // Ends the call when it was not connected in time since the first failure, also if no new failure comes.
+    private val giveUpRunnable = Runnable { giveUpCall() }
 
     // Last ICE state of the own publisher connection, to tell whether it survived a change of the network handle or a
     // phone call. Null while there is no connection (yet).
@@ -610,7 +609,6 @@ class CallActivity : CallBaseActivity() {
         )
 
         isCallSetUp = true
-        activeCall = CallPushPayload.ActiveCall(conversationUser.id!!, roomToken!!)
 
         if (!conversationUser.current) {
             // Taking part in a call uses its account, so it becomes the last used one.
@@ -959,7 +957,8 @@ class CallActivity : CallBaseActivity() {
         binding!!.callStates.callStateRelativeLayout.setOnClickListener {
             if (currentCallStatus === CallStatus.CALLING_TIMEOUT) {
                 // the user dials again: a new call, the others are called
-                isRejoining = false
+                publisherRejoinPolicy.onRedial()
+                rejoinHandler.removeCallbacks(giveUpRunnable)
                 setCallState(CallStatus.RECONNECTING)
                 hangupNetworkCalls(shutDownView = false, endCallForAll = false)
             }
@@ -1320,10 +1319,8 @@ class CallActivity : CallBaseActivity() {
             binding!!.selfVideoViewWrapper.visibility = View.GONE
         } else if (cameraPermissionGranted) {
             binding!!.selfVideoViewWrapper.visibility = View.VISIBLE
-            // answered by "video" (window or notification): the camera is on
-            if (CallPushPayload.startsWithCamera(isVoiceOnlyCall, cameraPermissionGranted)) {
-                onCameraClick()
-            }
+            // answered by "video" (window or notification) or dialled as a video call: the camera is on
+            onCameraClick()
             if (cameraEnumerator!!.deviceNames.isEmpty()) {
                 binding!!.cameraButton.visibility = View.GONE
             }
@@ -1990,7 +1987,7 @@ class CallActivity : CallBaseActivity() {
             credentials,
             ApiUtils.getUrlForCall(apiVersion, baseUrl, roomToken!!),
             inCallFlag,
-            PublisherRejoinPolicy.joinsSilently(isCallWithoutNotification, isRejoining),
+            publisherRejoinPolicy.joinsSilently(isCallWithoutNotification),
             recordingConsentGiven
         )
             .subscribeOn(Schedulers.io())
@@ -2317,7 +2314,12 @@ class CallActivity : CallBaseActivity() {
         }
     }
 
-    private fun hangup(shutDownView: Boolean, endCallForAll: Boolean, rejoinDelayMillis: Long = 0L) {
+    private fun hangup(
+        shutDownView: Boolean,
+        endCallForAll: Boolean,
+        rejoinDelayMillis: Long = 0L,
+        leaveCall: Boolean = true
+    ) {
         Log.d(TAG, "hangup! shutDownView=$shutDownView, endCallForAll=$endCallForAll")
         joinRoomInitiated = false
         if (shutDownView) {
@@ -2344,7 +2346,7 @@ class CallActivity : CallBaseActivity() {
             CallForegroundService.stop(applicationContext)
         }
 
-        hangupNetworkCalls(shutDownView, endCallForAll, rejoinDelayMillis)
+        hangupNetworkCalls(shutDownView, endCallForAll, rejoinDelayMillis, leaveCall)
     }
 
     private fun endAllPeerConnectionsAndParticipants() {
@@ -2427,7 +2429,12 @@ class CallActivity : CallBaseActivity() {
             )
     }
 
-    private fun hangupNetworkCalls(shutDownView: Boolean, endCallForAll: Boolean, rejoinDelayMillis: Long = 0L) {
+    private fun hangupNetworkCalls(
+        shutDownView: Boolean,
+        endCallForAll: Boolean,
+        rejoinDelayMillis: Long = 0L,
+        leaveCall: Boolean = true
+    ) {
         Log.d(TAG, "hangupNetworkCalls. shutDownView=$shutDownView")
         if (!::conversationUser.isInitialized) {
             Log.w(TAG, "hangupNetworkCalls: conversationUser not initialized, skipping network calls")
@@ -2446,7 +2453,11 @@ class CallActivity : CallBaseActivity() {
         }
         val endCall: Boolean? = if (endCallForAll) true else null
 
-        sendLeaveCall(apiVersion, endCall)
+        // Alone in the call a rejoin stays in it: leaving would end the call on the server and take the ringing
+        // away from the callee who has not answered yet.
+        if (leaveCall) {
+            sendLeaveCall(apiVersion, endCall)
+        }
 
         val conversationModel = currentConversation?.let {
             ConversationModel.mapToConversationModel(it, conversationUser)
@@ -3050,6 +3061,13 @@ class CallActivity : CallBaseActivity() {
     private fun setCallState(callState: CallStatus) {
         if (currentCallStatus == null || currentCallStatus !== callState) {
             currentCallStatus = callState
+            if (isCallSetUp) {
+                activeCall = if (CallPushPayload.holdsCall(callState)) {
+                    CallPushPayload.ActiveCall(conversationUser.id!!, roomToken!!)
+                } else {
+                    null
+                }
+            }
             if (handler == null) {
                 handler = Handler(Looper.getMainLooper())
             } else {
@@ -3062,11 +3080,16 @@ class CallActivity : CallBaseActivity() {
                 CallStatus.PUBLISHER_FAILED -> handler!!.post { handleCallStatePublisherFailed() }
                 CallStatus.RECONNECTING -> handler!!.post { handleCallStateReconnecting() }
                 CallStatus.JOINED -> {
-                    handler!!.postDelayed(callingTimeoutRunnable, CALLING_TIMEOUT)
+                    // what is left of the 55 s since the first join, a rejoin does not start the ring again
+                    handler!!.postDelayed(callingTimeoutRunnable, publisherRejoinPolicy.onJoined())
                     handler!!.post { handleCallStateJoined() }
                 }
 
-                CallStatus.IN_CONVERSATION -> handler!!.post { handleCallStateInConversation() }
+                CallStatus.IN_CONVERSATION -> {
+                    publisherRejoinPolicy.onPeerJoined()
+                    handler!!.post { handleCallStateInConversation() }
+                }
+
                 CallStatus.OFFLINE -> handler!!.post { handleCallStateOffline() }
                 CallStatus.LEAVING -> handler!!.post { handleCallStateLeaving() }
             }
@@ -3425,25 +3448,35 @@ class CallActivity : CallBaseActivity() {
 
     // Same recovery as the web client for a failed connection to the MCU: join the call again with a new session.
     private fun rejoinCallWithNewSession(rejoinDelayMillis: Long = 0L) {
-        Log.w(TAG, "Leaving the call to join it again with a new session, pause=$rejoinDelayMillis ms")
-        isRejoining = true
+        val leaveCall = publisherRejoinPolicy.leavesCallOnRejoin()
+        Log.w(TAG, "Joining the call again with a new session, pause=$rejoinDelayMillis ms, leaveCall=$leaveCall")
         rejoinHandler.removeCallbacks(publisherRecheckRunnable)
+        // the deadline stands from the first failure; arming again only moves the timer to the same moment
+        rejoinHandler.removeCallbacks(giveUpRunnable)
+        rejoinHandler.postDelayed(giveUpRunnable, publisherRejoinPolicy.remainingUntilGiveUp())
         publisherIceState = null
         setCallState(CallStatus.PUBLISHER_FAILED)
         webSocketClient!!.clearResumeId()
-        hangup(false, false, rejoinDelayMillis)
+        hangup(false, false, rejoinDelayMillis, leaveCall)
     }
 
     // Counts the failure: joins again after the pause of the policy, or ends the call when the tries are used up.
     private fun rejoinAfterFailure() {
         val pause = publisherRejoinPolicy.onPublisherFailed()
         if (pause == PublisherRejoinPolicy.GIVE_UP) {
-            Log.w(TAG, "No connection after the rejoins, ending the call")
-            Toast.makeText(applicationContext, R.string.nc_call_connection_failed, Toast.LENGTH_LONG).show()
-            hangup(true, false)
+            giveUpCall()
         } else {
             rejoinCallWithNewSession(pause)
         }
+    }
+
+    private fun giveUpCall() {
+        if (isDestroyed || currentCallStatus === CallStatus.LEAVING) {
+            return
+        }
+        Log.w(TAG, "No connection in time, ending the call")
+        Toast.makeText(applicationContext, R.string.nc_call_connection_failed, Toast.LENGTH_LONG).show()
+        hangup(true, false)
     }
 
     // The connections are bound to the address of the old network, so recover now instead of waiting for ICE to fail.
@@ -3613,7 +3646,8 @@ class CallActivity : CallBaseActivity() {
                 } else if (iceConnectionState == IceConnectionState.CONNECTED ||
                     iceConnectionState == IceConnectionState.COMPLETED
                 ) {
-                    publisherRejoinPolicy.reset()
+                    publisherRejoinPolicy.onConnected()
+                    rejoinHandler.removeCallbacks(giveUpRunnable)
                 }
             }
         }
