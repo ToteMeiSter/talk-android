@@ -29,15 +29,19 @@ object CallPushRetryPolicy {
     /** How long the room lookup of a call push is retried before the call is dropped. */
     const val ROOM_FETCH_WINDOW_MS = 45_000L
 
-    /** Absolute bound of the participants poll, retries after errors included. */
-    const val POLL_WINDOW_MS = 60_000L
+    /**
+     * Absolute bound of the participants poll, retries after errors included. It ends before the ringing
+     * notification does ([com.nextcloud.talk.utils.NotificationUtils.CALL_NOTIFICATION_TIMEOUT_MS], 55 s), so a call
+     * nobody answered is still reported as missed.
+     */
+    const val POLL_WINDOW_MS = 50_000L
 
     const val RETRY_DELAY_MS = 3_000L
 
     /** One attempt is cut off early: after Doze a pooled connection may be dead and only time out much later. */
     const val ATTEMPT_TIMEOUT_MS = 10_000L
 
-    /** One participants poll request; with [POLL_WINDOW_MS] this bounds the whole poll to about 70 s. */
+    /** One participants poll request; with [POLL_WINDOW_MS] this bounds the whole poll to about 60 s. */
     const val POLL_REQUEST_TIMEOUT_MS = 10_000L
 
     private const val POLL_INTERVAL_MS = 5_000L
@@ -136,7 +140,7 @@ object CallPushRetryPolicy {
     /**
      * Tail of the participants poll. A failed or hanging request is retried while the call is still shown and
      * [POLL_WINDOW_MS] is not used up; the retry does not use up the repeat counter. Successful polls repeat every
-     * 5 s up to 12 times while [shouldKeepPolling] holds and the window lasts. The stream completes on the window's
+     * 5 s up to 12 times (at most the window) while [shouldKeepPolling] holds and the window lasts. The stream completes on the window's
      * end and fails with the last error otherwise: classify it with [pollFailureOutcome].
      */
     fun <T : Any> pollTransformer(

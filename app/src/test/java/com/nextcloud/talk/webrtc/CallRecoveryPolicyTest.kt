@@ -19,6 +19,16 @@ class CallRecoveryPolicyTest {
     }
 
     @Test
+    fun `failed ice connection while a rejoin is on its way starts no second one`() {
+        assertEquals(Action.IGNORE, CallRecoveryPolicy.onIceFailed(interrupted = false, rejoinInProgress = true))
+    }
+
+    @Test
+    fun `phone call still defers a failure while a rejoin is on its way`() {
+        assertEquals(Action.DEFER, CallRecoveryPolicy.onIceFailed(interrupted = true, rejoinInProgress = true))
+    }
+
+    @Test
     fun `failed ice connection during a phone call is kept for later`() {
         assertEquals(Action.DEFER, CallRecoveryPolicy.onIceFailed(interrupted = true))
     }

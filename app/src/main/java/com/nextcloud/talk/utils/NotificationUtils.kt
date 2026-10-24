@@ -44,7 +44,11 @@ import java.io.IOException
 
 @Suppress("TooManyFunctions")
 object NotificationUtils {
-    const val CALL_NOTIFICATION_TIMEOUT_MS = 90_000L
+    /**
+     * How long an incoming call rings: the notification and with it the call window end after it. The caller gives
+     * up after the same time (`CallActivity`): one dial, 55 seconds, then the call is cancelled, as in GSM.
+     */
+    const val CALL_NOTIFICATION_TIMEOUT_MS = 55_000L
 
     val TAG = NotificationUtils::class.java.simpleName
 
@@ -282,7 +286,7 @@ object NotificationUtils {
      * chat is opened.
      *
      * The timeout is a safety net for a killed worker (FLAG_INSISTENT would ring forever). Normally the worker
-     * polls for 60 s (12 x 5 s) plus one request and then shows the "missed call". If the system removes the
+     * polls for 50 s (10 x 5 s) plus one request and then shows the "missed call". If the system removes the
      * notification earlier, that "missed call" is not shown. A poll that outlives the timeout (slow requests on a bad
      * network, no per-request limit) therefore ends the ring silently.
      */

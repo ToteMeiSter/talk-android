@@ -171,7 +171,8 @@
     <string name="nc_call_state_in_call">%1$s в вызове</string>
     <string name="nc_call_state_with_phone">%1$s с телефоном</string>
     <string name="nc_call_state_with_video">%1$s с видео</string>
-    <string name="nc_call_timeout">Нет ответа в течение 45 секунд, нажмите, чтобы повторить попытку</string>
+    <string name="nc_call_timeout">Нет ответа. Нажмите, чтобы позвонить снова</string>
+    <string name="nc_call_connection_failed">Не удалось соединиться</string>
     <string name="nc_call_unknown">%s вызов</string>
     <string name="nc_call_video">%s видеовызов</string>
     <string name="nc_call_voice">%s голосовой вызов</string>

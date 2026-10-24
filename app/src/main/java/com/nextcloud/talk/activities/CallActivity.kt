@@ -94,6 +94,7 @@ import com.nextcloud.talk.databinding.CallActivityBinding
 import com.nextcloud.talk.events.ConfigurationChangeEvent
 import com.nextcloud.talk.events.ProximitySensorEvent
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
+import com.nextcloud.talk.jobs.CallPushPayload
 import com.nextcloud.talk.logger.AppLog as Log
 import com.nextcloud.talk.models.ExternalSignalingServer
 import com.nextcloud.talk.models.domain.ConversationModel
@@ -124,6 +125,7 @@ import com.nextcloud.talk.utils.CapabilitiesUtil
 import com.nextcloud.talk.utils.CapabilitiesUtil.hasSpreedFeatureCapability
 import com.nextcloud.talk.utils.CapabilitiesUtil.isCallRecordingAvailable
 import com.nextcloud.talk.utils.ConversationUtils.checkIfVoiceRoom
+import com.nextcloud.talk.utils.NotificationUtils
 import com.nextcloud.talk.utils.NotificationUtils.getCallRingtoneUri
 import com.nextcloud.talk.utils.PushDiag
 import com.nextcloud.talk.utils.ReceiverFlag
@@ -368,6 +370,10 @@ class CallActivity : CallBaseActivity() {
     private val publisherRejoinPolicy = PublisherRejoinPolicy()
     private var isRejoinPaused = false
 
+    // The call was joined before and is joined again after a failure: the others must not be called a second time.
+    // Cleared when the user dials again by hand after the ring time ran out.
+    private var isRejoining = false
+
     // Last ICE state of the own publisher connection, to tell whether it survived a change of the network handle or a
     // phone call. Null while there is no connection (yet).
     @Volatile
@@ -604,7 +610,7 @@ class CallActivity : CallBaseActivity() {
         )
 
         isCallSetUp = true
-        callInProgress = true
+        activeCall = CallPushPayload.ActiveCall(conversationUser.id!!, roomToken!!)
 
         if (!conversationUser.current) {
             // Taking part in a call uses its account, so it becomes the last used one.
@@ -952,6 +958,8 @@ class CallActivity : CallBaseActivity() {
 
         binding!!.callStates.callStateRelativeLayout.setOnClickListener {
             if (currentCallStatus === CallStatus.CALLING_TIMEOUT) {
+                // the user dials again: a new call, the others are called
+                isRejoining = false
                 setCallState(CallStatus.RECONNECTING)
                 hangupNetworkCalls(shutDownView = false, endCallForAll = false)
             }
@@ -1307,12 +1315,13 @@ class CallActivity : CallBaseActivity() {
             Log.w(TAG, "DEBUG: Microphone permission not granted - skipping foreground service start")
         }
 
+        val cameraPermissionGranted = permissionUtil!!.isCameraPermissionGranted()
         if (isVoiceOnlyCall) {
             binding!!.selfVideoViewWrapper.visibility = View.GONE
-        } else if (permissionUtil!!.isCameraPermissionGranted()) {
+        } else if (cameraPermissionGranted) {
             binding!!.selfVideoViewWrapper.visibility = View.VISIBLE
-            // don't enable the camera if call was answered via notification
-            if (!isIncomingCallFromNotification) {
+            // answered by "video" (window or notification): the camera is on
+            if (CallPushPayload.startsWithCamera(isVoiceOnlyCall, cameraPermissionGranted)) {
                 onCameraClick()
             }
             if (cameraEnumerator!!.deviceNames.isEmpty()) {
@@ -1649,7 +1658,7 @@ class CallActivity : CallBaseActivity() {
 
     public override fun onDestroy() {
         Log.d(TAG, "onDestroy: currentCallStatus=$currentCallStatus")
-        callInProgress = false
+        activeCall = null
         rejoinHandler.removeCallbacksAndMessages(null)
 
         if (isCallSetUp) {
@@ -1981,7 +1990,7 @@ class CallActivity : CallBaseActivity() {
             credentials,
             ApiUtils.getUrlForCall(apiVersion, baseUrl, roomToken!!),
             inCallFlag,
-            isCallWithoutNotification,
+            PublisherRejoinPolicy.joinsSilently(isCallWithoutNotification, isRejoining),
             recordingConsentGiven
         )
             .subscribeOn(Schedulers.io())
@@ -2002,7 +2011,7 @@ class CallActivity : CallBaseActivity() {
                         // A rejoin that fails on a bad network must not end the call: the user would find the call
                         // screen gone and join again by hand.
                         Log.w(TAG, "Joining the call failed during a rejoin, rejoining again", e)
-                        rejoinCallWithNewSession(publisherRejoinPolicy.onPublisherFailed())
+                        rejoinAfterFailure()
                         return
                     }
                     Snackbar.make(binding!!.root, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
@@ -3417,11 +3426,24 @@ class CallActivity : CallBaseActivity() {
     // Same recovery as the web client for a failed connection to the MCU: join the call again with a new session.
     private fun rejoinCallWithNewSession(rejoinDelayMillis: Long = 0L) {
         Log.w(TAG, "Leaving the call to join it again with a new session, pause=$rejoinDelayMillis ms")
+        isRejoining = true
         rejoinHandler.removeCallbacks(publisherRecheckRunnable)
         publisherIceState = null
         setCallState(CallStatus.PUBLISHER_FAILED)
         webSocketClient!!.clearResumeId()
         hangup(false, false, rejoinDelayMillis)
+    }
+
+    // Counts the failure: joins again after the pause of the policy, or ends the call when the tries are used up.
+    private fun rejoinAfterFailure() {
+        val pause = publisherRejoinPolicy.onPublisherFailed()
+        if (pause == PublisherRejoinPolicy.GIVE_UP) {
+            Log.w(TAG, "No connection after the rejoins, ending the call")
+            Toast.makeText(applicationContext, R.string.nc_call_connection_failed, Toast.LENGTH_LONG).show()
+            hangup(true, false)
+        } else {
+            rejoinCallWithNewSession(pause)
+        }
     }
 
     // The connections are bound to the address of the old network, so recover now instead of waiting for ICE to fail.
@@ -3580,10 +3602,13 @@ class CallActivity : CallBaseActivity() {
                     // Only this ICE handler counts failures and sets a pause. Other callers of the same
                     // rejoin path rejoin at once.
                     val interrupted = isCallInterrupted()
-                    val action = CallRecoveryPolicy.onIceFailed(interrupted)
+                    val action = CallRecoveryPolicy.onIceFailed(
+                        interrupted,
+                        rejoinInProgress = currentCallStatus === CallStatus.PUBLISHER_FAILED
+                    )
                     Log.w(TAG, "Publisher ICE FAILED: interrupted=$interrupted, status=$currentCallStatus -> $action")
                     if (action == CallRecoveryPolicy.Action.REJOIN) {
-                        rejoinCallWithNewSession(publisherRejoinPolicy.onPublisherFailed())
+                        rejoinAfterFailure()
                     }
                 } else if (iceConnectionState == IceConnectionState.CONNECTED ||
                     iceConnectionState == IceConnectionState.COMPLETED
@@ -3861,7 +3886,7 @@ class CallActivity : CallBaseActivity() {
          * Incoming calls are then announced by a heads-up notification, not by a full screen takeover.
          */
         @Volatile
-        var callInProgress = false
+        var activeCall: CallPushPayload.ActiveCall? = null
 
         const val VIDEO_STREAM_TYPE_VIDEO = "video"
         private val TAG = CallActivity::class.java.simpleName
@@ -3907,7 +3932,7 @@ class CallActivity : CallBaseActivity() {
         private const val ANGLE_LANDSCAPE_LEFT_THRESHOLD_MIN = 260
         private const val ANGLE_LANDSCAPE_LEFT_THRESHOLD_MAX = 280
 
-        private const val CALLING_TIMEOUT: Long = 45000
+        internal const val CALLING_TIMEOUT: Long = NotificationUtils.CALL_NOTIFICATION_TIMEOUT_MS
 
         // Longer than a Bluetooth connect plus disconnect timeout (2 x 4 s), after which the audio manager falls back
         // to another route by itself.
