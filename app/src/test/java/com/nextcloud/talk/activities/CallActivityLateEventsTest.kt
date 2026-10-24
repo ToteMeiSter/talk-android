@@ -179,7 +179,7 @@ class CallActivityLateEventsTest {
     fun aJoinAnsweredAfterNoAnswerLeavesTheCallAgainAndDoesNotAskForTheRoom() {
         val join = PublishSubject.create<GenericOverall>()
         whenever(ncApi.joinCall(anyOrNull(), any(), any(), any(), anyOrNull())).thenReturn(join)
-        prepareForPerformCall()
+        setField("messageSender", MessageSenderNoMcu(mock(), emptySet(), mutableListOf()))
         invoke("setCallState", CallStatus.PUBLISHER_FAILED)
         invoke("performCall")
 
@@ -195,7 +195,7 @@ class CallActivityLateEventsTest {
     fun aJoinThatFailsAfterNoAnswerKeepsTheScreenOfCallAgain() {
         val join = PublishSubject.create<GenericOverall>()
         whenever(ncApi.joinCall(anyOrNull(), any(), any(), any(), anyOrNull())).thenReturn(join)
-        prepareForPerformCall()
+        setField("messageSender", MessageSenderNoMcu(mock(), emptySet(), mutableListOf()))
         invoke("setCallState", CallStatus.PUBLISHER_FAILED)
         invoke("performCall")
 
@@ -205,11 +205,6 @@ class CallActivityLateEventsTest {
         assertEquals(CallStatus.CALLING_TIMEOUT, status())
         assertTrue("the activity is not finished", !activity.isFinishing)
         verify(ncApi, never()).getRoom(anyOrNull(), any())
-    }
-
-    private fun prepareForPerformCall() {
-        val sender = MessageSenderNoMcu(mock<SignalingMessageSender>(), emptySet(), mutableListOf())
-        setField("messageSender", sender)
     }
 
     private fun status(): CallStatus? = field("currentCallStatus") as CallStatus?
