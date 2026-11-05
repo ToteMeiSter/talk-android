@@ -54,7 +54,7 @@ class MessageUtils(val context: Context) {
     }
 
     fun getRenderedMarkdownText(context: Context, markdown: String, textColor: Int): Spanned =
-        buildMarkwon(context, textColor).toMarkdown(MarkdownTables.ensureBlankLineBeforeTables(markdown))
+        buildMarkwon(context, textColor).toMarkdown(prepareMarkdown(markdown))
 
     companion object {
         private const val TAG = "MessageUtils"
@@ -69,6 +69,10 @@ class MessageUtils(val context: Context) {
         private var cachedMarkwon: Markwon? = null
         private var cachedContextRef: WeakReference<Context>? = null
         private var cachedTextColor: Int = 0
+
+        /** Text preprocessing shared by every Markwon entry point, so that all of them render a message alike. */
+        fun prepareMarkdown(markdown: String): String =
+            MarkdownAsterisks.escapeBetweenDigits(MarkdownTables.ensureBlankLineBeforeTables(markdown))
 
         fun buildMarkwon(context: Context, textColor: Int): Markwon {
             val cached = cachedMarkwon

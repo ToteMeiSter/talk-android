@@ -64,7 +64,7 @@ object MarkdownTables {
             DELIMITER_ROW.matches(next) &&
             cellCount(next) >= cellCount(line)
 
-    private fun isIndentedCode(line: String): Boolean =
+    internal fun isIndentedCode(line: String): Boolean =
         line.startsWith("\t") || line.startsWith(" ".repeat(INDENTED_CODE_SPACES))
 
     /** Number of cells in a table row: unescaped pipes split cells, the outer pipes are not counted. */
@@ -86,7 +86,7 @@ object MarkdownTables {
     }
 
     /** Marks lines that belong to a fenced code block, including the opening and closing fence lines. */
-    private fun fencedLines(lines: List<String>): BooleanArray {
+    internal fun fencedLines(lines: List<String>): BooleanArray {
         val inCode = BooleanArray(lines.size)
         var fence: Fence? = null
         for ((index, line) in lines.withIndex()) {
