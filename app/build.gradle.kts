@@ -30,7 +30,7 @@ val emojiVersion = "1.7.0"
 val fidoVersion = "4.1.0-patch2"
 val lifecycleVersion = "2.11.0"
 val maplibreComposeVersion = "0.20.0"
-val okhttpVersion = "5.5.0"
+val okhttpVersion = "5.5.1"
 val markwonVersion = "4.6.2"
 val parcelerVersion = "1.1.13"
 val retrofit2Version = "3.0.0"
@@ -62,8 +62,8 @@ android {
 
         // mayor.minor.hotfix.increment (for increment: 01-50=Alpha / 51-89=RC / 90-99=stable)
         // xx   .xxx  .xx    .xx
-        versionCode = 260000001
-        versionName = "26.0.0 Alpha 01"
+        versionCode = 260000003
+        versionName = "26.0.0 Alpha 03"
 
         vectorDrawables.useSupportLibrary = true
 
@@ -115,11 +115,9 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            proguardFiles(
-                getDefaultProguardFile("proguard-android-optimize.txt"),
-                "proguard-rules.pro"
-            )
+            optimization {
+                enable = true
+            }
         }
     }
 
@@ -197,9 +195,12 @@ configurations.configureEach {
 }
 
 dependencies {
+    constraints {
+        implementation("com.google.guava:guava:33.7.2-android")
+    }
     implementation("androidx.media3:media3-session:1.11.1")
     kapt("org.jetbrains.kotlin:kotlin-metadata-jvm:$kotlinVersion")
-    implementation("androidx.room:room-testing-android:$roomVersion")
+    androidTestImplementation("androidx.room:room-testing-android:$roomVersion")
     implementation("androidx.compose.foundation:foundation-layout:1.12.1")
     spotbugsPlugins("com.h3xstream.findsecbugs:findsecbugs-plugin:1.14.0")
     spotbugsPlugins("com.mebigfatguy.fb-contrib:fb-contrib:7.7.4")
@@ -207,13 +208,13 @@ dependencies {
 
     implementation("androidx.compose.runtime:runtime:1.12.1")
     implementation("androidx.preference:preference-ktx:1.2.1")
-    implementation("androidx.datastore:datastore-core:1.2.1")
-    implementation("androidx.datastore:datastore-preferences:1.2.1")
-    implementation("androidx.test.ext:junit-ktx:1.3.0")
+    implementation("androidx.datastore:datastore-core:1.3.0")
+    implementation("androidx.datastore:datastore-preferences:1.3.0")
+    androidTestImplementation("androidx.test.ext:junit-ktx:1.3.0")
 
     implementation(fileTree(mapOf("include" to listOf("*"), "dir" to "libs")))
 
-    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.11.0")
+    implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.12.0")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:$coroutinesVersion")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:$coroutinesVersion")
 
@@ -260,7 +261,7 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:$okhttpVersion")
 
     implementation("com.bluelinelabs:logansquare:1.3.7")
-    implementation("com.fasterxml.jackson.core:jackson-core:2.20.1")
+    implementation("com.fasterxml.jackson.core:jackson-core:2.22.4")
     kapt("com.bluelinelabs:logansquare-compiler:1.3.7")
 
     implementation("com.squareup.retrofit2:retrofit:$retrofit2Version")
@@ -276,7 +277,7 @@ dependencies {
     kapt("javax.annotation:javax.annotation-api:1.3.2")
 
     implementation("org.greenrobot:eventbus:3.3.1")
-    implementation("net.zetetic:sqlcipher-android:4.19.1")
+    implementation("net.zetetic:sqlcipher-android:4.20.0")
 
     implementation("androidx.room:room-runtime:$roomVersion")
     implementation("androidx.room:room-rxjava2:$roomVersion")
@@ -296,7 +297,7 @@ dependencies {
     implementation("com.github.nextcloud-deps.hwsecurity:hwsecurity-fido:$fidoVersion")
     implementation("com.github.nextcloud-deps.hwsecurity:hwsecurity-fido2:$fidoVersion")
 
-    implementation("com.google.code.gson:gson:2.14.0")
+    implementation("com.google.code.gson:gson:2.15.0")
 
     implementation("androidx.media3:media3-exoplayer:$media3Version")
     implementation("androidx.media3:media3-datasource-okhttp:$media3Version")
@@ -335,15 +336,17 @@ dependencies {
     }
 
     implementation("androidx.core:core-ktx:1.19.1")
+    implementation("androidx.core:core-splashscreen:1.2.0")
     implementation("androidx.sharetarget:sharetarget:1.2.0")
     implementation("androidx.window:window:1.5.1")
     implementation("androidx.activity:activity-ktx:1.13.0")
     implementation("com.github.nextcloud.android-common:ui:0.34.0")
     implementation("com.github.nextcloud.android-common:core:0.34.0")
     implementation("com.github.nextcloud-deps:android-talk-webrtc:155.8059.1")
+    implementation("com.github.nextcloud-releases:talk-clients-vodozemac:0.0.2")
 
     "gplayImplementation"("com.google.android.gms:play-services-base:18.11.1")
-    "gplayImplementation"("com.google.firebase:firebase-messaging:26.0.0")
+    "gplayImplementation"("com.google.firebase:firebase-messaging:26.0.1")
 
     implementation("org.unifiedpush.android:connector:3.3.5")
     "genericImplementation"("org.unifiedpush.android:embedded-fcm-distributor:3.1.0")
@@ -373,6 +376,7 @@ dependencies {
     androidTestImplementation("androidx.test:core-ktx:1.7.0")
     androidTestImplementation("org.mockito:mockito-android:5.24.0")
     testImplementation("androidx.work:work-testing:$workVersion")
+    testImplementation("androidx.concurrent:concurrent-futures:1.2.0")
     androidTestImplementation("androidx.work:work-testing:$workVersion")
     androidTestImplementation("androidx.test.espresso:espresso-core:$espressoVersion") {
         exclude(group = "com.android.support", module = "support-annotations")

@@ -11,6 +11,7 @@ package com.nextcloud.talk.account
 import android.Manifest
 import android.accounts.Account
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.os.Bundle
@@ -32,6 +33,7 @@ import com.google.android.material.dialog.MaterialAlertDialogBuilder
 import com.google.android.material.snackbar.Snackbar
 import com.nextcloud.talk.R
 import com.nextcloud.talk.activities.BaseActivity
+import com.nextcloud.talk.account.data.PendingBrowserLoginStore
 import com.nextcloud.talk.api.NcApi
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.application.NextcloudTalkApplication.Companion.sharedApplication
@@ -520,5 +522,30 @@ class ServerSelectionActivity : BaseActivity() {
         private val TAG = ServerSelectionActivity::class.java.simpleName
         const val MIN_SERVER_MAJOR_VERSION = 13
         private const val QR_URI = "com.blikoon.qrcodescanner.got_qr_scan_relult"
+
+        /**
+         * Creates the intent that starts the login: the web login on the server of a branded client, or else the
+         * selection of the server.
+         */
+        fun createLoginIntent(context: Context): Intent {
+            // The app was opened again while a login via the browser was unfinished: the login is continued instead
+            // of starting a new one.
+            PendingBrowserLoginStore.active()?.let { pending ->
+                return Intent(context, BrowserLoginActivity::class.java)
+                    .putExtra(BundleKeys.KEY_RESUME_BROWSER_LOGIN, true)
+                    // To start the login again if the saved one is lost by process death.
+                    .putExtra(BundleKeys.KEY_BASE_URL, pending.baseUrl)
+                    .putExtra(BundleKeys.KEY_REAUTHORIZE_ACCOUNT, pending.reAuth)
+                    .also { intent ->
+                        pending.accountToReauthorize?.let { intent.putExtra(BundleKeys.KEY_INTERNAL_USER_ID, it) }
+                    }
+            }
+            val brandedServerUrl = context.getString(R.string.weblogin_url)
+            return if (brandedServerUrl.isNotEmpty()) {
+                Intent(context, BrowserLoginActivity::class.java).putExtra(BundleKeys.KEY_BASE_URL, brandedServerUrl)
+            } else {
+                Intent(context, ServerSelectionActivity::class.java)
+            }
+        }
     }
 }

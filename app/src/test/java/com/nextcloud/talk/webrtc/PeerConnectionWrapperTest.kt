@@ -49,22 +49,6 @@ class PeerConnectionWrapperTest {
     private var mockedSignalingMessageSender: SignalingMessageSender? = null
 
     /**
-     * Helper answer for DataChannel methods.
-     */
-    private class ReturnValueOrThrowIfDisposed<T>(val value: T) : Answer<T> {
-        override fun answer(currentInvocation: InvocationOnMock): T {
-            if (Mockito.mockingDetails(currentInvocation.mock).invocations.find {
-                    it!!.method.name === "dispose"
-                } !== null
-            ) {
-                throw IllegalStateException("DataChannel has been disposed")
-            }
-
-            return value
-        }
-    }
-
-    /**
      * Helper matcher for DataChannelMessages.
      */
     private inner class MatchesDataChannelMessage(private val expectedDataChannelMessage: DataChannelMessageDto) :
@@ -75,12 +59,6 @@ class PeerConnectionWrapperTest {
             return dataChannelMessageToBuffer(expectedDataChannelMessage).data.equals(buffer.data)
         }
     }
-
-    private fun dataChannelMessageToBuffer(dataChannelMessage: DataChannelMessageDto) =
-        DataChannel.Buffer(
-            ByteBuffer.wrap(LoganSquare.serialize(dataChannelMessage).toByteArray()),
-            false
-        )
 
     @Before
     fun setUp() {
@@ -116,7 +94,10 @@ class PeerConnectionWrapperTest {
             true,
             "video",
             mockedSignalingMessageReceiver,
-            mockedSignalingMessageSender
+            mockedSignalingMessageSender,
+            false,
+            null,
+            null
         )
 
         peerConnectionWrapper!!.send(DataChannelMessageDto("the-message-type"))
@@ -155,7 +136,10 @@ class PeerConnectionWrapperTest {
             true,
             "video",
             mockedSignalingMessageReceiver,
-            mockedSignalingMessageSender
+            mockedSignalingMessageSender,
+            false,
+            null,
+            null
         )
 
         val mockedRandomIdDataChannel = Mockito.mock(DataChannel::class.java)
@@ -202,7 +186,10 @@ class PeerConnectionWrapperTest {
             true,
             "video",
             mockedSignalingMessageReceiver,
-            mockedSignalingMessageSender
+            mockedSignalingMessageSender,
+            false,
+            null,
+            null
         )
 
         peerConnectionWrapper!!.send(DataChannelMessageDto("the-message-type"))
@@ -258,7 +245,10 @@ class PeerConnectionWrapperTest {
                 true,
                 "video",
                 mockedSignalingMessageReceiver,
-                mockedSignalingMessageSender
+                mockedSignalingMessageSender,
+                false,
+                null,
+                null
             )
 
             val dataChannelMessageCount = 5
@@ -331,7 +321,10 @@ class PeerConnectionWrapperTest {
             true,
             "video",
             mockedSignalingMessageReceiver,
-            mockedSignalingMessageSender
+            mockedSignalingMessageSender,
+            false,
+            null,
+            null
         )
 
         val mockedDataChannelMessageListener = Mockito.mock(DataChannelMessageListener::class.java)
@@ -412,7 +405,10 @@ class PeerConnectionWrapperTest {
             true,
             "video",
             mockedSignalingMessageReceiver,
-            mockedSignalingMessageSender
+            mockedSignalingMessageSender,
+            false,
+            null,
+            null
         )
 
         val randomIdDataChannelObserverArgumentCaptor: ArgumentCaptor<DataChannel.Observer> =
@@ -473,7 +469,10 @@ class PeerConnectionWrapperTest {
             true,
             "video",
             mockedSignalingMessageReceiver,
-            mockedSignalingMessageSender
+            mockedSignalingMessageSender,
+            false,
+            null,
+            null
         )
 
         val mockedRandomIdDataChannel = Mockito.mock(DataChannel::class.java)
@@ -523,7 +522,10 @@ class PeerConnectionWrapperTest {
                 true,
                 "video",
                 mockedSignalingMessageReceiver,
-                mockedSignalingMessageSender
+                mockedSignalingMessageSender,
+                false,
+                null,
+                null
             )
 
             val dataChannelCount = 5
@@ -633,7 +635,10 @@ class PeerConnectionWrapperTest {
                 true,
                 "video",
                 mockedSignalingMessageReceiver,
-                mockedSignalingMessageSender
+                mockedSignalingMessageSender,
+                false,
+                null,
+                null
             )
 
             val dataChannelMessageCount = 5
@@ -715,7 +720,10 @@ class PeerConnectionWrapperTest {
                 true,
                 "video",
                 mockedSignalingMessageReceiver,
-                mockedSignalingMessageSender
+                mockedSignalingMessageSender,
+                false,
+                null,
+                null
             )
 
             val mockedDataChannelMessageListener = Mockito.mock(DataChannelMessageListener::class.java)
@@ -787,10 +795,35 @@ class PeerConnectionWrapperTest {
             false,
             "video",
             mockedSignalingMessageReceiver,
-            mockedSignalingMessageSender
+            mockedSignalingMessageSender,
+            false,
+            null,
+            null
         )
 
         val verifier = dependenciesCaptor.value.sslCertificateVerifier()
         assertTrue(verifier === SystemTrustSslCertificateVerifier.shared())
     }
 }
+
+/**
+ * Helper answer for DataChannel methods.
+ */
+private class ReturnValueOrThrowIfDisposed<T>(val value: T) : Answer<T> {
+    override fun answer(currentInvocation: InvocationOnMock): T {
+        if (Mockito.mockingDetails(currentInvocation.mock).invocations.find {
+                it!!.method.name === "dispose"
+            } !== null
+        ) {
+            throw IllegalStateException("DataChannel has been disposed")
+        }
+
+        return value
+    }
+}
+
+private fun dataChannelMessageToBuffer(dataChannelMessage: DataChannelMessageDto) =
+    DataChannel.Buffer(
+        ByteBuffer.wrap(LoganSquare.serialize(dataChannelMessage).toByteArray()),
+        false
+    )

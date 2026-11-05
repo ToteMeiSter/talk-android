@@ -47,6 +47,9 @@ class RoomSessionRegistry {
     /**
      * The connection leaves the room, got a new signaling session (hello without resume) or lost it
      * (no_such_session, no_such_room). Nothing is known about the room any more.
+     *
+     * A resumed session keeps the registry: the server stores the messages of a disconnected session, including
+     * the join and leave events, and sends them on resume.
      */
     @Synchronized
     fun reset() {
@@ -87,6 +90,13 @@ class RoomSessionRegistry {
     }
 
     fun contains(sessionId: String?): Boolean = sessionId != null && sessions.containsKey(sessionId)
+
+    /**
+     * Whether [sessionId] is a session of the room [room]. While a join of another room is not answered yet, the
+     * sessions are still those of the previous room, so the session alone does not tell which room it belongs to.
+     */
+    @Synchronized
+    fun contains(sessionId: String?, room: String): Boolean = room == roomToken && contains(sessionId)
 
     /** Display name of the session, or "" if the session is unknown or has no name (e.g. a guest). */
     fun displayNameFor(sessionId: String?): String = sessionId?.let { sessions[it]?.displayName } ?: ""

@@ -62,9 +62,6 @@ object CallPushPayload {
         /** Old push: show nothing, stage 2 asks the server and rings or reports "missed call". */
         ASK_SERVER,
 
-        /** The calls are end-to-end encrypted, which the app cannot answer: own notification, no stage 2. */
-        END_TO_END_ENCRYPTED,
-
         /** The user is in this very call already: nothing rings, no stage 2. */
         OWN_CALL
     }
@@ -76,9 +73,8 @@ object CallPushPayload {
     fun isOwnCall(active: ActiveCall?, userId: Long?, roomToken: String?): Boolean =
         active != null && active.userId == userId && active.roomToken == roomToken
 
-    fun stage1Action(stale: Boolean, endToEndEncrypted: Boolean, ownCall: Boolean = false): Stage1Action =
+    fun stage1Action(stale: Boolean, ownCall: Boolean = false): Stage1Action =
         when {
-            endToEndEncrypted -> Stage1Action.END_TO_END_ENCRYPTED
             ownCall -> Stage1Action.OWN_CALL
             stale -> Stage1Action.ASK_SERVER
             else -> Stage1Action.RING

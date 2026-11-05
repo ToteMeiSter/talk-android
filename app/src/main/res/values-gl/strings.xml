@@ -119,6 +119,7 @@
     <string name="nc_all_ok_operation">Conforme, todo feito!</string>
     <string name="nc_attendee_pin">Pin: %1$s</string>
     <string name="nc_audio_player_next">Seguinte</string>
+    <string name="nc_audio_player_previous">Anterior</string>
     <string name="nc_biometric_unlock">Desbloquear %1$s</string>
     <string name="nc_bluetooth_permission_hint">Para activar os altofalantes Bluetooth, conceda os permiso para «Dispositivos próximos».</string>
     <string name="nc_call_button_content_description_answer_video_call">Responda como videochamada</string>
@@ -176,6 +177,7 @@
     <string name="nc_configure_cert_auth">Seleccionar o certificado de autenticación</string>
     <string name="nc_confirm">Confirmar</string>
     <string name="nc_connecting_call">Conectando…</string>
+    <string name="nc_contact_chat_start">Iniciar</string>
     <string name="nc_contacts_done">Feito</string>
     <string name="nc_conversation_description">Descrición da conversa</string>
     <string name="nc_conversation_menu_conversation_go_to_file">Ir ao ficheiro</string>
@@ -205,6 +207,7 @@
     <string name="nc_custom_color">Cor personalizada</string>
     <string name="nc_date_header_today">Hoxe</string>
     <string name="nc_date_header_yesterday">Onte</string>
+    <string name="nc_deep_link_join">Unirse</string>
     <string name="nc_delete">Eliminar</string>
     <string name="nc_delete_all">Eliminar todo</string>
     <string name="nc_delete_call">Eliminar a conversa</string>
@@ -527,6 +530,7 @@
     <string name="nc_show_notification_warning_title">Amosar a advertencia de notificación periódica</string>
     <string name="nc_sort_by">Ordenar por</string>
     <string name="nc_start_group_chat">Iniciar unha parola en grupo</string>
+    <string name="nc_start_screen_sharing">Compartir a pantalla</string>
     <string name="nc_start_time">Hora de comezo</string>
     <string name="nc_switch_account">Cambiar de conta</string>
     <string name="nc_team">Equipo</string>

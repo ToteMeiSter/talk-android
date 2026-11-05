@@ -32,7 +32,8 @@ class SharedAttachmentShareUriTest {
     private val context = ApplicationProvider.getApplicationContext<Application>()
     private val own = BuildConfig.APPLICATION_ID
 
-    private fun isTrusted(uri: Uri): Boolean = FileUtils.isTrustedShareUri(uri, own, context.cacheDir)
+    private fun isTrusted(uri: Uri): Boolean =
+        FileUtils.isTrustedShareUri(uri, own, context.cacheDir, context.filesDir) { null }
 
     private fun isTrusted(uri: String): Boolean = isTrusted(Uri.parse(uri))
 

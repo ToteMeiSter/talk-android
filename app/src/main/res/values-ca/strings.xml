@@ -110,6 +110,8 @@
     <string name="nc_add_to_favorites">Afegeix a preferits</string>
     <string name="nc_all_ok_operation">D\'acord, tot fet!</string>
     <string name="nc_attendee_pin">Ancora: %1$s</string>
+    <string name="nc_audio_player_next">Següent</string>
+    <string name="nc_audio_player_previous">Anterior</string>
     <string name="nc_biometric_unlock">Desbloca %1$s</string>
     <string name="nc_bluetooth_permission_hint">Per a habilitar els altaveus Bluetooth, concediu el permís de \"Dispositius propers\".</string>
     <string name="nc_call_button_content_description_answer_video_call">Respon com a trucada de vídeo</string>
@@ -166,6 +168,7 @@
     <string name="nc_configure_cert_auth">Selecciona el certificat d’autenticació</string>
     <string name="nc_confirm">Confirma</string>
     <string name="nc_connecting_call">S\'està connectant …</string>
+    <string name="nc_contact_chat_start">Inici</string>
     <string name="nc_contacts_done">Fet</string>
     <string name="nc_conversation_description">Descripció de la conversa</string>
     <string name="nc_conversation_menu_conversation_go_to_file">Vés al fitxer</string>
@@ -194,6 +197,7 @@
     <string name="nc_custom_color">Color personalitzat</string>
     <string name="nc_date_header_today">Avui</string>
     <string name="nc_date_header_yesterday">Ahir</string>
+    <string name="nc_deep_link_join">Uneix-te</string>
     <string name="nc_delete">Suprimir</string>
     <string name="nc_delete_all">Suprimir-ho tot</string>
     <string name="nc_delete_call">Suprimir la conversa</string>

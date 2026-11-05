@@ -60,18 +60,14 @@ class CallPushPayloadTest {
     }
 
     @Test
-    fun stageOneRingsFreshPushShowsNothingForStalePushAndKeepsE2eeFirst() {
+    fun stageOneRingsFreshPushAndShowsNothingForStalePush() {
         assertEquals(
             CallPushPayload.Stage1Action.RING,
-            CallPushPayload.stage1Action(stale = false, endToEndEncrypted = false)
+            CallPushPayload.stage1Action(stale = false)
         )
         assertEquals(
             CallPushPayload.Stage1Action.ASK_SERVER,
-            CallPushPayload.stage1Action(stale = true, endToEndEncrypted = false)
-        )
-        assertEquals(
-            CallPushPayload.Stage1Action.END_TO_END_ENCRYPTED,
-            CallPushPayload.stage1Action(stale = true, endToEndEncrypted = true)
+            CallPushPayload.stage1Action(stale = true)
         )
     }
 

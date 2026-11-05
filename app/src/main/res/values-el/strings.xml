@@ -77,6 +77,8 @@
     <string name="nc_add_to_favorites">Προσθήκη στα αγαπημένα</string>
     <string name="nc_all_ok_operation">Εντάξει, ολοκληρώθηκαν όλα!</string>
     <string name="nc_announcement">Ανακοίνωση</string>
+    <string name="nc_audio_player_next">Επόμενο</string>
+    <string name="nc_audio_player_previous">Προηγούμενο</string>
     <string name="nc_biometric_unlock">Ξεκλείδωμα %1$s</string>
     <string name="nc_call_button_content_description_hangup">Κλείσιμο τηλεφώνου</string>
     <string name="nc_call_button_content_description_switch_camera">Εναλλαγή κάμερας</string>
@@ -122,6 +124,7 @@
     <string name="nc_configure_cert_auth">Επιλογή πιστοποιητικού πιστοποίησης</string>
     <string name="nc_confirm">Επιβεβαίωση</string>
     <string name="nc_connecting_call">Σύνδεση …</string>
+    <string name="nc_contact_chat_start">Έναρξη</string>
     <string name="nc_contacts_done">Ολοκληρώθηκε</string>
     <string name="nc_conversation_menu_conversation_go_to_file">Μετάβαση στο αρχείο</string>
     <string name="nc_conversation_menu_conversation_info">Πληροφορίες συνομιλίας</string>
@@ -150,6 +153,7 @@
     <string name="nc_custom_color">Προσαρμοσμένο χρώμα</string>
     <string name="nc_date_header_today">Σήμερα</string>
     <string name="nc_date_header_yesterday">Χθές</string>
+    <string name="nc_deep_link_join">Συμμετοχή</string>
     <string name="nc_delete">Διαγραφή</string>
     <string name="nc_delete_all">Διαγραφή όλων</string>
     <string name="nc_delete_call">Διαγραφή συνομιλίας</string>

@@ -23,6 +23,8 @@ import autodagger.AutoInjector
 import com.bluelinelabs.logansquare.LoganSquare
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.application.NextcloudTalkApplication.Companion.sharedApplication
+import com.nextcloud.talk.call.e2ee.CallEncryption
+import com.nextcloud.talk.call.e2ee.EncryptionMessage
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.events.WebSocketCommunicationEvent
 import com.nextcloud.talk.logger.AppLog as Log
@@ -38,6 +40,7 @@ import com.nextcloud.talk.models.json.websocket.HelloResponseOverallWebSocketMes
 import com.nextcloud.talk.models.json.websocket.JoinedRoomOverallWebSocketMessage
 import com.nextcloud.talk.signaling.SignalingMessageReceiver
 import com.nextcloud.talk.signaling.SignalingMessageSender
+import com.nextcloud.talk.utils.CapabilitiesUtil
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -119,6 +122,18 @@ internal constructor(
     val signalingMessageSender = ExternalSignalingMessageSender()
     private val signalingHttpClient: OkHttpClient by lazy { createSignalingHttpClient(okHttpClient!!) }
 
+    // Whether calls have to be end-to-end encrypted, refreshed whenever this instance is handed out again
+    private var isCallEncryptionEnabled =
+        CapabilitiesUtil.isCallEndToEndEncryptionEnabled(conversationUser.capabilities?.spreedCapability)
+
+    /**
+     * The key exchange of the joined room, null until the room is joined with the MCU or when calls are not
+     * end-to-end encrypted. It is replaced whenever the signaling session changes.
+     */
+    private val callEncryptionLifecycle = CallEncryptionLifecycle({ isCallEncryptionEnabled })
+    val callEncryption: CallEncryption?
+        get() = callEncryptionLifecycle.current
+
     init {
         require((testOkHttpClient == null) == (testEventBus == null)) {
             "testOkHttpClient and testEventBus must be given together"
@@ -137,6 +152,9 @@ internal constructor(
         // A new instance right after the end of a call means the process was killed, as only the process start creates
         // one (WebsocketConnectionsWorker): the age of the process tells it.
         Log.d(TAG, "Created for user ${conversationUser.id}, process age ${processAgeMillis()} ms")
+        signalingMessageReceiver.addListener(
+            SignalingMessageReceiver.EncryptionMessageListener(callEncryptionLifecycle::handleMessage)
+        )
         restartWebSocket("created")
     }
 
@@ -148,14 +166,14 @@ internal constructor(
                 webSocket.send(
                     LoganSquare.serialize(
                         webSocketConnectionHelper
-                            .getAssembledHelloModel(conversationUser, webSocketTicket)
+                            .getAssembledHelloModel(conversationUser, webSocketTicket, isCallEncryptionEnabled)
                     )
                 )
             } else {
                 webSocket.send(
                     LoganSquare.serialize(
                         webSocketConnectionHelper
-                            .getAssembledHelloModelForResume(resumeId)
+                            .getAssembledHelloModelForResume(resumeId, isCallEncryptionEnabled)
                     )
                 )
             }
@@ -340,15 +358,7 @@ internal constructor(
     private fun processMessage(text: String) {
         val (_, callWebSocketMessage) = LoganSquare.parse(text, CallOverallWebSocketMessage::class.java)
         if (callWebSocketMessage != null) {
-            val ncSignalingMessage = callWebSocketMessage.ncSignalingMessage
-
-            if (ncSignalingMessage != null &&
-                TextUtils.isEmpty(ncSignalingMessage.from) &&
-                callWebSocketMessage.senderWebSocketMessage != null
-            ) {
-                ncSignalingMessage.from = callWebSocketMessage.senderWebSocketMessage!!.sessionId
-            }
-
+            takeSenderFromEnvelope(callWebSocketMessage)
             signalingMessageReceiver.processChatMessage(callWebSocketMessage)
         }
     }
@@ -415,11 +425,15 @@ internal constructor(
     }
 
     private fun processRoomJoinMessage(eventOverallWebSocketMessage: EventOverallWebSocketMessage) {
-        roomSessions.onJoin(eventOverallWebSocketMessage.eventMap?.get("join") as List<Map<String, Any>>?)
+        val joinEventList = eventOverallWebSocketMessage.eventMap?.get("join") as List<Map<String, Any>>?
+        roomSessions.onJoin(joinEventList)
+        callEncryptionLifecycle.usersJoined(joinEventList.orEmpty().mapNotNull { it["sessionid"] as String? })
     }
 
     private fun processRoomLeaveMessage(eventOverallWebSocketMessage: EventOverallWebSocketMessage) {
-        roomSessions.onLeave(eventOverallWebSocketMessage.eventMap?.get("leave") as List<String>?)
+        val leaveEventList = eventOverallWebSocketMessage.eventMap?.get("leave") as List<String>?
+        roomSessions.onLeave(leaveEventList)
+        callEncryptionLifecycle.usersLeft(leaveEventList.orEmpty())
     }
 
     /**
@@ -427,7 +441,11 @@ internal constructor(
      */
     fun getRoomSessionIds(): List<String> = roomSessions.sessionIdsExcept(sessionId)
 
-    fun isSessionInCurrentRoom(session: String?): Boolean = roomSessions.contains(session)
+    /**
+     * Whether [session] is in the room [roomToken] and the connection is in that room as well. A typing message is
+     * only trusted for the conversation of the room the session was seen in.
+     */
+    fun isSessionInRoom(session: String?, roomToken: String): Boolean = roomSessions.contains(session, roomToken)
 
     @Throws(IOException::class)
     private fun processJoinedRoomMessage(text: String) {
@@ -437,7 +455,11 @@ internal constructor(
             roomSessions.onRoomResponse(roomWebSocketMessage.roomId)
             currentRoomToken = roomWebSocketMessage.roomId
             pendingJoinRoomToken = null
-            if (roomWebSocketMessage.roomPropertiesWebSocketMessage != null && !TextUtils.isEmpty(currentRoomToken)) {
+            if (TextUtils.isEmpty(currentRoomToken)) {
+                // The server took the client out of the room, so the keys of that room go with it, like on iOS
+                callEncryptionLifecycle.close()
+            } else if (roomWebSocketMessage.roomPropertiesWebSocketMessage != null) {
+                callEncryptionLifecycle.roomJoined(sessionId, hasMCU, alreadyInRoom, ::sendEncryptionMessage)
                 if (alreadyInRoom) {
                     sendRoomUpdatedEvent()
                 } else {
@@ -447,6 +469,36 @@ internal constructor(
         }
     }
 
+    // The capabilities may have changed since this instance was created. Once calls have to be encrypted while a
+    // room is joined (or about to be resumed), a new signaling session is needed: the key exchange is set up when
+    // the room is joined, and the other participants only start their handshakes when they see that join
+    fun refreshCallEncryptionPolicy(user: User) {
+        val enabled = CapabilitiesUtil.isCallEndToEndEncryptionEnabled(user.capabilities?.spreedCapability)
+        if (enabled && !isCallEncryptionEnabled && !currentRoomToken.isNullOrEmpty()) {
+            Log.d(TAG, "Calls have to be end-to-end encrypted now, starting a new signaling session")
+            startNewSignalingSession()
+        }
+        isCallEncryptionEnabled = enabled
+    }
+
+    // Drops the session and the joined room, so the next hello starts a new session and the room is joined again
+    private fun startNewSignalingSession() {
+        resumeId = ""
+        currentRoomToken = ""
+        currentNormalBackendSession = ""
+        pendingJoinRoomToken = null
+        roomSessions.reset()
+        restartWebSocket("new signaling session")
+    }
+
+    private fun sendEncryptionMessage(to: String, message: EncryptionMessage) {
+        val ncSignalingMessage = NCSignalingMessageDto()
+        ncSignalingMessage.to = to
+        ncSignalingMessage.type = "message"
+        ncSignalingMessage.payload = message.toPayload()
+        sendCallMessage(ncSignalingMessage)
+    }
+
     @Throws(IOException::class)
     private fun processErrorMessage(webSocket: WebSocket, text: String) {
         Log.e(TAG, "Received error: $text")
@@ -454,11 +506,7 @@ internal constructor(
         if (message != null) {
             if ("no_such_session" == message.code) {
                 Log.d(TAG, "WebSocket " + webSocket.hashCode() + " resumeID " + resumeId + " expired")
-                resumeId = ""
-                currentRoomToken = ""
-                currentNormalBackendSession = ""
-                roomSessions.reset()
-                restartWebSocket("error no_such_session")
+                startNewSignalingSession()
             } else if ("hello_expected" == message.code) {
                 restartWebSocket("error hello_expected")
             } else if ("already_joined" == message.code) {
@@ -509,6 +557,10 @@ internal constructor(
         )
         if (helloResponseWebSocketMessage1 != null) {
             resumeId = helloResponseWebSocketMessage1.resumeId
+            if (sessionId != helloResponseWebSocketMessage1.sessionId) {
+                // A new session has to exchange keys again after joining the room again
+                callEncryptionLifecycle.close()
+            }
             sessionId = helloResponseWebSocketMessage1.sessionId
             hasMCU = helloResponseWebSocketMessage1.serverHasMCUSupport()
 
@@ -591,7 +643,7 @@ internal constructor(
         Log.e(
             TAG,
             "Error : WebSocket ${webSocket.hashCode()} (isCurrentInternalWebSocket=$isCurrent, " +
-                "httpCode=${response?.code}, ${describeTimes()}, ${describeEnvironment()})",
+                "httpCode=${response?.code}, ${describeTimes()}, ${describeEnvironment(context)})",
             t
         )
         closeWebSocket(webSocket, "onFailure ${t.javaClass.simpleName}: ${t.message}")
@@ -602,66 +654,6 @@ internal constructor(
         val sinceConnectStart = if (connectStartedAt == 0L) -1 else now - connectStartedAt
         val sinceLastFrame = if (lastFrameAt == 0L) -1 else now - lastFrameAt
         return "sinceConnectStart=$sinceConnectStart ms, sinceLastFrame=$sinceLastFrame ms"
-    }
-
-    /**
-     * The state of the phone at a failure. A connection that the phone closes a few seconds after a call, with the
-     * network gone for seconds afterwards, points to the system (network switch, power management) and not to the app:
-     * this line tells which.
-     */
-    @Suppress("TooGenericExceptionCaught")
-    private fun describeEnvironment(): String {
-        val appContext = context ?: return "no context"
-        return try {
-            val connectivityManager = appContext.getSystemService(ConnectivityManager::class.java)
-            val network = connectivityManager?.activeNetwork
-            val capabilities = network?.let { connectivityManager.getNetworkCapabilities(it) }
-            val transport = when {
-                capabilities == null -> "none"
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
-                capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
-                else -> "other"
-            }
-            val validated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
-            val powerManager = appContext.getSystemService(PowerManager::class.java)
-            val processInfo = ActivityManager.RunningAppProcessInfo()
-            ActivityManager.getMyMemoryState(processInfo)
-            "network=${network?.networkHandle} $transport validated=$validated, " +
-                "interactive=${powerManager?.isInteractive}, idle=${powerManager?.isDeviceIdleMode}, " +
-                "importance=${processInfo.importance}, ${describeBackgroundLimits(appContext, connectivityManager)}"
-        } catch (e: RuntimeException) {
-            "environment unknown: ${e.javaClass.simpleName}"
-        }
-    }
-
-    /**
-     * What the system lets the app do in the background. A phone which cuts the network of an app that has left the
-     * screen closes its sockets without a close frame (the server sees "unexpected EOF"): this tells whether it did.
-     * appState is the state of the app process (RESUMED/STARTED: on screen, CREATED: in the background).
-     */
-    private fun describeBackgroundLimits(appContext: Context, connectivityManager: ConnectivityManager?): String {
-        // Both calls exist since API 28 (minSdk is 26): on older versions they throw NoSuchMethodError, which is an
-        // Error and not caught by the caller.
-        val hasApi28 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
-        val backgroundRestricted = if (hasApi28) {
-            appContext.getSystemService(ActivityManager::class.java)?.isBackgroundRestricted.toString()
-        } else {
-            NOT_AVAILABLE
-        }
-        val standbyBucket = if (hasApi28) {
-            appContext.getSystemService(UsageStatsManager::class.java)?.appStandbyBucket.toString()
-        } else {
-            NOT_AVAILABLE
-        }
-        val appState = try {
-            ProcessLifecycleOwner.get().lifecycle.currentState
-        } catch (e: IllegalStateException) {
-            Log.d(TAG, "No process lifecycle: ${e.message}")
-            null
-        }
-        return "appState=$appState, backgroundRestricted=$backgroundRestricted, " +
-            "dataSaver=${connectivityManager?.restrictBackgroundStatus}, standbyBucket=$standbyBucket, " +
-            "sdk=${Build.VERSION.SDK_INT}"
     }
 
     fun hasMCU(): Boolean = hasMCU
@@ -686,6 +678,7 @@ internal constructor(
                 currentFederation = null
                 pendingJoinRoomToken = null
                 roomSessions.reset()
+                callEncryptionLifecycle.close()
                 sendMessage(message)
             } else if (
                 roomToken == currentRoomToken &&
@@ -738,6 +731,7 @@ internal constructor(
     }
 
     fun sendBye(): Boolean {
+        callEncryptionLifecycle.close()
         val webSocket = internalWebSocket
         return isConnected && webSocket != null && sendBye(webSocket)
     }
@@ -801,7 +795,6 @@ internal constructor(
         private const val TAG = "WebSocketInstance"
         private const val NORMAL_CLOSURE = 1000
         private const val ONE_SECOND: Long = 1000
-        private const val NOT_AVAILABLE = "n/a"
         private const val CALLER_STACK_SKIP = 2
         private const val CALLER_STACK_DEPTH = 6
         private const val PING_INTERVAL_SECONDS: Long = 30
@@ -810,6 +803,12 @@ internal constructor(
         // and for the answer of the upgrade request, so one hanging attempt used up the whole window and the next
         // one could only open a new session. Once connected the read timeout is off (OkHttp), pings take over.
         private const val CONNECT_TIMEOUT_SECONDS: Long = 10
+
+        // The sender is what the signaling server says, never what the message claims, like in the web client. A
+        // message without a sender gets none, so the key exchange ignores it
+        internal fun takeSenderFromEnvelope(callWebSocketMessage: CallWebSocketMessageDto) {
+            callWebSocketMessage.ncSignalingMessage?.from = callWebSocketMessage.senderWebSocketMessage?.sessionId
+        }
 
         // Dedicated client with pings, so half-open WebSocket connections
         // (e.g. after a WiFi to cellular switch without TCP reset) fail and trigger the reconnect path.
@@ -820,4 +819,64 @@ internal constructor(
                 .readTimeout(CONNECT_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                 .build()
     }
+}
+
+/**
+ * The state of the phone at a failure. A connection that the phone closes a few seconds after a call, with the
+ * network gone for seconds afterwards, points to the system (network switch, power management) and not to the app:
+ * this line tells which.
+ */
+@Suppress("TooGenericExceptionCaught")
+private fun describeEnvironment(context: Context?): String {
+    val appContext = context ?: return "no context"
+    return try {
+        val connectivityManager = appContext.getSystemService(ConnectivityManager::class.java)
+        val network = connectivityManager?.activeNetwork
+        val capabilities = network?.let { connectivityManager.getNetworkCapabilities(it) }
+        val transport = when {
+            capabilities == null -> "none"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> "wifi"
+            capabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> "cellular"
+            else -> "other"
+        }
+        val validated = capabilities?.hasCapability(NetworkCapabilities.NET_CAPABILITY_VALIDATED)
+        val powerManager = appContext.getSystemService(PowerManager::class.java)
+        val processInfo = ActivityManager.RunningAppProcessInfo()
+        ActivityManager.getMyMemoryState(processInfo)
+        "network=${network?.networkHandle} $transport validated=$validated, " +
+            "interactive=${powerManager?.isInteractive}, idle=${powerManager?.isDeviceIdleMode}, " +
+            "importance=${processInfo.importance}, ${describeBackgroundLimits(appContext, connectivityManager)}"
+    } catch (e: RuntimeException) {
+        "environment unknown: ${e.javaClass.simpleName}"
+    }
+}
+
+/**
+ * What the system lets the app do in the background. A phone which cuts the network of an app that has left the
+ * screen closes its sockets without a close frame (the server sees "unexpected EOF"): this tells whether it did.
+ * appState is the state of the app process (RESUMED/STARTED: on screen, CREATED: in the background).
+ */
+private fun describeBackgroundLimits(appContext: Context, connectivityManager: ConnectivityManager?): String {
+    // Both calls exist since API 28 (minSdk is 26): on older versions they throw NoSuchMethodError, which is an
+    // Error and not caught by the caller.
+    val hasApi28 = Build.VERSION.SDK_INT >= Build.VERSION_CODES.P
+    val backgroundRestricted = if (hasApi28) {
+        appContext.getSystemService(ActivityManager::class.java)?.isBackgroundRestricted.toString()
+    } else {
+        "n/a"
+    }
+    val standbyBucket = if (hasApi28) {
+        appContext.getSystemService(UsageStatsManager::class.java)?.appStandbyBucket.toString()
+    } else {
+        "n/a"
+    }
+    val appState = try {
+        ProcessLifecycleOwner.get().lifecycle.currentState
+    } catch (e: IllegalStateException) {
+        Log.d("WebSocketInstance", "No process lifecycle: ${e.message}")
+        null
+    }
+    return "appState=$appState, backgroundRestricted=$backgroundRestricted, " +
+        "dataSaver=${connectivityManager?.restrictBackgroundStatus}, standbyBucket=$standbyBucket, " +
+        "sdk=${Build.VERSION.SDK_INT}"
 }

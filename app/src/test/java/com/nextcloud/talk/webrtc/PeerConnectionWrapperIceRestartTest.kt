@@ -92,6 +92,10 @@ class PeerConnectionWrapperIceRestartTest {
             type,
             receiver,
             sender,
+            false,
+            null,
+            null,
+            false,
             createdFromOffer
         )
 
@@ -529,7 +533,10 @@ class PeerConnectionWrapperIceRestartTest {
             false,
             "video",
             receiver,
-            sender
+            sender,
+            false,
+            null,
+            null
         )
         val videoTransceiver = Mockito.mock(org.webrtc.RtpTransceiver::class.java)
         Mockito.`when`(videoTransceiver.mediaType).thenReturn(org.webrtc.MediaStreamTrack.MediaType.MEDIA_TYPE_VIDEO)

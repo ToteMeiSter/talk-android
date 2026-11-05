@@ -10,6 +10,7 @@ package com.nextcloud.talk.webrtc;
 
 import com.bluelinelabs.logansquare.LoganSquare;
 import com.nextcloud.talk.logger.AppLog;
+import com.nextcloud.talk.call.e2ee.FrameKeyRing;
 import com.nextcloud.talk.models.json.signaling.DataChannelMessageDto;
 import com.nextcloud.talk.models.json.signaling.NCIceCandidateDto;
 import com.nextcloud.talk.models.json.signaling.NCMessagePayloadDto;
@@ -28,6 +29,7 @@ import org.webrtc.PeerConnection;
 import org.webrtc.PeerConnectionDependencies;
 import org.webrtc.PeerConnectionFactory;
 import org.webrtc.RtpReceiver;
+import org.webrtc.RtpSender;
 import org.webrtc.RtpTransceiver;
 import org.webrtc.SessionDescription;
 import org.webrtc.VideoTrack;
@@ -49,7 +51,7 @@ import java.util.concurrent.TimeUnit;
 import androidx.annotation.Nullable;
 import androidx.annotation.VisibleForTesting;
 
-public class PeerConnectionWrapper {
+public final class PeerConnectionWrapper {
 
     private static final String TAG = PeerConnectionWrapper.class.getCanonicalName();
 
@@ -72,7 +74,15 @@ public class PeerConnectionWrapper {
 
     private final boolean isMCUPublisher;
     private final boolean hasMCU;
+    private final boolean isScreenSharer;
+    private final String localSession;
     private final String videoStreamType;
+
+    // Keys of the remote participant when the call is end-to-end encrypted, attached to every receiver
+    @Nullable
+    private final FrameKeyRing receiverKeyRing;
+    // The frame encryption only handles VP8
+    private final String preferredVideoCodec;
 
     // Identifies this connection towards the remote side, like "sid" in the web client and iOS. An offer with an
     // unknown "sid" makes the remote side drop its connection, so all messages of this connection carry it.
@@ -138,18 +148,52 @@ public class PeerConnectionWrapper {
         void onIceConnectionStateChanged(PeerConnection.IceConnectionState iceConnectionState);
     }
 
+    /**
+     * @param encryptionRequired whether the call has to be end-to-end encrypted; the wrapper is then not created
+     *                           without the keys it needs, so no media is ever exchanged unencrypted
+     * @param senderKeyRing own keys to encrypt the local tracks with, null when the call is not end-to-end encrypted
+     * @param receiverKeyRing keys of the remote participant to decrypt its tracks with, null when the call is not
+     *                        end-to-end encrypted
+     * @throws IllegalStateException when encryption is required but the keys for this connection are missing
+     */
     public PeerConnectionWrapper(PeerConnectionFactory peerConnectionFactory,
                                  List<PeerConnection.IceServer> iceServerList,
                                  MediaConstraints mediaConstraints,
                                  String sessionId, String localSession, @Nullable MediaStream localStream,
                                  boolean isMCUPublisher, boolean hasMCU, String videoStreamType,
                                  SignalingMessageReceiver signalingMessageReceiver,
-                                 SignalingMessageSender signalingMessageSender) {
+                                 SignalingMessageSender signalingMessageSender,
+                                 boolean encryptionRequired,
+                                 @Nullable FrameKeyRing senderKeyRing,
+                                 @Nullable FrameKeyRing receiverKeyRing) {
         this(peerConnectionFactory, iceServerList, mediaConstraints, sessionId, localSession, localStream,
-             isMCUPublisher, hasMCU, videoStreamType, signalingMessageReceiver, signalingMessageSender, false);
+             isMCUPublisher, hasMCU, videoStreamType, signalingMessageReceiver, signalingMessageSender,
+             encryptionRequired, senderKeyRing, receiverKeyRing, false, false);
     }
 
     /**
+     * @param isScreenSharer true if the connection sends the local screen, either directly to the remote participant
+     *                       or, with MCU, to the own publisher. The connection then always sends the offer and does
+     *                       not open data channels.
+     */
+    public PeerConnectionWrapper(PeerConnectionFactory peerConnectionFactory,
+                                 List<PeerConnection.IceServer> iceServerList,
+                                 MediaConstraints mediaConstraints,
+                                 String sessionId, String localSession, @Nullable MediaStream localStream,
+                                 boolean isMCUPublisher, boolean hasMCU, String videoStreamType,
+                                 SignalingMessageReceiver signalingMessageReceiver,
+                                 SignalingMessageSender signalingMessageSender,
+                                 boolean encryptionRequired,
+                                 @Nullable FrameKeyRing senderKeyRing,
+                                 @Nullable FrameKeyRing receiverKeyRing,
+                                 boolean isScreenSharer) {
+        this(peerConnectionFactory, iceServerList, mediaConstraints, sessionId, localSession, localStream,
+             isMCUPublisher, hasMCU, videoStreamType, signalingMessageReceiver, signalingMessageSender,
+             encryptionRequired, senderKeyRing, receiverKeyRing, isScreenSharer, false);
+    }
+
+    /**
+     * @param isScreenSharer true if the connection sends the local screen, see the constructor without createdFromOffer
      * @param createdFromOffer true if the connection is created because an offer of the remote side arrived; no
      *                         offer is requested from the MCU then, as it is already sent
      */
@@ -160,8 +204,23 @@ public class PeerConnectionWrapper {
                                  boolean isMCUPublisher, boolean hasMCU, String videoStreamType,
                                  SignalingMessageReceiver signalingMessageReceiver,
                                  SignalingMessageSender signalingMessageSender,
+                                 boolean encryptionRequired,
+                                 @Nullable FrameKeyRing senderKeyRing,
+                                 @Nullable FrameKeyRing receiverKeyRing,
+                                 boolean isScreenSharer,
                                  boolean createdFromOffer) {
+        boolean missingSenderKeys = (isMCUPublisher || localStream != null) && senderKeyRing == null;
+        boolean missingReceiverKeys = !isMCUPublisher && receiverKeyRing == null;
+        if (encryptionRequired && (missingSenderKeys || missingReceiverKeys)) {
+            throw new IllegalStateException("The call has to be end-to-end encrypted but there are no keys for "
+                                                + sessionId);
+        }
+
         this.videoStreamType = videoStreamType;
+        this.isScreenSharer = isScreenSharer;
+        this.localSession = localSession;
+        this.receiverKeyRing = receiverKeyRing;
+        this.preferredVideoCodec = senderKeyRing != null || receiverKeyRing != null ? "VP8" : "H264";
 
         this.sessionId = sessionId;
         this.mediaConstraints = mediaConstraints;
@@ -184,7 +243,10 @@ public class PeerConnectionWrapper {
             + " iceServers=" + IceDiagnostics.describeServers(iceServerList));
 
         this.signalingMessageReceiver = signalingMessageReceiver;
-        this.signalingMessageReceiver.addListener(webRtcMessageListener, sessionId, videoStreamType);
+        this.signalingMessageReceiver.addListener(
+            webRtcMessageListener,
+            sessionId,
+            isScreenSharer ? SignalingMessageReceiver.ROOM_TYPE_SCREEN_SHARING : videoStreamType);
 
         this.signalingMessageSender = signalingMessageSender;
 
@@ -199,7 +261,20 @@ public class PeerConnectionWrapper {
                 }
             }
 
-            if (hasMCU || hasInitiated) {
+            if (senderKeyRing != null) {
+                // Attached before any offer is created, so no frame is ever sent unencrypted
+                for (RtpSender sender : peerConnection.getSenders()) {
+                    if (!senderKeyRing.attachEncryptor(sender)) {
+                        // The own keys are disposed when the call ends, so nothing may be sent anymore
+                        AppLog.w(TAG, "Own keys are gone, not sending with sender " + sender.id());
+                        peerConnection.removeTrack(sender);
+                    }
+                }
+            }
+
+            if (isScreenSharer) {
+                peerConnection.createOffer(sdpObserver, mediaConstraints);
+            } else if (hasMCU || hasInitiated) {
                 DataChannel.Init init = new DataChannel.Init();
                 init.negotiated = false;
 
@@ -643,6 +718,9 @@ public class PeerConnectionWrapper {
         if (!"requestoffer".equals(type)) {
             ncSignalingMessage.setSid(sid);
         }
+        if (isScreenSharer) {
+            ncSignalingMessage.setBroadcaster(localSession);
+        }
 
         return ncSignalingMessage;
     }
@@ -712,7 +790,7 @@ public class PeerConnectionWrapper {
         }
 
         private SessionDescription createSessionDescription(String type, String sdp) {
-            String sdpWithPreferredCodec = WebRTCUtils.preferCodec(sdp, "H264", false);
+            String sdpWithPreferredCodec = WebRTCUtils.preferCodec(sdp, preferredVideoCodec, false);
             return new SessionDescription(SessionDescription.Type.fromCanonicalForm(type), sdpWithPreferredCodec);
         }
 
@@ -978,6 +1056,14 @@ public class PeerConnectionWrapper {
 
         @Override
         public void onAddTrack(RtpReceiver rtpReceiver, MediaStream[] mediaStreams) {
+            // Called on the signaling thread before the track is wired to a decoder, so no encrypted frame reaches
+            // it without a decryptor
+            if (receiverKeyRing != null && !receiverKeyRing.attachDecryptor(rtpReceiver)) {
+                // The participant left and its keys are disposed, so this connection is about to be closed too
+                AppLog.w(TAG, "Not adding a track of " + sessionId + " that can not be decrypted anymore");
+                return;
+            }
+
             MediaStreamTrack track = rtpReceiver.track();
             AppLog.d(TAG, "onAddTrack " + (track == null ? null : track.kind()) + " streams=" + mediaStreams.length
                 + " over " + sessionId + " " + videoStreamType);
@@ -1072,7 +1158,7 @@ public class PeerConnectionWrapper {
             SessionDescription sessionDescriptionWithPreferredCodec;
             String sessionDescriptionStringWithPreferredCodec = WebRTCUtils.preferCodec
                     (sessionDescription.description,
-                            "H264", false);
+                            preferredVideoCodec, false);
             sessionDescriptionWithPreferredCodec = new SessionDescription(
                     sessionDescription.type,
                     sessionDescriptionStringWithPreferredCodec);

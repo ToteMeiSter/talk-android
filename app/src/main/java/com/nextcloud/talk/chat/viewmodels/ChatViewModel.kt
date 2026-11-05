@@ -83,6 +83,7 @@ import com.nextcloud.talk.utils.Mimetype
 import com.nextcloud.talk.utils.MimetypeUtils
 import com.nextcloud.talk.utils.ParticipantPermissions
 import com.nextcloud.talk.utils.SpreedFeatures
+import com.nextcloud.talk.utils.UploadSourceGrants
 import com.nextcloud.talk.utils.UserIdUtils
 import com.nextcloud.talk.utils.throttleLatest
 import com.nextcloud.talk.utils.bundle.BundleKeys
@@ -445,8 +446,11 @@ class ChatViewModel @AssistedInject constructor(
         // The placeholder below is removed whether or not a work is found.
         // Both jobs run in appScope: leaving the chat right after the tap must not drop the cancellation.
         val workId = uploadReferenceToWorkId.remove(referenceId)
+        // read before the map is cleared below: the cancelled upload that has not started releases the read
+        // access to its file
+        val fileUri = _uploadedLocalPreviewMap.value[referenceId]
         appScope.launch(Dispatchers.IO) {
-            UploadAndShareFilesWorker.cancelUpload(referenceId, workId)
+            UploadAndShareFilesWorker.cancelUpload(referenceId, workId, fileUri)
         }
         appScope.launch {
             chatRepository.deleteTempMessageByReferenceId(referenceId)
@@ -2524,6 +2528,8 @@ class ChatViewModel @AssistedInject constructor(
 
             // enqueued right here, in the order of the calls: the queue of a conversation is chained, and the
             // slow lookup of the file info below must neither reorder the files nor die with the view model
+            // the access the picker granted ends with the chat, while the upload can wait for the network
+            UploadSourceGrants.keep(NextcloudTalkApplication.sharedApplication!!, fileUri)
             val workerId = enqueueUpload()
             if (!isVoiceMessage) {
                 uploadReferenceToWorkId[referenceId] = workerId

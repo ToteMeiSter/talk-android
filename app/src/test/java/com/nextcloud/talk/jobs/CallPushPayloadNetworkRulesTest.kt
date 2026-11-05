@@ -34,18 +34,18 @@ class CallPushPayloadNetworkRulesTest {
     }
 
     @Test
-    fun stageOneShowsNothingForTheOwnCallBeforeAnythingElseButEncryption() {
+    fun stageOneShowsNothingForTheOwnCallBeforeAnythingElse() {
         assertEquals(
             CallPushPayload.Stage1Action.OWN_CALL,
-            CallPushPayload.stage1Action(stale = false, endToEndEncrypted = false, ownCall = true)
+            CallPushPayload.stage1Action(stale = false, ownCall = true)
         )
         assertEquals(
             CallPushPayload.Stage1Action.OWN_CALL,
-            CallPushPayload.stage1Action(stale = true, endToEndEncrypted = false, ownCall = true)
+            CallPushPayload.stage1Action(stale = true, ownCall = true)
         )
         assertEquals(
             CallPushPayload.Stage1Action.RING,
-            CallPushPayload.stage1Action(stale = false, endToEndEncrypted = false, ownCall = false)
+            CallPushPayload.stage1Action(stale = false, ownCall = false)
         )
     }
 

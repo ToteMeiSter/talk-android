@@ -74,6 +74,8 @@
     <string name="nc_add_to_favorites">Добави към любимите</string>
     <string name="nc_all_ok_operation">Добре, всичко е готово!</string>
     <string name="nc_attendee_pin">Pin: %1$s</string>
+    <string name="nc_audio_player_next">Следващо</string>
+    <string name="nc_audio_player_previous">Предишно</string>
     <string name="nc_biometric_unlock">Отключване %1$s</string>
     <string name="nc_call_button_content_description_answer_video_call">Отговор с видео обаждане</string>
     <string name="nc_call_button_content_description_answer_voice_only">Отговор само с гласово повикване</string>
@@ -126,6 +128,7 @@
     <string name="nc_configure_cert_auth">Изберете сертификат за удостоверяване</string>
     <string name="nc_confirm">Потвърдете</string>
     <string name="nc_connecting_call">Свързване …</string>
+    <string name="nc_contact_chat_start">Начало</string>
     <string name="nc_contacts_done">Готово</string>
     <string name="nc_conversation_menu_conversation_go_to_file">Отидете до файла</string>
     <string name="nc_conversation_menu_conversation_info">Информация за разговор</string>
@@ -150,6 +153,7 @@
     <string name="nc_custom_color">Персонализиране на цвят</string>
     <string name="nc_date_header_today">Днес</string>
     <string name="nc_date_header_yesterday">Вчера</string>
+    <string name="nc_deep_link_join">Влез</string>
     <string name="nc_delete">Изтриване</string>
     <string name="nc_delete_all">Изтриване на всички</string>
     <string name="nc_delete_call">Изтриване на разговора</string>
