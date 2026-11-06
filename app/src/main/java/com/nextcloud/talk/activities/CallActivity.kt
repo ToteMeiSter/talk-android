@@ -1562,10 +1562,12 @@ class CallActivity : CallBaseActivity() {
         } else {
             releaseCallingSound()
         }
-        val shouldDisableProximityLock =
-            currentDevice == AudioDevice.WIRED_HEADSET ||
-                currentDevice == AudioDevice.SPEAKER_PHONE ||
-                currentDevice == AudioDevice.BLUETOOTH
+        val shouldDisableProximityLock = isVoiceOnlyCall &&
+            (
+                currentDevice == AudioDevice.WIRED_HEADSET ||
+                    currentDevice == AudioDevice.SPEAKER_PHONE ||
+                    currentDevice == AudioDevice.BLUETOOTH
+                )
         if (shouldDisableProximityLock) {
             powerManagerUtils!!.updatePhoneState(PowerManagerUtils.PhoneState.WITHOUT_PROXIMITY_SENSOR_LOCK)
         } else {
@@ -3237,6 +3239,7 @@ class CallActivity : CallBaseActivity() {
             if (permissionUtil!!.isCameraPermissionGranted() &&
                 isConnectingOrEstablished() &&
                 videoOn &&
+                localVideoTrack != null &&
                 enableVideo != localVideoTrack!!.enabled()
             ) {
                 toggleMedia(enableVideo, true)

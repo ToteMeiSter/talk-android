@@ -57,7 +57,7 @@ class SaveToStorageDialogFragment : DialogFragment() {
             .setTitle(R.string.nc_dialog_save_to_storage_title)
             .setMessage(dialogText)
             .setPositiveButton(R.string.nc_dialog_save_to_storage_yes) { _: DialogInterface?, _: Int ->
-                saveImageToStorage(fileName)
+                saveImageToStorage(fileName, fileId)
             }
             .setNegativeButton(R.string.nc_dialog_save_to_storage_no) { _: DialogInterface?, _: Int ->
             }
@@ -75,16 +75,12 @@ class SaveToStorageDialogFragment : DialogFragment() {
     }
 
     @SuppressLint("LongLogTag")
-    private fun saveImageToStorage(fileName: String) {
-        // Files cached by the media viewer live in a folder named after their file id, chat attachments directly in
-        // the shared attachments directory.
-        val sourceFile = fileId?.let { FileUtils.resolveSharedAttachmentFile(requireContext().cacheDir, it, fileName) }
-            ?: FileUtils.resolveSharedAttachmentFile(requireContext().cacheDir, fileName)
-        if (sourceFile == null) {
-            Log.e(TAG, "Failed to resolve the file to save")
+    private fun saveImageToStorage(fileName: String, fileId: String?) {
+        val sourceFile = FileUtils.resolveSharedAttachmentFile(requireContext().cacheDir, fileId, fileName) ?: run {
+            Log.e(TAG, "Failed to resolve shared attachment file")
             return
         }
-        val workerTag = SAVE_TO_STORAGE_WORKER_PREFIX + sourceFile.absolutePath
+        val workerTag = SAVE_TO_STORAGE_WORKER_PREFIX + fileId.orEmpty() + "_" + fileName
 
         val workers = WorkManager.getInstance(requireContext()).getWorkInfosByTag(workerTag)
         try {
@@ -122,7 +118,7 @@ class SaveToStorageDialogFragment : DialogFragment() {
         fun newInstance(fileName: String, fileId: String? = null): SaveToStorageDialogFragment {
             val args = Bundle()
             args.putString(KEY_FILE_NAME, fileName)
-            fileId?.let { args.putString(KEY_FILE_ID, it) }
+            args.putString(KEY_FILE_ID, fileId)
             val fragment = SaveToStorageDialogFragment()
             fragment.arguments = args
             return fragment

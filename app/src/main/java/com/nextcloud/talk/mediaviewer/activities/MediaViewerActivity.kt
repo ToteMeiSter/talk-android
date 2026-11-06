@@ -145,14 +145,13 @@ class MediaViewerActivity : BaseActivity() {
     }
 
     private fun showSaveDialog(item: MediaViewerItem, localPath: String) {
-        val safeFile = FileUtils.resolveSharedAttachmentFile(cacheDir, item.fileId, item.fileName)
+        val safeFile = FileUtils.resolveSharedAttachmentFile(cacheDir, item.fileId, File(localPath).name)
         if (safeFile == null || !safeFile.exists()) {
-            logger.e(TAG, "Refused to save file with unsafe name or path: ${item.fileName}")
+            logger.e(TAG, "Refused to save file with unsafe name: ${File(localPath).name}")
             Snackbar.make(window.decorView, R.string.nc_common_error_sorry, Snackbar.LENGTH_LONG).show()
             return
         }
-        // The viewer caches every file in its own per-file-id folder, which the dialog has to look in.
-        val saveFragment: DialogFragment = SaveToStorageDialogFragment.newInstance(item.fileName, item.fileId)
+        val saveFragment: DialogFragment = SaveToStorageDialogFragment.newInstance(safeFile.name, item.fileId)
         saveFragment.show(supportFragmentManager, SaveToStorageDialogFragment.TAG)
     }
 
