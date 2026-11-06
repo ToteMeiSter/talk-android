@@ -154,7 +154,7 @@ fun MarkdownText(
                     val markwon = MessageUtils.buildMarkwon(context, textColorArgb)
                     markwon.setMarkdown(
                         textView,
-                        MarkdownTables.ensureBlankLineBeforeTables(resolveNonMentionParams(message))
+                        MessageUtils.prepareMarkdown(resolveNonMentionParams(message))
                     )
                     val ssb = SpannableStringBuilder(textView.text)
                     val hasClickableChips = applyMentionChips(
