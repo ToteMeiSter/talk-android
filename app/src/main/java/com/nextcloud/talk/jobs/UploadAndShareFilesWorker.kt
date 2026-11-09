@@ -75,8 +75,10 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.MediaType
 import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import okhttp3.OkHttpClient
+import retrofit2.HttpException
 import java.io.File
 import java.io.IOException
+import java.net.HttpURLConnection
 import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -231,11 +233,17 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             file?.let { isChunkedUploading = it.length() > CHUNK_UPLOAD_THRESHOLD_SIZE }
             val uploadUri = prepared?.let { Uri.fromFile(it.file) }
 
+            val permissions = sharePermissions(useConversationSubfolders, allowUpdate)
             val shared = if (useConversationSubfolders) {
                 // The conversation subfolder path shares as part of its last step, postConversationAttachment.
-                uploadUsingConversationSubfolders(uploadUri, metaData, allowUpdate)
+                uploadUsingConversationSubfolders(uploadUri, metaData, allowUpdate) ?: run {
+                    // The server answered 501 despite the capability, e.g. because the conversation has message
+                    // expiration enabled. Upload to the attachment folder and share the file from there instead.
+                    Log.i(TAG, "Conversation subfolders not available, using the attachment folder")
+                    uploadAndShare(uploadUri, metaData, permissions)
+                }
             } else {
-                uploadAndShare(uploadUri, metaData)
+                uploadAndShare(uploadUri, metaData, permissions)
             }
 
             if (shared) {
@@ -256,14 +264,14 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
      * Upload and share are two stages. What is done is kept in the workspace, so a run after a retry or after a
      * stop does not upload the file or share it a second time.
      */
-    private fun uploadAndShare(uploadUri: Uri?, metaData: String?): Boolean {
+    private fun uploadAndShare(uploadUri: Uri?, metaData: String?, sharePermissions: Int?): Boolean {
         val remotePath = workspace.uploadedPath() ?: getRemotePath(currentUser)
         val uploaded = workspace.uploadedPath() != null || uploadFile(checkNotNull(uploadUri), remotePath)
         if (uploaded) {
             workspace.markUploaded(remotePath, fileName)
         }
         // Not shared when the user cancelled right as the upload finished.
-        return uploaded && !isCancelled() && shareFile(remotePath, metaData)
+        return uploaded && !isCancelled() && shareFile(remotePath, metaData, sharePermissions)
     }
 
     private fun successResult(): Result {
@@ -614,11 +622,17 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         return result
     }
 
+    /**
+     * Uploads into the conversation's Draft folder and shares the file via postConversationAttachment.
+     *
+     * @return null when the server answers the probe with 501 despite the capability, the
+     * attachment folder has to be used then.
+     */
     private fun uploadUsingConversationSubfolders(
         sourceFileUri: Uri?,
         metaData: String?,
         allowUpdate: Boolean
-    ): Boolean =
+    ): Boolean? =
         runBlocking {
             val credentials = ApiUtils.getCredentials(
                 currentUser.username,
@@ -629,11 +643,13 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 this.allowUpdate = allowUpdate
             }
 
-            val probeResponse = ncApiCoroutines.probeConversationAttachmentFolder(
-                credentials,
-                ApiUtils.getUrlForChatAttachmentFolder(ApiUtils.API_V1, currentUser.baseUrl, roomToken),
-                fileNames
-            )
+            val probeResponse = nullIfNotImplemented {
+                ncApiCoroutines.probeConversationAttachmentFolder(
+                    credentials,
+                    ApiUtils.getUrlForChatAttachmentFolder(ApiUtils.API_V1, currentUser.baseUrl, roomToken),
+                    fileNames
+                )
+            } ?: return@runBlocking null
 
             val draftFolderPath = probeResponse.ocs?.data?.folder
             if (draftFolderPath.isNullOrEmpty()) {
@@ -681,7 +697,7 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         }
 
     @SuppressLint("CheckResult")
-    private fun shareFile(remotePath: String, metaData: String?): Boolean =
+    private fun shareFile(remotePath: String, metaData: String?, permissions: Int?): Boolean =
         try {
             ncApi.createRemoteShare(
                 ApiUtils.getCredentials(currentUser.username, currentUser.token),
@@ -690,7 +706,8 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
                 roomToken,
                 "10",
                 metaData,
-                referenceId.orEmpty()
+                referenceId.orEmpty(),
+                permissions
             ).blockingFirst()
             true
         } catch (e: NoSuchElementException) {
@@ -805,6 +822,9 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
         private const val COMPRESS_IMAGES = "COMPRESS_IMAGES"
         private const val ALLOW_UPDATE = "ALLOW_UPDATE"
         private const val CHUNK_UPLOAD_THRESHOLD_SIZE: Long = 1024 * 1024
+        private const val SHARE_PERMISSION_READ = 1
+        private const val SHARE_PERMISSION_UPDATE = 2
+        private const val SHARE_PERMISSION_SHARE = 16
 
         private const val WORKSPACE_DIR = "uploads"
         const val REQUEST_PERMISSION = 3123
@@ -814,6 +834,32 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
             extraBufferCapacity = 1
         )
         val uploadCompletedFlow: SharedFlow<String> = _uploadCompletedFlow
+
+        /**
+         * The user only picks view only or editable when the conversation subfolder capability is present,
+         * so only an attachment folder fallback after a 501 sends permissions. Otherwise the server applies
+         * its default share permissions.
+         */
+        internal fun sharePermissions(hasConversationSubfolders: Boolean, allowUpdate: Boolean): Int? =
+            when {
+                !hasConversationSubfolders -> null
+                allowUpdate -> SHARE_PERMISSION_READ or SHARE_PERMISSION_UPDATE or SHARE_PERMISSION_SHARE
+                else -> SHARE_PERMISSION_READ or SHARE_PERMISSION_SHARE
+            }
+
+        /**
+         * Returns null when the server answers 501, which the conversation subfolder endpoints do despite
+         * the capability when the conversation can not use them, e.g. because of message expiration.
+         */
+        internal suspend fun <T> nullIfNotImplemented(request: suspend () -> T): T? =
+            try {
+                request()
+            } catch (e: HttpException) {
+                if (e.code() != HttpURLConnection.HTTP_NOT_IMPLEMENTED) {
+                    throw e
+                }
+                null
+            }
 
         @OptIn(ExperimentalCoroutinesApi::class)
         fun clearUploadCompletedReplay() {

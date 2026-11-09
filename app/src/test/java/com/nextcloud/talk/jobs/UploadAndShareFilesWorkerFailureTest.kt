@@ -354,7 +354,7 @@ class UploadAndShareFilesWorkerFailureTest {
         val forbidden = HttpException(Response.error<Any>(FORBIDDEN, "".toResponseBody()))
         // The draft path publishes with postConversationAttachment, the attachment folder path shares.
         whenever(runBlocking { ncApiCoroutines.postConversationAttachment(any(), any(), any()) }).thenThrow(forbidden)
-        whenever(ncApi.createRemoteShare(anyOrNull(), any(), any(), any(), any(), anyOrNull(), any()))
+        whenever(ncApi.createRemoteShare(anyOrNull(), any(), any(), any(), any(), anyOrNull(), any(), anyOrNull()))
             .thenReturn(Observable.error<GenericOverall>(forbidden))
     }
 
@@ -419,7 +419,7 @@ class UploadAndShareFilesWorkerFailureTest {
 
     /** The file is uploaded already and the server refuses the share with [code]. */
     private fun uploadedAndRefusedByServer(code: Int) {
-        whenever(ncApi.createRemoteShare(anyOrNull(), any(), any(), any(), any(), anyOrNull(), any()))
+        whenever(ncApi.createRemoteShare(anyOrNull(), any(), any(), any(), any(), anyOrNull(), any(), anyOrNull()))
             .thenReturn(Observable.error<GenericOverall>(HttpException(Response.error<Any>(code, "".toResponseBody()))))
     }
 

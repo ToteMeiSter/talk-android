@@ -431,6 +431,7 @@ class ShareOperationWorkerCopyTest {
             anyOrNull(),
             anyOrNull(),
             anyOrNull(),
+            anyOrNull(),
             anyOrNull()
         )
     }
@@ -451,6 +452,7 @@ class ShareOperationWorkerCopyTest {
     private fun shareAnswers(answer: Observable<GenericOverall>) {
         whenever(
             ncApi.createRemoteShare(
+                anyOrNull(),
                 anyOrNull(),
                 anyOrNull(),
                 anyOrNull(),
