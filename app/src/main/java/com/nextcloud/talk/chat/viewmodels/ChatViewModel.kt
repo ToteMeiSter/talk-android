@@ -2855,6 +2855,17 @@ class ChatViewModel @AssistedInject constructor(
         private val TAG = ChatViewModel::class.java.simpleName
         private const val MILLIS_PER_SECOND = 1000L
 
+        /** Enough of the note to self to cover what a share of ours could have landed behind. */
+        private const val SHARE_LOOKUP_LIMIT = 20
+
+        /**
+         * Whether [messages] already hold the share that was sent with [referenceId], or null when the
+         * server returned no messages to judge by, because the lookup failed or answered "not modified".
+         */
+        @VisibleForTesting
+        fun holdsShare(messages: List<ChatMessageDto>?, referenceId: String): Boolean? =
+            messages?.any { it.referenceId == referenceId }
+
         /**
          * Id of the newest message sent by the user that the server has already accepted, or null; the
          * server marks everything up to it as read. Temporary messages (negative ids) are not accepted yet
@@ -2906,17 +2917,6 @@ class ChatViewModel @AssistedInject constructor(
             conversationLastReadMessage: Int,
             newestOwnMessageId: Int?
         ): Int? = maxOf(localLastReadMessage, newestOwnMessageId ?: 0).takeIf { it > conversationLastReadMessage }
-
-        /** Enough of the note to self to cover what a share of ours could have landed behind. */
-        private const val SHARE_LOOKUP_LIMIT = 20
-
-        /**
-         * Whether [messages] already hold the share that was sent with [referenceId], or null when the
-         * server returned no messages to judge by, because the lookup failed or answered "not modified".
-         */
-        @VisibleForTesting
-        fun holdsShare(messages: List<ChatMessageDto>?, referenceId: String): Boolean? =
-            messages?.any { it.referenceId == referenceId }
 
         /**
          * Ids of the messages a delete of [messageId] applies to: every already-uploaded message of the

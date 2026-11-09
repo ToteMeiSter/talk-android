@@ -37,6 +37,11 @@ import com.nextcloud.talk.upload.UploadWorkspace
 import com.nextcloud.talk.users.UserManager
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_INTERNAL_USER_ID
 import io.reactivex.Observable
+import java.io.File
+import java.util.UUID
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.flowOf
 import kotlinx.coroutines.runBlocking
 import mockwebserver3.Dispatcher
@@ -61,11 +66,6 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 import retrofit2.HttpException
 import retrofit2.Response
-import java.io.File
-import java.util.UUID
-import java.util.concurrent.ConcurrentHashMap
-import java.util.concurrent.TimeUnit
-import java.util.concurrent.atomic.AtomicInteger
 
 /**
  * What an upload that fails leaves behind: the state of the work, the placeholder message of the chat and the
@@ -100,12 +100,7 @@ class UploadAndShareFilesWorkerFailureTest {
     }
 
     init {
-        doAnswer {
-            val row = it.getArgument<ChatMessageEntity>(0)
-            rows[row.referenceId!!] = row
-            Unit
-        }.whenever(chatDao).updateChatMessage(any())
-        // In develop the worker writes only the send status of the temporary row.
+        // The worker writes only the send status of the temporary row.
         doAnswer {
             val referenceId = it.getArgument<String>(1)
             val row = rows[referenceId]
@@ -321,7 +316,7 @@ class UploadAndShareFilesWorkerFailureTest {
         assertEquals(SendStatus.FAILED, rows[REFERENCE_ID]?.sendStatus)
         val request = server.takeRequest(REQUEST_WAIT_SECONDS, TimeUnit.SECONDS)
         assertEquals("DELETE", request?.method)
-        assertEquals("/remote.php/dav/files/alice/Talk/draft/id-photo.jpg", request?.url?.encodedPath)
+        assertEquals("/remote.php/dav/files/alice/Talk/draft/id-photo.jpg", request?.target)
     }
 
     @Test
@@ -412,6 +407,25 @@ class UploadAndShareFilesWorkerFailureTest {
         worker.doWork()
 
         assertEquals(1, foregroundRequests.get())
+    }
+
+    @Test
+    fun `an empty file is uploaded without a foreground service`() {
+        val worker = worker(source = fileUri(0), uploaded = false)
+
+        worker.doWork()
+
+        assertEquals(0, foregroundRequests.get())
+    }
+
+    @Test
+    fun `an empty prepared copy is taken as it is and needs no foreground service`() {
+        // The source of unknown size would count as big; the copy is empty and small.
+        val worker = worker(source = "content://media/empty.txt", uploaded = false, preparedSize = 0)
+
+        worker.doWork()
+
+        assertEquals(0, foregroundRequests.get())
     }
 
     private fun fileUri(size: Int): String =
