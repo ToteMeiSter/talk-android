@@ -86,6 +86,53 @@ class UploadWorkspaceTest {
     }
 
     @Test
+    fun `a file named like a file of the workspace stays intact and is found again`() {
+        val names = WORKSPACE_FILE_NAMES + WORKSPACE_FILE_NAMES.map { "$it.tmp" } + "file"
+        for (name in names) {
+            val ws = workspace(name)
+            // The worker takes the lock before it prepares the file.
+            assertTrue(ws.tryLock())
+            val prepared = ws.prepareOnce { create(it, name, 1_000) }!!
+            ws.markRestarted()
+            ws.markCancelled()
+            ws.markUploaded("/Talk/$name", name)
+            ws.markShared()
+            ws.registerServerError()
+            ws.recordProgress(40)
+            ws.registerUnavailable(5_000L)
+            val uploadId = ws.uploadId()
+            assertFalse(workspace(name).tryLock())
+
+            assertEquals(name, SIZE.toLong(), prepared.file.length())
+            assertEquals(name, prepared, workspace(name).prepareOnce { null })
+            assertEquals(name, prepared, workspace(name).prepared())
+            assertEquals(name, SIZE.toLong(), prepared.file.length())
+            assertTrue(name, workspace(name).isRestarted())
+            assertTrue(name, workspace(name).isCancelled())
+            assertTrue(name, workspace(name).isShared())
+            assertEquals(name, "/Talk/$name", workspace(name).uploadedPath())
+            assertEquals(name, name, workspace(name).uploadedName())
+            assertEquals(name, 1, workspace(name).serverErrors())
+            assertEquals(name, uploadId, workspace(name).uploadId())
+            assertEquals(name, Unavailable(5_000L, 2), workspace(name).registerUnavailable(6_000L))
+            assertFalse(workspace(name).tryLock())
+            ws.unlock()
+            assertTrue(workspace(name).tryLock())
+        }
+    }
+
+    @Test
+    fun `an empty prepared file is kept and found again`() {
+        val prepared = workspace().prepareOnce { dir ->
+            PreparedUpload(File(dir, "empty.txt").apply { writeBytes(ByteArray(0)) }, "empty.txt")
+        }!!
+
+        assertEquals(0L, prepared.file.length())
+        assertEquals(prepared, workspace().prepareOnce { null })
+        assertEquals(prepared, workspace().prepared())
+    }
+
+    @Test
     fun `server errors are counted across runs`() {
         assertEquals(0, workspace().serverErrors())
         assertEquals(1, workspace().registerServerError())
@@ -99,22 +146,6 @@ class UploadWorkspaceTest {
         workspace().prepareOnce { create(it, "photo.jpg", 1_000) }
 
         assertEquals(1, workspace().serverErrors())
-    }
-
-    fun `a file named like a file of the workspace stays intact and is found again`() {
-        val names = listOf("prepared", "lock", "restarted", "uploaded", "cancelled", "progress", "prepared.tmp", "file")
-        for (name in names) {
-            val ws = workspace(name)
-            val prepared = ws.prepareOnce { create(it, name, 1_000) }!!
-            ws.markRestarted()
-
-            assertEquals(SIZE.toLong(), prepared.file.length())
-            assertEquals(prepared, workspace(name).prepareOnce { null })
-            assertEquals(SIZE.toLong(), prepared.file.length())
-            assertTrue(workspace(name).isRestarted())
-            assertTrue(ws.tryLock())
-            ws.unlock()
-        }
     }
 
     @Test
@@ -325,6 +356,21 @@ class UploadWorkspaceTest {
 
     companion object {
         private const val SIZE = 16
+
+        // The files of the workspace itself, plus names a later version may use.
+        private val WORKSPACE_FILE_NAMES = listOf(
+            "prepared",
+            "lock",
+            "restarted",
+            "server_errors",
+            "uploaded",
+            "shared",
+            "cancelled",
+            "upload_id",
+            "unavailable",
+            "progress"
+        )
+
         private const val ANSWERS = 10
     }
 }

@@ -7,15 +7,15 @@
 package com.nextcloud.talk.upload.chunked
 
 import android.app.Application
-import at.bitfire.dav4jvm.exception.ForbiddenException
+import at.bitfire.dav4jvm.exception.HttpException
 import com.nextcloud.talk.api.NcApiCoroutines
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.upload.UploadRetryPolicy
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
 import mockwebserver3.SocketEffect
-import okhttp3.MediaType.Companion.toMediaType
-import okhttp3.OkHttpClient
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertThrows
@@ -108,7 +108,9 @@ class ChunkedFileUploaderTest {
         enqueueNoChunksOnServer()
         server.enqueue(MockResponse(code = FORBIDDEN))
 
-        assertThrows(ForbiddenException::class.java) { uploader().upload(file, MIME_TYPE, TARGET_PATH) }
+        assertThrows(HttpException::class.java) {
+            uploader().upload(file, MIME_TYPE, TARGET_PATH)
+        }
 
         assertEquals(listOf("MKCOL", "PROPFIND", "PUT"), takeRequests().map { it.method })
     }
@@ -122,7 +124,9 @@ class ChunkedFileUploaderTest {
         server.enqueue(MockResponse(code = CREATED))
         server.enqueue(MockResponse(code = FORBIDDEN))
 
-        assertThrows(ForbiddenException::class.java) { uploader().upload(file, MIME_TYPE, TARGET_PATH) }
+        assertThrows(HttpException::class.java) {
+            uploader().upload(file, MIME_TYPE, TARGET_PATH)
+        }
 
         assertEquals(listOf("MKCOL", "PROPFIND", "PUT", "MKCOL", "MOVE"), takeRequests().map { it.method })
     }

@@ -10,7 +10,12 @@ import android.app.Application
 import at.bitfire.dav4jvm.exception.HttpException
 import com.nextcloud.talk.api.NcApiCoroutines
 import com.nextcloud.talk.data.user.model.User
+import com.nextcloud.talk.upload.UploadRetryPolicy
 import com.nextcloud.talk.utils.FileUtils
+import java.io.File
+import java.io.IOException
+import java.util.Collections
+import java.util.concurrent.TimeUnit
 import mockwebserver3.Dispatcher
 import mockwebserver3.MockResponse
 import mockwebserver3.MockWebServer
@@ -18,6 +23,7 @@ import mockwebserver3.RecordedRequest
 import mockwebserver3.SocketEffect
 import okhttp3.Call
 import okhttp3.Callback
+import okhttp3.Headers
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
@@ -25,6 +31,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertThrows
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -35,10 +42,6 @@ import org.junit.runner.RunWith
 import org.mockito.kotlin.mock
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
-import java.io.File
-import java.io.IOException
-import java.util.Collections
-import java.util.concurrent.TimeUnit
 
 @Suppress("TooManyFunctions")
 @RunWith(RobolectricTestRunner::class)
@@ -60,6 +63,7 @@ class ChunkedFileUploaderResumeTest {
     private var putResponseCode = CREATED
     private var propfindResponseCode: Int? = null
     private var propfindDisconnects = false
+    private var putDisconnects = false
     private var deleteDisconnects = false
 
     /** Answers of the next MOVE requests; 201 when empty. */
@@ -72,18 +76,21 @@ class ChunkedFileUploaderResumeTest {
                 requests.add(request)
                 return when (request.method) {
                     "PROPFIND" -> when {
-                        propfindDisconnects ->
-                            MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()
+                        propfindDisconnects -> disconnect()
                         propfindResponseCode != null -> MockResponse(code = propfindResponseCode!!)
-                        else -> propfindResponse(request.url.encodedPath)
+                        else -> propfindResponse(request.target)
                     }
                     "MOVE" -> MockResponse(
                         code = if (moveResponseCodes.isEmpty()) CREATED else moveResponseCodes.removeAt(0)
                     )
-                    "PUT" -> MockResponse(code = putResponseCode)
+                    "PUT" -> if (putDisconnects) {
+                        disconnect()
+                    } else {
+                        MockResponse(code = putResponseCode)
+                    }
                     "MKCOL" -> MockResponse(code = METHOD_NOT_ALLOWED)
                     "DELETE" -> if (deleteDisconnects) {
-                        MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()
+                        disconnect()
                     } else {
                         MockResponse(code = CREATED)
                     }
@@ -172,7 +179,7 @@ class ChunkedFileUploaderResumeTest {
 
         val move = requests.single { it.method == "MOVE" }
         assertEquals(FILE_SIZE.toString(), move.headers["OC-Total-Length"])
-        assertTrue(move.url.encodedPath.endsWith("/.file"))
+        assertTrue(move.target.endsWith("/.file"))
     }
 
     @Test
@@ -186,6 +193,42 @@ class ChunkedFileUploaderResumeTest {
             assertEquals(SERVER_ERROR, e.code)
         }
         assertEquals(0, requests.count { it.method == "DELETE" })
+    }
+
+    @Test
+    fun `the worker tries again after a service unavailable answer to a part but not after a rejected part`() {
+        putResponseCode = SERVICE_UNAVAILABLE
+        val unavailable = assertThrows(HttpException::class.java) { uploader.upload(file, null, "/Talk/video.mp4") }
+        assertEquals(UploadRetryPolicy.FailureKind.UNAVAILABLE, UploadRetryPolicy.classify(unavailable))
+        assertEquals(
+            UploadRetryPolicy.Decision.RETRY,
+            decideAfterManyServerErrors(unavailable)
+        )
+
+        putResponseCode = BAD_REQUEST
+        val rejected = assertThrows(HttpException::class.java) { uploader.upload(file, null, "/Talk/video.mp4") }
+        assertEquals(UploadRetryPolicy.FailureKind.SERVER, UploadRetryPolicy.classify(rejected))
+        assertEquals(
+            UploadRetryPolicy.Decision.FAIL,
+            decideAfterManyServerErrors(rejected)
+        )
+    }
+
+    // The server errors are used up, the server answered "unavailable" for the first time.
+    private fun decideAfterManyServerErrors(error: Throwable) =
+        UploadRetryPolicy.decide(UploadRetryPolicy.classify(error), UploadRetryPolicy.MAX_SERVER_ERRORS, 0L, 1)
+
+    @Test
+    fun `a lost network while sending a part is an error and keeps the parts on the server`() {
+        putDisconnects = true
+
+        try {
+            uploader.upload(file, null, "/Talk/video.mp4")
+            fail("expected the upload to throw")
+        } catch (e: IOException) {
+            // retried later by the worker
+        }
+        assertEquals(0, requests.count { it.method == "DELETE" || it.method == "MOVE" })
     }
 
     @Test
@@ -212,7 +255,7 @@ class ChunkedFileUploaderResumeTest {
     fun `stop does not cancel calls of other clients built from the same base client`() {
         val hanging = MockWebServer()
         hanging.dispatcher = object : Dispatcher() {
-            override fun dispatch(request: RecordedRequest): MockResponse =
+            override fun dispatch(request: RecordedRequest) =
                 MockResponse.Builder().onResponseStart(SocketEffect.Stall).build()
         }
         hanging.start()
@@ -320,21 +363,6 @@ class ChunkedFileUploaderResumeTest {
     }
 
     @Test
-    fun `an uploaded file is removed from the server`() {
-        uploader.deleteUploadedFile("/Talk/video.mp4")
-
-        val delete = requests.single { it.method == "DELETE" }
-        assertTrue(delete.url.encodedPath.endsWith("/files/alice/Talk/video.mp4"))
-    }
-
-    @Test
-    fun `removing an uploaded file never throws`() {
-        server.close()
-
-        uploader.deleteUploadedFile("/Talk/video.mp4")
-    }
-
-    @Test
     fun `a rejected part is an error and keeps the parts on the server`() {
         putResponseCode = BAD_REQUEST
 
@@ -363,6 +391,21 @@ class ChunkedFileUploaderResumeTest {
             }
             assertEquals(emptyList<String>(), putPaths())
         }
+    }
+
+    @Test
+    fun `an uploaded file is removed from the server`() {
+        uploader.deleteUploadedFile("/Talk/video.mp4")
+
+        val delete = requests.single { it.method == "DELETE" }
+        assertTrue(delete.target.endsWith("/files/alice/Talk/video.mp4"))
+    }
+
+    @Test
+    fun `removing an uploaded file never throws`() {
+        server.close()
+
+        uploader.deleteUploadedFile("/Talk/video.mp4")
     }
 
     @Test
@@ -398,7 +441,7 @@ class ChunkedFileUploaderResumeTest {
         fresh.abortUpload(file) {}
 
         val delete = requests.single { it.method == "DELETE" }
-        assertTrue(delete.url.encodedPath.endsWith("/" + FileUtils.md5Sum(file)))
+        assertTrue(delete.target.endsWith("/" + FileUtils.md5Sum(file)))
     }
 
     @Test
@@ -441,8 +484,10 @@ class ChunkedFileUploaderResumeTest {
         assertNull(uploader.parseUploadedChunk(null, 1, length))
     }
 
+    private fun disconnect() = MockResponse.Builder().onResponseStart(SocketEffect.CloseSocket()).build()
+
     private fun putPaths(): List<String> =
-        requests.filter { it.method == "PUT" }.map { "/" + it.url.encodedPath.substringAfterLast('/') }
+        requests.filter { it.method == "PUT" }.map { "/" + it.target.substringAfterLast('/') }
 
     private fun propfindResponse(path: String): MockResponse {
         val folder = path.trimEnd('/')
@@ -466,7 +511,7 @@ class ChunkedFileUploaderResumeTest {
             </d:multistatus>"""
         return MockResponse(
             code = MULTI_STATUS,
-            headers = okhttp3.Headers.headersOf("Content-Type", "application/xml; charset=utf-8"),
+            headers = Headers.headersOf("Content-Type", "application/xml; charset=utf-8"),
             body = body
         )
     }
@@ -485,5 +530,6 @@ class ChunkedFileUploaderResumeTest {
         private const val NOT_FOUND = 404
         private const val BAD_REQUEST = 400
         private const val SERVER_ERROR = 500
+        private const val SERVICE_UNAVAILABLE = 503
     }
 }

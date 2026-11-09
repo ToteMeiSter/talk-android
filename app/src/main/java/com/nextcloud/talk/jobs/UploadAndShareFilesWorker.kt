@@ -386,13 +386,8 @@ class UploadAndShareFilesWorker(val context: Context, workerParameters: WorkerPa
      * the uploader through [onStopped].
      */
     private fun startChunkedUpload(uploader: ChunkedFileUploader, mimeType: MediaType?, path: String): Boolean {
-        // The folder has to be known before onStopped can reach the uploader, or an abort has nothing to remove.
-        uploader.prepare(file!!)
         chunkedFileUploader = uploader
         if (isStopped || isCancelled()) {
-            if (isCancelled()) {
-                uploader.abortUpload {}
-            }
             return false
         }
         return uploader.upload(file!!, mimeType, path)

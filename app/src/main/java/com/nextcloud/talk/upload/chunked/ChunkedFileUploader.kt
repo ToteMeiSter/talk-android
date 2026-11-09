@@ -79,8 +79,11 @@ class ChunkedFileUploader(
      * The upload folder on the server is keyed by the file, so a repeated call resumes a previous one.
      *
      * @return true when the file was assembled, false when the upload was stopped or aborted
-     * @throws Exception when a request fails; the parts already on the server are kept
+     * @throws IOException on I/O failures (e.g. connection loss or timeout), so the caller can retry; the parts
+     * already on the server are kept and skipped by the retry as long as [localFile] is unchanged
+     * @throws Exception when another request fails; the parts already on the server are kept
      */
+    @Throws(IOException::class)
     fun upload(localFile: File, mimeType: MediaType?, targetPath: String): Boolean {
         prepare(localFile)
         return uploadMissingParts(localFile, mimeType) && assembleOrRestart(localFile, mimeType, targetPath)
