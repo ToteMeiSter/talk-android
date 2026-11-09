@@ -44,12 +44,19 @@ object UploadRetryPolicy {
     private const val HTTP_REQUEST_TIMEOUT = 408
     private const val HTTP_TOO_MANY_REQUESTS = 429
     private const val HTTP_SERVER_ERROR = 500
+    private const val HTTP_NOT_IMPLEMENTED = 501
+    private const val HTTP_VERSION_NOT_SUPPORTED = 505
     private const val HTTP_INSUFFICIENT_STORAGE = 507
+
+    // A server that cannot do the request or has a full quota does not change within the few attempts.
+    private val PERMANENT_SERVER_ERRORS =
+        setOf(HTTP_NOT_IMPLEMENTED, HTTP_VERSION_NOT_SUPPORTED, HTTP_INSUFFICIENT_STORAGE)
 
     /**
      * NETWORK: no connection, retried without a limit.
-     * UNAVAILABLE: the server answered that it is overloaded or restarting (5xx except 507, 408, 429), retried
-     * until [MAX_UNAVAILABLE_MILLIS] pass and [MIN_UNAVAILABLE_ANSWERS] answers came without progress of the upload.
+     * UNAVAILABLE: the server answered that it is overloaded or restarting (5xx except 501, 505 and 507, 408,
+     * 429), retried until [MAX_UNAVAILABLE_MILLIS] pass and [MIN_UNAVAILABLE_ANSWERS] answers came without
+     * progress of the upload.
      * SERVER: an answer or a TLS problem that may not go away, retried up to [MAX_SERVER_ERRORS] times.
      * OTHER: a local problem, fails at once.
      */
@@ -59,8 +66,8 @@ object UploadRetryPolicy {
 
     /**
      * Looks through the whole chain of causes, because RxJava wraps a checked [IOException] in a RuntimeException.
-     * An HTTP error wins over everything else. Errors of an overloaded or restarting server (5xx except 507, 408,
-     * 429) are UNAVAILABLE: the upload waits and goes on, but not for ever. Other HTTP errors and
+     * An HTTP error wins over everything else. Errors of an overloaded or restarting server (5xx except 501, 505
+     * and 507, 408, 429) are UNAVAILABLE: the upload waits and goes on, but not for ever. Other HTTP errors and
      * certificate problems count against [MAX_SERVER_ERRORS]. Any other [SSLException] is a network error: on
      * Android a connection that drops in the middle of an HTTPS transfer arrives as an SSLException. A
      * [FileNotFoundException] anywhere in the chain is OTHER: the prepared file cannot be read.
@@ -110,7 +117,7 @@ object UploadRetryPolicy {
         }
 
     private fun isTransientHttpCode(code: Int): Boolean =
-        (code >= HTTP_SERVER_ERROR && code != HTTP_INSUFFICIENT_STORAGE) ||
+        (code >= HTTP_SERVER_ERROR && code !in PERMANENT_SERVER_ERRORS) ||
             code == HTTP_REQUEST_TIMEOUT ||
             code == HTTP_TOO_MANY_REQUESTS
 

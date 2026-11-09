@@ -47,7 +47,10 @@ class UploadRetryPolicyTest {
     fun `http errors that may stay are server errors`() {
         assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(DavHttpException(403, "no")))
         assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(DavHttpException(400, "bad")))
-        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(DavHttpException(507, "full")))
+        listOf(400, 401, 403, 404, 409, 412, 501, 505, 507).forEach {
+            assertEquals("code $it", FailureKind.SERVER, UploadRetryPolicy.classify(DavHttpException(it, "x")))
+            assertEquals("retrofit $it", FailureKind.SERVER, UploadRetryPolicy.classify(retrofit(it)))
+        }
         assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(retrofit(404)))
     }
 
@@ -56,9 +59,9 @@ class UploadRetryPolicyTest {
         listOf(500, 502, 503, 504, 408, 429).forEach {
             assertEquals("code $it", FailureKind.UNAVAILABLE, UploadRetryPolicy.classify(DavHttpException(it, "x")))
         }
-        assertEquals(FailureKind.UNAVAILABLE, UploadRetryPolicy.classify(retrofit(503)))
-        assertEquals(FailureKind.UNAVAILABLE, UploadRetryPolicy.classify(retrofit(500)))
-        assertEquals(FailureKind.SERVER, UploadRetryPolicy.classify(retrofit(507)))
+        listOf(500, 502, 503, 504, 408, 429).forEach {
+            assertEquals("retrofit $it", FailureKind.UNAVAILABLE, UploadRetryPolicy.classify(retrofit(it)))
+        }
     }
 
     @Test
