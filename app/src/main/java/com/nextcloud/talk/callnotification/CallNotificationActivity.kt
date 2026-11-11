@@ -15,6 +15,8 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.View
+import androidx.core.app.NotificationManagerCompat
+import androidx.lifecycle.Lifecycle
 import autodagger.AutoInjector
 import com.nextcloud.talk.R
 import com.nextcloud.talk.activities.CallActivity
@@ -208,7 +210,12 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     private fun hangup() {
+        cancelCallNotification()
         finish()
+    }
+
+    private fun cancelCallNotification() {
+        notificationTimestamp?.let { NotificationManagerCompat.from(context).cancel(it) }
     }
 
     private fun proceedToCall() {
@@ -220,9 +227,13 @@ class CallNotificationActivity : CallBaseActivity() {
 
     public override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
-        // only decline or closing the window ends the ringing, a sleeping screen may stop the window on its own
+        // closing the picture in picture window finishes the window on older Android versions
+        if (isFinishing && isInPipMode) {
+            cancelCallNotification()
+        }
         if (isFinishing) {
             notificationTimestamp?.let { PushDiag.cancel(context, "call-window-finishing", it) }
+        }
         }
         super.onDestroy()
     }
@@ -232,6 +243,9 @@ class CallNotificationActivity : CallBaseActivity() {
         isInPipMode = isInPictureInPictureMode
         if (isInPictureInPictureMode) {
             updateUiForPipMode()
+        } else if (lifecycle.currentState == Lifecycle.State.CREATED) {
+            // the picture in picture window was closed, which only stops the window
+            hangup()
         } else {
             updateUiForNormalMode()
         }
