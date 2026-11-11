@@ -14,13 +14,17 @@ import android.provider.OpenableColumns
 import android.util.Log
 import androidx.annotation.StringRes
 import androidx.annotation.VisibleForTesting
+import androidx.core.net.toUri
 import androidx.core.content.FileProvider
 import androidx.lifecycle.DefaultLifecycleObserver
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LiveData
 import androidx.lifecycle.MutableLiveData
 import androidx.lifecycle.ViewModel
+import androidx.lifecycle.asFlow
 import androidx.lifecycle.viewModelScope
+import androidx.work.WorkInfo
+import androidx.work.WorkManager
 import com.google.gson.Gson
 import com.nextcloud.talk.BuildConfig
 import com.nextcloud.talk.R
@@ -53,9 +57,6 @@ import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.jobs.ReadMarkerSyncWorker
 import com.nextcloud.talk.jobs.SendMessageWorker
 import com.nextcloud.talk.jobs.ShareOperationWorker
-import androidx.lifecycle.asFlow
-import androidx.work.WorkInfo
-import androidx.work.WorkManager
 import com.nextcloud.talk.jobs.UploadAndShareFilesWorker
 import com.nextcloud.talk.logger.Logger
 import com.nextcloud.talk.mediaviewer.model.MediaViewerGroup
@@ -89,12 +90,12 @@ import com.nextcloud.talk.utils.ParticipantPermissions
 import com.nextcloud.talk.utils.SpreedFeatures
 import com.nextcloud.talk.utils.UploadSourceGrants
 import com.nextcloud.talk.utils.UserIdUtils
-import com.nextcloud.talk.utils.throttleLatest
 import com.nextcloud.talk.utils.bundle.BundleKeys
 import com.nextcloud.talk.utils.isTransientFailure
 import com.nextcloud.talk.utils.message.SendMessageUtils
 import com.nextcloud.talk.utils.message.groupHashOf
 import com.nextcloud.talk.utils.preferences.AppPreferences
+import com.nextcloud.talk.utils.throttleLatest
 import com.nextcloud.talk.webrtc.WebSocketConnectionHelper
 import dagger.assisted.Assisted
 import dagger.assisted.AssistedFactory
@@ -152,7 +153,6 @@ import java.time.LocalDate
 import java.time.ZoneId
 import java.util.UUID
 import javax.inject.Inject
-import androidx.core.net.toUri
 
 private const val FILE_PLACEHOLDER_MESSAGE = "{file}"
 private const val VCARD_MIMETYPE = "text/vcard"
@@ -519,11 +519,30 @@ class ChatViewModel @AssistedInject constructor(
     override fun onStop(owner: LifecycleOwner) {
         super.onStop(owner)
         currentLifeCycleFlag = LifeCycleFlag.STOPPED
-        // a rotation stops the activity but not the recording: the new activity picks it up
-        if (!keepRecordingOnStop) {
-            mediaRecorderManager.handleOnStop()
-        }
+        // A stopped chat keeps a voice recording running: it ends when the chat is left (onCleared) or by
+        // interruptAudioRecording, not when a rotation or another Talk screen like the media viewer covers the chat.
         chatRepository.handleOnStop()
+    }
+
+    /**
+     * Ends a running recording although the chat was not left, e.g. because the app went to the background: a locked
+     * recording keeps what was captured so far and is shown as interrupted, a recording that was still held is
+     * discarded like on a cancelled touch.
+     */
+    fun interruptAudioRecording() {
+        if (mediaRecorderManager.mediaRecorderState != MediaRecorderManager.MediaRecorderState.RECORDING) {
+            return
+        }
+        if (_getVoiceRecordingLocked.value == true) {
+            stopAudioRecording()
+            _voiceRecordingInterrupted.value = true
+        } else {
+            stopAndDiscardAudioRecording()
+        }
+    }
+
+    fun onVoiceRecordingInterruptionShown() {
+        _voiceRecordingInterrupted.value = false
     }
 
     fun onSignalingChatMessageReceived(chatMessages: List<ChatMessageDto>) {
@@ -543,6 +562,12 @@ class ChatViewModel @AssistedInject constructor(
     private val _getVoiceRecordingInProgress: MutableLiveData<Boolean> = MutableLiveData()
     val getVoiceRecordingInProgress: LiveData<Boolean>
         get() = _getVoiceRecordingInProgress
+
+    private val _voiceRecordingInterrupted: MutableLiveData<Boolean> = MutableLiveData(false)
+
+    /** True while the stop of a locked recording by leaving the app was not shown to the user yet. */
+    val voiceRecordingInterrupted: LiveData<Boolean>
+        get() = _voiceRecordingInterrupted
 
     private val _getVoiceRecordingLocked: MutableLiveData<Boolean> = MutableLiveData()
     val getVoiceRecordingLocked: LiveData<Boolean>
@@ -2362,17 +2387,17 @@ class ChatViewModel @AssistedInject constructor(
         activeRecordingMode = RecordInputMode.VOICE
         audioFocusRequestManager.audioFocusRequest(true, waitForOtherAudio = true) {
             Log.d(TAG, "Recording Started")
-            mediaRecorderManager.start(context, currentConversation)
+            mediaRecorderManager.start(context, currentConversation, onSilenced = ::interruptAudioRecording)
             _getVoiceRecordingInProgress.postValue(true)
         }
     }
 
+    /** Stops the recorder whether or not the audio focus is given back, so the shown state never outlasts it. */
     fun stopAudioRecording() {
-        audioFocusRequestManager.audioFocusRequest(false) {
-            mediaRecorderManager.stop()
-            _getVoiceRecordingInProgress.postValue(false)
-            Log.d(TAG, "Recording stopped")
-        }
+        mediaRecorderManager.stop()
+        _getVoiceRecordingInProgress.postValue(false)
+        Log.d(TAG, "Recording stopped")
+        audioFocusRequestManager.audioFocusRequest(false) {}
     }
 
     fun stopAndSendAudioRecording(roomToken: String = "", replyToMessageId: Int? = null, displayName: String) {
@@ -2429,11 +2454,6 @@ class ChatViewModel @AssistedInject constructor(
         return granted
     }
 
-    /**
-     * Set by the activity before it stops for a configuration change: a running voice recording then goes on.
-     */
-    var keepRecordingOnStop = false
-
     private var videoRecorder: VideoMessageRecorder? = null
 
     /**
@@ -2448,6 +2468,10 @@ class ChatViewModel @AssistedInject constructor(
 
     override fun onCleared() {
         super.onCleared()
+        // the voice recording can not be shown again once the chat is gone
+        if (mediaRecorderManager.mediaRecorderState == MediaRecorderManager.MediaRecorderState.RECORDING) {
+            stopAndDiscardAudioRecording()
+        }
         videoRecorder?.let {
             // the released recorder reports nothing, so nobody else gives the audio focus back
             if (releasesVideoAudioFocusOnClear(activeRecordingMode, _getVoiceRecordingInProgress.value == true)) {

@@ -139,7 +139,6 @@ class MessageInputFragment : Fragment() {
     private var pendingRecordStart: Runnable? = null
     private var recordingStartedAt = 0L
     private var recordHintPopup: RecordHintPopup? = null
-    private var recordingUiShown = false
 
     private var lastQuotedJsonId: Int? = null
     private var lastEditMessageId: Int? = null
@@ -296,8 +295,9 @@ class MessageInputFragment : Fragment() {
             }
         }
 
+        // a held recording can also end without a touch, e.g. when the app goes to the background
         chatActivity.chatViewModel.getVoiceRecordingInProgress.observe(viewLifecycleOwner) { inProgress ->
-            if (inProgress != true && recordingUiShown) {
+            if (!inProgress && binding.fragmentMessageInputView.microphoneEnabledInfo.isVisible) {
                 showRecordAudioUi(false)
                 resetSlider()
             }
@@ -937,7 +937,6 @@ class MessageInputFragment : Fragment() {
     }
 
     private fun showRecordAudioUi(show: Boolean) {
-        recordingUiShown = show
         if (show) {
             restoreKeyboardOnEmojiDismiss = false
             binding.emojiPicker.isVisible = false

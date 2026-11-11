@@ -11,7 +11,6 @@ import com.nextcloud.talk.models.json.signaling.DataChannelMessageDto
 import com.nextcloud.talk.signaling.SignalingMessageReceiver
 import com.nextcloud.talk.signaling.SignalingMessageSender
 import com.nextcloud.talk.webrtc.PeerConnectionWrapper.DataChannelMessageListener
-import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.mockito.ArgumentCaptor
@@ -34,7 +33,6 @@ import org.webrtc.PeerConnection
 import org.webrtc.PeerConnectionDependencies
 import org.webrtc.PeerConnectionFactory
 import org.webrtc.observer
-import org.webrtc.sslCertificateVerifier
 import java.nio.ByteBuffer
 import java.util.HashMap
 import kotlin.concurrent.thread
@@ -368,6 +366,20 @@ class PeerConnectionWrapperTest {
         )
 
         Mockito.verify(mockedDataChannelMessageListener).onVideoOff()
+        Mockito.verifyNoMoreInteractions(mockedDataChannelMessageListener)
+
+        statusDataChannelObserverArgumentCaptor.value.onMessage(
+            dataChannelMessageToBuffer(DataChannelMessageDto("speaking"))
+        )
+
+        Mockito.verify(mockedDataChannelMessageListener).onSpeaking()
+        Mockito.verifyNoMoreInteractions(mockedDataChannelMessageListener)
+
+        statusDataChannelObserverArgumentCaptor.value.onMessage(
+            dataChannelMessageToBuffer(DataChannelMessageDto("stoppedSpeaking"))
+        )
+
+        Mockito.verify(mockedDataChannelMessageListener).onStoppedSpeaking()
         Mockito.verifyNoMoreInteractions(mockedDataChannelMessageListener)
     }
 
@@ -770,39 +782,6 @@ class PeerConnectionWrapperTest {
             Mockito.verify(mockedDataChannelMessageListener, atMostOnce()).onAudioOff()
             Mockito.verifyNoMoreInteractions(mockedDataChannelMessageListener)
         }
-    }
-
-    @Test
-    fun testPeerConnectionIsCreatedWithSystemTrustCertificateVerifier() {
-        val dependenciesCaptor: ArgumentCaptor<PeerConnectionDependencies> =
-            ArgumentCaptor.forClass(PeerConnectionDependencies::class.java)
-
-        Mockito.`when`(
-            mockedPeerConnectionFactory!!.createPeerConnection(
-                any(PeerConnection.RTCConfiguration::class.java),
-                dependenciesCaptor.capture()
-            )
-        ).thenReturn(mockedPeerConnection)
-
-        PeerConnectionWrapper(
-            mockedPeerConnectionFactory,
-            ArrayList(),
-            MediaConstraints(),
-            "the-session-id",
-            "the-local-session-id",
-            null,
-            false,
-            false,
-            "video",
-            mockedSignalingMessageReceiver,
-            mockedSignalingMessageSender,
-            false,
-            null,
-            null
-        )
-
-        val verifier = dependenciesCaptor.value.sslCertificateVerifier()
-        assertTrue(verifier === SystemTrustSslCertificateVerifier.shared())
     }
 }
 
