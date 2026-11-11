@@ -57,9 +57,8 @@ class CallNotificationActivity : CallBaseActivity() {
     private var isOneToOneCall: Boolean = true
     private var conversationName: String? = null
     private lateinit var userBeingCalled: User
-    private var leavingScreen = false
-    private var handler: Handler? = null
-    private val notificationCheckHandler = Handler(Looper.getMainLooper())
+    private var isCacheEvicted = false
+    private val handler = Handler(Looper.getMainLooper())
     private var binding: CallNotificationActivityBinding? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -156,14 +155,14 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     private fun setupNotificationCanceledRoutine() {
-        notificationCheckHandler.post(object : Runnable {
+        handler.post(object : Runnable {
             override fun run() {
                 val extras = NotificationUtils.getActiveNotificationExtras(context, notificationTimestamp!!)
                 if (extras == null) {
                     finish()
                 } else {
                     refreshCallData(extras)
-                    notificationCheckHandler.postDelayed(this, ONE_SECOND)
+                    handler.postDelayed(this, ONE_SECOND)
                 }
             }
         })
@@ -184,8 +183,8 @@ class CallNotificationActivity : CallBaseActivity() {
 
     override fun onStart() {
         super.onStart()
-        if (handler == null) {
-            handler = Handler()
+        if (!isCacheEvicted) {
+            isCacheEvicted = true
             try {
                 cache!!.evictAll()
             } catch (e: IOException) {
@@ -209,7 +208,6 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     private fun hangup() {
-        leavingScreen = true
         finish()
     }
 
@@ -221,15 +219,10 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     public override fun onDestroy() {
-        notificationCheckHandler.removeCallbacksAndMessages(null)
+        handler.removeCallbacksAndMessages(null)
         // only decline or closing the window ends the ringing, a sleeping screen may stop the window on its own
         if (isFinishing) {
             notificationTimestamp?.let { PushDiag.cancel(context, "call-window-finishing", it) }
-        }
-        leavingScreen = true
-        if (handler != null) {
-            handler!!.removeCallbacksAndMessages(null)
-            handler = null
         }
         super.onDestroy()
     }
