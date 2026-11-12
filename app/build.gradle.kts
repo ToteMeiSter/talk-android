@@ -13,7 +13,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.21"
     id("com.android.built-in-kotlin")
     id("com.android.legacy-kapt")
-    id("com.google.devtools.ksp") version "2.3.12"
+    id("com.google.devtools.ksp") version "2.3.13"
     id("com.android.application")
     id("kotlin-parcelize")
     id("com.github.spotbugs")
@@ -319,11 +319,9 @@ dependencies {
     implementation("io.noties.markwon:ext-tasklist:$markwonVersion")
     implementation("io.noties.markwon:ext-tables:$markwonVersion")
 
-    // Computer Vision - for background effects during video calls (gplay only; generic/F-Droid
-    // build excludes this because it transitively pulls in com.google.firebase:firebase-encoders*
-    // via datatransport, which F-Droid's APK scanner rejects)
-    "gplayImplementation"("com.google.mediapipe:tasks-vision:0.10.26")
-    implementation("io.github.crow-misia.libyuv:libyuv-android:0.43.2")
+    // Computer Vision - for background effects during video calls (gplay only for now)
+    "gplayImplementation"("com.google.ai.edge.litert:litert:1.4.2")
+    implementation("io.github.crow-misia.libyuv:libyuv-android:0.44.0")
 
     // Avatar picker
     implementation("com.github.nextcloud-deps:ImagePicker:2.1.0.2")
