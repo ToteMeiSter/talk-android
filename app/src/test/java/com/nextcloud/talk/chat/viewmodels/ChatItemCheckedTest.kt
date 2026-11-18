@@ -30,7 +30,6 @@ class ChatItemCheckedTest {
             threadReplies = 0,
             incoming = false,
             isDeleted = false,
-            avatarUrl = null,
             statusIcon = MessageStatusIcon.READ,
             timestamp = id.toLong(),
             date = LocalDate.of(2026, 10, 1),

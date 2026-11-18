@@ -87,6 +87,7 @@ import coil.compose.AsyncImage
 import com.nextcloud.talk.R
 import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.chat.ChatActivity
+import com.nextcloud.talk.chat.data.model.ChatMessage
 import com.nextcloud.talk.chat.ui.model.ChatMessageUi
 import com.nextcloud.talk.chat.ui.model.MessageReactionUi
 import com.nextcloud.talk.chat.ui.model.MessageStatusIcon
@@ -299,8 +300,12 @@ private fun RowScope.MessageLeadingDecoration(uiMessage: ChatMessageUi, isOneToO
             .size(48.dp)
             .align(Alignment.Top)
             .padding(end = 8.dp)
-            .combinedClickable(
-                onClick = { onAvatarClick(uiMessage.id) }
+            .then(
+                if (uiMessage.actorType == "users") {
+                    Modifier.combinedClickable(onClick = { onAvatarClick(uiMessage.id) })
+                } else {
+                    Modifier
+                }
             )
         val guestLabel = stringResource(R.string.nc_guest)
         // Guests, email participants and bots have no avatar on the server, so theirs is drawn here
@@ -318,8 +323,21 @@ private fun RowScope.MessageLeadingDecoration(uiMessage: ChatMessageUi, isOneToO
         } else {
             val errorPlaceholderImage: Int = R.drawable.account_circle_96dp
             val avatarContext = LocalContext.current
-            val loadedImage = remember(uiMessage.avatarUrl) {
-                loadImage(uiMessage.avatarUrl, avatarContext, errorPlaceholderImage)
+            val darkTheme = DisplayUtils.isDarkModeOn(avatarContext)
+            val avatarAuthHeader = uiMessage.authHeader.takeIf {
+                uiMessage.actorType == ChatMessage.ACTOR_TYPE_FEDERATED_USERS
+            }
+            val avatarUrl = remember(
+                uiMessage.actorType,
+                uiMessage.actorId,
+                uiMessage.activeUserBaseUrl,
+                uiMessage.roomToken,
+                darkTheme
+            ) {
+                uiMessage.avatarUrl(darkTheme)
+            }
+            val loadedImage = remember(avatarUrl, avatarAuthHeader) {
+                loadImage(avatarUrl, avatarContext, errorPlaceholderImage, avatarAuthHeader)
             }
             AsyncImage(
                 model = loadedImage,
@@ -1165,7 +1183,6 @@ private fun MessageScaffoldIncomingPreview() {
             threadReplies = 0,
             incoming = true,
             isDeleted = false,
-            avatarUrl = null,
             statusIcon = MessageStatusIcon.SENT,
             timestamp = System.currentTimeMillis() / 1000,
             date = LocalDate.now(),
@@ -1199,7 +1216,6 @@ private fun MessageScaffoldIncomingLongPreview() {
             threadReplies = 0,
             incoming = true,
             isDeleted = false,
-            avatarUrl = null,
             statusIcon = MessageStatusIcon.SENT,
             timestamp = System.currentTimeMillis() / 1000,
             date = LocalDate.now(),
@@ -1233,7 +1249,6 @@ private fun MessageScaffoldOutgoingPreview() {
             threadReplies = 0,
             incoming = false,
             isDeleted = false,
-            avatarUrl = null,
             statusIcon = MessageStatusIcon.READ,
             timestamp = System.currentTimeMillis() / 1000,
             date = LocalDate.now(),
@@ -1262,7 +1277,6 @@ private fun CommonMessageQuotePreview() {
             threadReplies = 0,
             incoming = true,
             isDeleted = false,
-            avatarUrl = null,
             statusIcon = MessageStatusIcon.SENT,
             timestamp = System.currentTimeMillis() / 1000,
             date = LocalDate.now(),

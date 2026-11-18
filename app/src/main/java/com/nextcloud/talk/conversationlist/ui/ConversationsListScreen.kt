@@ -68,11 +68,9 @@ import com.nextcloud.talk.utils.ApiUtils
 import com.nextcloud.talk.utils.CapabilitiesUtil
 import com.nextcloud.talk.utils.DisplayUtils
 import com.nextcloud.talk.utils.SpreedFeatures
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
-private const val SEARCH_DEBOUNCE_MS = 300
 private const val SEARCH_MIN_CHARS = 1
 private const val OVERLAY_MARGIN = 16
 
@@ -82,7 +80,7 @@ data class ConversationsListScreenState(
     val credentials: String,
     val showLogo: Boolean,
     val viewThemeUtils: ViewThemeUtils,
-    val isShowEcosystem: Boolean,
+    val showEcosystemFlow: StateFlow<Boolean>,
     val snackbarHostState: SnackbarHostState,
     val isMaintenanceModeFlow: StateFlow<Boolean>,
     val isOnlineFlow: StateFlow<Boolean>,
@@ -170,6 +168,7 @@ fun ConversationsListScreen(
     val isForward by state.forwardMessageFlow.collectAsStateWithLifecycle()
     val hasMultipleAccounts by state.hasMultipleAccountsFlow.collectAsStateWithLifecycle()
     val showAccountDialog by state.showAccountDialogFlow.collectAsStateWithLifecycle()
+    val showEcosystem by state.showEcosystemFlow.collectAsStateWithLifecycle()
     val selectedConversationForOps by state.selectedConversationForOpsFlow.collectAsStateWithLifecycle()
     val opsSheetState = rememberModalBottomSheetState()
 
@@ -202,7 +201,18 @@ fun ConversationsListScreen(
         !showShareTo &&
         !isForward
 
+    val isPickingConversation = showShareTo || isForward
+
     val mode: TopBarMode = when {
+        isSearchActive -> TopBarMode.SearchActive(
+            query = searchQuery,
+            hint = when {
+                showShareTo -> stringResource(R.string.send_to)
+                isForward -> stringResource(R.string.nc_forward_to)
+                else -> null
+            }
+        )
+
         showShareTo -> TopBarMode.TitleBar(
             title = stringResource(R.string.send_to_three_dots),
             showAccountChooser = hasMultipleAccounts
@@ -213,7 +223,6 @@ fun ConversationsListScreen(
             showAccountChooser = false
         )
 
-        isSearchActive -> TopBarMode.SearchActive(query = searchQuery)
         else -> TopBarMode.SearchBarIdle
     }
 
@@ -233,12 +242,9 @@ fun ConversationsListScreen(
         onDispose { callbacks.onLazyListStateAvailable(null) }
     }
 
-    LaunchedEffect(searchQuery) {
-        if (searchQuery.isNotEmpty()) {
-            delay(SEARCH_DEBOUNCE_MS.toLong())
-            if (searchQuery.length >= SEARCH_MIN_CHARS) {
-                viewModel.getSearchQuery(context, searchQuery)
-            }
+    LaunchedEffect(searchQuery, isPickingConversation) {
+        if (searchQuery.length >= SEARCH_MIN_CHARS) {
+            viewModel.getSearchQuery(context, searchQuery, conversationsOnly = isPickingConversation)
         }
     }
 
@@ -410,7 +416,7 @@ fun ConversationsListScreen(
                 LaunchedEffect(shouldDismiss.value) {
                     if (shouldDismiss.value) callbacks.onAccountDialogDismiss()
                 }
-                dialog.GetChooseAccountDialog(shouldDismiss, activity, state.isShowEcosystem)
+                dialog.GetChooseAccountDialog(shouldDismiss, activity, showEcosystem)
             }
 
             // Conversation-operations bottom sheet

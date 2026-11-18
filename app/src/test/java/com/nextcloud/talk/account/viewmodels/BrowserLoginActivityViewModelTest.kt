@@ -86,6 +86,29 @@ class BrowserLoginActivityViewModelTest {
     }
 
     @Test
+    fun `polling starts only once, however often the login page is reported as opened`() {
+        wheneverBlocking { repository.startLoginFlow(any(), any(), anyOrNull()) }.thenReturn(loginResponse)
+        wheneverBlocking { repository.pollLogin(any(), any(), any()) }.thenReturn(null)
+
+        viewModel.startWebBrowserLogin(BASE_URL)
+        viewModel.onLoginPageOpened()
+        viewModel.onLoginPageOpened()
+
+        verifyBlocking(repository, times(1)) { pollLogin(eq(loginResponse), any(), any()) }
+        assertTrue(viewModel.isLoginPageOpened)
+    }
+
+    @Test
+    fun `nothing is polled before the login page is opened`() {
+        wheneverBlocking { repository.startLoginFlow(any(), any(), anyOrNull()) }.thenReturn(loginResponse)
+
+        viewModel.startWebBrowserLogin(BASE_URL)
+
+        verifyBlocking(repository, never()) { pollLogin(any(), any(), any()) }
+        assertFalse(viewModel.isLoginPageOpened)
+    }
+
+    @Test
     fun `a QR code login is not started twice either`() {
         wheneverBlocking { repository.startOTPLoginFlow(any(), any(), anyOrNull()) }.thenReturn(null)
 
@@ -143,7 +166,7 @@ class BrowserLoginActivityViewModelTest {
         startAndLoseActivity()
         wheneverBlocking { repository.pollLogin(any(), any(), any()) }.thenReturn(null)
 
-        viewModel.handleWebBrowserLogin()
+        viewModel.onLoginPageOpened()
 
         assertNull(PendingBrowserLoginStore.active())
         assertEquals(BrowserLoginActivityViewModel.PostLoginViewState.PostLoginError, viewModel.postLoginState.value)
@@ -167,7 +190,7 @@ class BrowserLoginActivityViewModelTest {
         startAndLoseActivity()
         val answer = CompletableDeferred<LoginCompletion?>()
         wheneverBlocking { repository.pollLogin(any(), any(), any()) }.doSuspendableAnswer { answer.await() }
-        viewModel.handleWebBrowserLogin()
+        viewModel.onLoginPageOpened()
 
         viewModel.cancelLogin()
         answer.complete(LoginCompletion(HTTP_OK, BASE_URL, "user", "app-password"))
@@ -184,7 +207,7 @@ class BrowserLoginActivityViewModelTest {
         wheneverBlocking { repository.pollLogin(any(), any(), any()) }
             .thenThrow(IllegalArgumentException("bad poll url"))
 
-        viewModel.handleWebBrowserLogin()
+        viewModel.onLoginPageOpened()
 
         assertNull(PendingBrowserLoginStore.active())
         assertEquals(BrowserLoginActivityViewModel.PostLoginViewState.PostLoginError, viewModel.postLoginState.value)
@@ -196,7 +219,7 @@ class BrowserLoginActivityViewModelTest {
         wheneverBlocking { repository.pollLogin(any(), any(), any()) }
             .thenThrow(CancellationException("view model cleared"))
 
-        viewModel.handleWebBrowserLogin()
+        viewModel.onLoginPageOpened()
 
         assertNotNull(PendingBrowserLoginStore.active())
         assertEquals(BrowserLoginActivityViewModel.PostLoginViewState.None, viewModel.postLoginState.value)
@@ -393,7 +416,7 @@ class BrowserLoginActivityViewModelTest {
     fun `a screen showing its result does not end a newer login`() {
         startAndLoseActivity()
         wheneverBlocking { repository.pollLogin(any(), any(), any()) }.thenReturn(null)
-        viewModel.handleWebBrowserLogin()
+        viewModel.onLoginPageOpened()
         val newer = LoginResponse(token = "newer", pollUrl = "https://example.com/poll2", loginUrl = URL)
         PendingBrowserLoginStore.save(newer, BASE_URL, false, null)
 

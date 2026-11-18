@@ -190,8 +190,10 @@
     <string name="nc_call_timeout">45 sekundi jooksul pole vastust, uuesti proovimiseks klõpsi</string>
     <string name="nc_call_unknown">„%s“ kõne</string>
     <string name="nc_call_video">„%s“ videokõne</string>
+    <string name="nc_call_view_mode">Kõnevaate liik</string>
     <string name="nc_call_view_mode_grid">Ruudustikvaade</string>
     <string name="nc_call_view_mode_speaker">Esineja vaade</string>
+    <string name="nc_call_view_mode_speaker_with_participant_bar">Esineja vaade osalejate ribaga</string>
     <string name="nc_call_voice">„%s“ häälkõne</string>
     <string name="nc_camera_permission_hint">Et saaksid suhtlemisel kasutada videoedastust, palun luba rakendusel kasutada kaamerat.</string>
     <string name="nc_cancel">Loobu</string>
@@ -332,6 +334,7 @@
     <string name="nc_expire_messages">Lase vestluse sõnumeil aeguda</string>
     <string name="nc_expire_messages_explanation">Vestluse sõnumid saad määrata kustuma etteantud aja järel. Palun arvesta, et sel juhul vestluses jagatud failid jäävad omaniku jaoks nähtavaks, aga pole enam vestluse jaoks jagatud.</string>
     <string name="nc_external_server_failed">Kõnehõlbustuse seadistusi ei õnnestunud laadida</string>
+    <string name="nc_federated_user">Kasutaja liitpilves</string>
     <string name="nc_federation_invitation_accept">Nõustu</string>
     <string name="nc_federation_invitation_reject">Keeldu</string>
     <string name="nc_federation_invited_to_room">kasutajalt %1$s, %2$s</string>
@@ -388,6 +391,9 @@
     <string name="nc_lobby_start_date">Selle kohtumise algusaeg on %1$s</string>
     <string name="nc_lobby_start_soon">Kohtumine algab õige pea</string>
     <string name="nc_lobby_waiting">Sa asud hetkel ooteruumis</string>
+    <string name="nc_local_network_permission_denied">Ühendamiseks selle serveriga luba ligipääs kohtvõrgule.</string>
+    <string name="nc_local_network_permission_message">See server asub sinu kohtvõrgus. Ta on leitav siis, kui „Lähedalasuvad seadmed“ õigus on lubatud. Ilma selleta ühendamine ei toimi.</string>
+    <string name="nc_local_network_permission_title">Luba ligipääs kohtvõrgule</string>
     <string name="nc_location_current_position_description">Sinu praegune asukoht</string>
     <string name="nc_location_unknown">Asukoht pole teada</string>
     <string name="nc_locked">Lukus</string>
@@ -703,6 +709,7 @@
     <string name="nc_voice_message">Häälsõnum</string>
     <string name="nc_voice_message_hold_to_record_info">Salvestamiseks hoia nupp all ja saatmiseks vabasta nupp</string>
     <string name="nc_voice_message_missing_audio_permission">Vajalikud on õigused heli salvestamiseks</string>
+    <string name="nc_voice_message_recording_interrupted">Salvestamine lõppes</string>
     <string name="nc_voice_message_slide_to_cancel">« Katkestamiseks viipa</string>
     <string name="nc_webinar">Veebiseminar</string>
     <string name="nc_webinar_description">Piiratud vestlus, mis kasutab ooteruumi. Sobib hästi avalike veebiseminaride jaoks</string>
@@ -797,13 +804,13 @@
     <string name="scope_private_title">Privaatne</string>
     <string name="scope_published_description">Sünkrooni usaldusväärsetesse serveritesse ning üldisesse ja avalikku aadressiraamatusse</string>
     <string name="scope_published_title">Avaldatud</string>
-    <string name="scope_toggle_description">Muuda „%1$s“ vestlue privaatsuse taset</string>
+    <string name="scope_toggle_description">Muuda „%1$s“ vestluse privaatsuse taset</string>
     <string name="scroll_to_bottom">Keri alla äärde</string>
     <string name="search_icon">Otsinguikoon</string>
     <string name="secondsAgo">sekundit tagasi</string>
     <string name="selected_list_item">Valitud</string>
     <string name="send_email">Saada e-kiri</string>
-    <string name="send_to">Saada...</string>
+    <string name="send_to">Saada</string>
     <string name="send_to_forbidden">Sul pole õigust selle vestluse sisu jagada</string>
     <string name="send_to_three_dots">Saada...</string>
     <string name="send_without_notification">Saada ilma teavituseta</string>

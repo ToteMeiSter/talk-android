@@ -945,6 +945,7 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
                 notificationUser.id = userHashMap["id"]
                 notificationUser.type = userHashMap["type"]
                 notificationUser.name = userHashMap["name"]
+                notificationUser.server = userHashMap["server"]
                 pushMessage.notificationUser = notificationUser
             } else if (guestHashMap != null && guestHashMap.isNotEmpty()) {
                 notificationUser.id = guestHashMap["id"]
@@ -1227,8 +1228,8 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
             )
         }
         val personBuilder = Person.Builder()
-            .setKey(user.id.toString() + "@" + (notificationUser?.id ?: firstTitle))
-            .setName(SafeEmoji.process(notificationUser?.name ?: firstTitle))
+            .setKey(user.id.toString() + "@" + (notificationUser?.cloudId ?: notificationUser?.id ?: firstTitle))
+            .setName(SafeEmoji.process(notificationUser?.nameWithServer ?: firstTitle))
             .setBot("bot" == userType)
 
         if (senderAvatar != null) {
@@ -1301,8 +1302,19 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
 
     private fun loadSenderAvatar(notificationUser: NotificationUserDto?): Bitmap? {
         val userType = notificationUser?.type ?: return null
+        val cloudId = notificationUser.cloudId
+        val roomToken = pushMessage.id
 
-        return if ("user" == userType) {
+        return if (cloudId != null && roomToken != null) {
+            val avatarUrl = ApiUtils.getUrlForFederatedAvatar(
+                user.baseUrl!!,
+                roomToken,
+                cloudId,
+                if (DisplayUtils.isDarkModeOn(context!!)) 1 else 0,
+                false
+            )
+            NotificationUtils.loadAvatarBitmapSync(avatarUrl, context!!, credentials)
+        } else if ("user" == userType) {
             val avatarUrl = ApiUtils.getUrlForAvatar(
                 user.baseUrl!!,
                 notificationUser.id,
@@ -1357,15 +1369,15 @@ class NotificationWorker(context: Context, workerParams: WorkerParameters) : Wor
         val shortcutId = ShortcutManagerHelper.getShortcutId(roomToken, user.id!!)
 
         val personBuilder = Person.Builder()
-            .setKey(user.id.toString() + "@" + notificationUser.id)
-            .setName(SafeEmoji.process(notificationUser.name!!))
+            .setKey(user.id.toString() + "@" + (notificationUser.cloudId ?: notificationUser.id))
+            .setName(SafeEmoji.process(notificationUser.nameWithServer.orEmpty()))
 
         if (avatarBitmap != null) {
             personBuilder.setIcon(IconCompat.createWithBitmap(avatarBitmap))
         }
 
         val shortcut = ShortcutInfoCompat.Builder(context!!, shortcutId)
-            .setShortLabel(pushMessage.subject.ifEmpty { notificationUser.name ?: "Chat" })
+            .setShortLabel(pushMessage.subject.ifEmpty { notificationUser.nameWithServer ?: "Chat" })
             .setLongLived(true)
             .setIntent(intent)
             .setPerson(personBuilder.build())

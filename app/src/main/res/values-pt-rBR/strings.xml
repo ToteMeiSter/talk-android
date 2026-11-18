@@ -334,6 +334,7 @@
     <string name="nc_expire_messages">Deixar as mensagens de bate-papo expirarem</string>
     <string name="nc_expire_messages_explanation">As mensagens de bate-papo podem expirar após um certo tempo. Observação: os arquivos compartilhados no bate-papo não serão excluídos para o proprietário, mas não serão mais compartilhados na conversa.</string>
     <string name="nc_external_server_failed">Falha ao buscar configurações de sinalização</string>
+    <string name="nc_federated_user">Usuário federado</string>
     <string name="nc_federation_invitation_accept">Aceitar</string>
     <string name="nc_federation_invitation_reject">Rejeitar</string>
     <string name="nc_federation_invited_to_room">de %1$s em %2$s</string>
@@ -390,6 +391,9 @@
     <string name="nc_lobby_start_date">Esta reunião está agendada para %1$s</string>
     <string name="nc_lobby_start_soon">A reunião vai começar em breve</string>
     <string name="nc_lobby_waiting">No momento, você está esperando na sala de espera.</string>
+    <string name="nc_local_network_permission_denied">Permita o acesso à rede local para se conectar a este servidor.</string>
+    <string name="nc_local_network_permission_message">Este servidor está na sua rede local. Só é possível acessá-lo com a permissão “Dispositivos próximos”. Sem ela, a conexão com o servidor falha.</string>
+    <string name="nc_local_network_permission_title">Permitir acesso à rede local</string>
     <string name="nc_location_current_position_description">Sua localização atual</string>
     <string name="nc_location_unknown">Posição desconhecida</string>
     <string name="nc_locked">Trancado</string>

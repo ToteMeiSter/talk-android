@@ -190,6 +190,7 @@
     <string name="nc_call_timeout">No response in 45 seconds, tap to try again</string>
     <string name="nc_call_unknown">%s call</string>
     <string name="nc_call_video">%s video call</string>
+    <string name="nc_call_view_mode_grid">Grid view</string>
     <string name="nc_call_view_mode_speaker">Speaker view</string>
     <string name="nc_call_voice">%s voice call</string>
     <string name="nc_camera_permission_hint">To enable video communication please grant \"Camera\" permission.</string>
@@ -331,6 +332,7 @@
     <string name="nc_expire_messages">Expire chat messages</string>
     <string name="nc_expire_messages_explanation">Chat messages can be expired after a certain time. Note: Files shared in chat will not be deleted for the owner, but will no longer be shared in the conversation.</string>
     <string name="nc_external_server_failed">Failed to fetch signaling settings</string>
+    <string name="nc_federated_user">Federated user</string>
     <string name="nc_federation_invitation_accept">Accept</string>
     <string name="nc_federation_invitation_reject">Reject</string>
     <string name="nc_federation_invited_to_room">from %1$s at %2$s</string>

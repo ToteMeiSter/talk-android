@@ -334,6 +334,7 @@
     <string name="nc_expire_messages">Vypršanie platnosti správ v chate</string>
     <string name="nc_expire_messages_explanation">Platnosť četových správ môže po určitom čase vypršať. Poznámka: Súbory zdieľané v čete sa vlastníkovi neodstránia, ale už sa nebudú zdieľať v konverzácii.</string>
     <string name="nc_external_server_failed">Nepodarilo sa načítať nastavenia signalizácie</string>
+    <string name="nc_federated_user">Federovaný používateľ</string>
     <string name="nc_federation_invitation_accept">Prijať</string>
     <string name="nc_federation_invitation_reject">Odmietnuť</string>
     <string name="nc_federation_invited_to_room">od %1$s o %2$s</string>
@@ -390,6 +391,9 @@
     <string name="nc_lobby_start_date">Tento rozhovor je naplánovaný na %1$s</string>
     <string name="nc_lobby_start_soon">Stretnutie sa začne čoskoro</string>
     <string name="nc_lobby_waiting">Momentálne čakáte v miestnosti.</string>
+    <string name="nc_local_network_permission_denied">Povoľte prístup k miestnej sieti, aby ste sa mohli pripojiť k tomuto serveru.</string>
+    <string name="nc_local_network_permission_message">Tento server sa nachádza vo vašej miestnej sieti. Je dostupný iba s povolením „Zariadenia v okolí“. Bez neho sa pripojenie k serveru nepodarí.</string>
+    <string name="nc_local_network_permission_title">Povoliť prístup k miestnej sieti</string>
     <string name="nc_location_current_position_description">Vaša súčasná poloha</string>
     <string name="nc_location_unknown">Neznáma poloha</string>
     <string name="nc_locked">Uzamknuté</string>

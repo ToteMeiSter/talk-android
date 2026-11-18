@@ -7,6 +7,7 @@
 package com.nextcloud.talk.chat.viewmodels
 
 import android.os.Looper
+import androidx.lifecycle.viewModelScope
 import androidx.work.WorkManager
 import androidx.work.testing.WorkManagerTestInitHelper
 import com.nextcloud.talk.application.NextcloudTalkApplication
@@ -17,7 +18,10 @@ import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.models.domain.ConversationModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.emptyFlow
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -69,6 +73,7 @@ class ChatViewModelReadMarkerTest {
 
     @After
     fun tearDown() {
+        if (::viewModel.isInitialized) viewModel.viewModelScope.cancel()
         sharedApplicationField.set(null, previousApplication)
     }
 
@@ -177,7 +182,11 @@ class ChatViewModelReadMarkerTest {
             storedMarker(invocation.arguments[0] as Int)
             return Unit
         }
-        return Mockito.RETURNS_DEFAULTS.answer(invocation)
+        return if (invocation.method.returnType == Flow::class.java) {
+            emptyFlow<Any>()
+        } else {
+            Mockito.RETURNS_DEFAULTS.answer(invocation)
+        }
     }
 
     private fun newViewModel(): ChatViewModel =

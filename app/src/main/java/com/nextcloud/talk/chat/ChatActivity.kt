@@ -457,6 +457,9 @@ class ChatActivity :
     var openedViaNotification: Boolean = false
     var conversationThreadInfo: ThreadInfoDto? = null
 
+    // Reply count of the open thread from its cached messages, which follows the chat while it is open
+    private var cachedThreadReplies: Int? = null
+
     // Before the first room session exists, onCreate (handleIntent) already needs the user, which is the one the
     // session is created with.
     val conversationUser: User
@@ -2240,6 +2243,13 @@ class ChatActivity :
                 }
             }
         }
+
+        this.lifecycleScope.launch {
+            chatViewModel.cachedThreadReplies.collect { replies ->
+                cachedThreadReplies = replies
+                updateToolbarState()
+            }
+        }
     }
 
     private fun removeUnreadMessagesMarker() {
@@ -2580,7 +2590,9 @@ class ChatActivity :
     private fun buildToolbarSubtitle(conversation: ConversationModel?): String =
         when {
             isChatThread() -> {
-                val count = conversationThreadInfo?.thread?.numReplies ?: 0
+                // The thread endpoint is only asked once when the thread is opened, while the cached messages
+                // follow the chat. A thread's reply count only grows, so the higher of both is the current one.
+                val count = maxOf(conversationThreadInfo?.thread?.numReplies ?: 0, cachedThreadReplies ?: 0)
                 resources.getQuantityString(R.plurals.thread_replies, count, count)
             }
             conversation?.type == ConversationEnums.ConversationType.ROOM_TYPE_ONE_TO_ONE_CALL -> {

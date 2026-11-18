@@ -18,7 +18,6 @@ import com.nextcloud.talk.account.data.model.LoginResponse
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import javax.inject.Inject
 
@@ -49,13 +48,6 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
 
     private val _postLoginState = MutableStateFlow<PostLoginViewState>(PostLoginViewState.None)
     val postLoginState: StateFlow<PostLoginViewState> = _postLoginState
-
-    private val _waitingForBrowserState = MutableStateFlow(false)
-    val waitingForBrowserState = _waitingForBrowserState.asStateFlow()
-
-    fun setWaitingForBrowser(value: Boolean) {
-        _waitingForBrowserState.value = value
-    }
 
     private var savedResponse: LoginResponse? = null
 
@@ -95,6 +87,13 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
     }
 
     /**
+     * Whether the login page was opened. The activity reads the login URL again each time it is started, and must
+     * not open the page again then.
+     */
+    var isLoginPageOpened = false
+        private set
+
+    /**
      * Continues the browser login that a destroyed [com.nextcloud.talk.account.BrowserLoginActivity] left unfinished:
      * no new login request and no new browser, only the polling of the saved response.
      *
@@ -107,12 +106,18 @@ class BrowserLoginActivityViewModel @Inject constructor(val repository: LoginRep
             startLoginOnce()
             savedResponse = pending.response
             repository.resumeLoginFlow(pending.reAuth, pending.accountToReauthorize)
-            handleWebBrowserLogin()
+            onLoginPageOpened()
         }
         return true
     }
 
-    fun handleWebBrowserLogin() {
+    /**
+     * Polls for the credentials once the login page was opened. Polling starts only once, because the server hands
+     * the credentials out only once, so a second poller would report an error for a successful login.
+     */
+    fun onLoginPageOpened() {
+        if (isLoginPageOpened) return
+        isLoginPageOpened = true
         savedResponse?.let { response ->
             viewModelScope.launch {
                 // A login confirmed for an earlier view model is not polled again: the server hands it out once.

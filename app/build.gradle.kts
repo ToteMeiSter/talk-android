@@ -57,13 +57,13 @@ android {
             providers.gradleProperty("NC_TEST_SERVER_PASSWORD").getOrElse("")
 
         minSdk = 26
-        targetSdk = 36
+        targetSdk = 37
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         // mayor.minor.hotfix.increment (for increment: 01-50=Alpha / 51-89=RC / 90-99=stable)
         // xx   .xxx  .xx    .xx
-        versionCode = 260000007
-        versionName = "26.0.0 Alpha 07"
+        versionCode = 260000008
+        versionName = "26.0.0 Alpha 08"
 
         vectorDrawables.useSupportLibrary = true
 
@@ -239,7 +239,7 @@ dependencies {
     implementation("com.github.bitfireAT:dav4jvm:2.1.3") {
         exclude(group = "org.ogce", module = "xpp3") // Android comes with its own XmlPullParser
     }
-    implementation("org.conscrypt:conscrypt-android:2.7.0")
+    implementation("org.conscrypt:conscrypt-android:2.9.0")
     implementation("com.github.nextcloud-deps:qrcodescanner:0.1.2.4") // "com.github.blikoon:QRCodeScanner:0.1.2"
 
     implementation("androidx.exifinterface:exifinterface:1.4.2")
@@ -258,6 +258,7 @@ dependencies {
     implementation("androidx.camera:camera-view:$cameraXVersion")
 
     implementation("androidx.biometric:biometric:1.1.0")
+    implementation("androidx.browser:browser:1.10.0")
 
     implementation("io.reactivex.rxjava2:rxandroid:2.1.1")
     implementation("io.reactivex.rxjava2:rxjava:2.2.21")
@@ -267,7 +268,7 @@ dependencies {
     implementation("com.squareup.okhttp3:logging-interceptor:$okhttpVersion")
 
     implementation("com.bluelinelabs:logansquare:1.3.7")
-    implementation("com.fasterxml.jackson.core:jackson-core:2.22.4")
+    implementation("com.fasterxml.jackson.core:jackson-core:2.23.0")
     kapt("com.bluelinelabs:logansquare-compiler:1.3.7")
 
     implementation("com.squareup.retrofit2:retrofit:$retrofit2Version")
@@ -344,8 +345,8 @@ dependencies {
     implementation("androidx.sharetarget:sharetarget:1.2.0")
     implementation("androidx.window:window:1.5.1")
     implementation("androidx.activity:activity-ktx:1.13.0")
-    implementation("com.github.nextcloud.android-common:ui:0.34.0")
-    implementation("com.github.nextcloud.android-common:core:0.34.0")
+    implementation("com.github.nextcloud.android-common:ui:580a84868ae2af10b2ace13dadc083f166047493")
+    implementation("com.github.nextcloud.android-common:core:580a84868ae2af10b2ace13dadc083f166047493")
     implementation("com.github.nextcloud-deps:android-talk-webrtc:155.8059.1")
     implementation("com.github.nextcloud-releases:talk-clients-vodozemac:0.0.2")
 

@@ -335,6 +335,7 @@
     <string name="nc_expire_messages">Срок действия сообщений</string>
     <string name="nc_expire_messages_explanation">Сообщения чата могут удаляться через заданное время. Примечание: файлы, отправленные в чат, у владельца не удаляются, но перестают быть доступны в обсуждении.</string>
     <string name="nc_external_server_failed">Не удалось получить настройки сигнального сервера</string>
+    <string name="nc_federated_user">Федеративный пользователь</string>
     <string name="nc_federation_invitation_accept">Принять</string>
     <string name="nc_federation_invitation_reject">Отклонить</string>
     <string name="nc_federation_invited_to_room">от %1$s на сервере %2$s</string>
@@ -397,6 +398,9 @@
     <string name="nc_lobby_start_date">Эта встреча запланирована на %1$s</string>
     <string name="nc_lobby_start_soon">Встреча скоро начнётся</string>
     <string name="nc_lobby_waiting">Вы сейчас ждёте в лобби.</string>
+    <string name="nc_local_network_permission_denied">Разрешите доступ к локальной сети, чтобы подключиться к этому серверу.</string>
+    <string name="nc_local_network_permission_message">Этот сервер находится в вашей локальной сети. Подключиться к нему можно только с разрешением «Устройства поблизости», без него подключение не удастся.</string>
+    <string name="nc_local_network_permission_title">Разрешить доступ к локальной сети</string>
     <string name="nc_location_current_position_description">Ваше текущее местоположение</string>
     <string name="nc_location_unknown">Местоположение неизвестно</string>
     <string name="nc_locked">Заблокировано</string>
