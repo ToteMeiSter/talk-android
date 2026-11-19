@@ -15,6 +15,7 @@ import android.os.Handler
 import android.os.Looper
 import android.util.Log
 import android.view.View
+import androidx.annotation.VisibleForTesting
 import androidx.core.app.NotificationManagerCompat
 import androidx.lifecycle.Lifecycle
 import autodagger.AutoInjector
@@ -100,7 +101,7 @@ class CallNotificationActivity : CallBaseActivity() {
     private fun handleExtras() {
         val extras = intent.extras!!
         roomToken = extras.getString(KEY_ROOM_TOKEN, "")
-        notificationTimestamp = extras.getInt(BundleKeys.KEY_NOTIFICATION_TIMESTAMP)
+        notificationTimestamp = notificationIdOrNull(extras.getInt(BundleKeys.KEY_NOTIFICATION_TIMESTAMP))
         displayName = extras.getString(BundleKeys.KEY_CONVERSATION_DISPLAY_NAME, "")
         callFlag = extras.getInt(BundleKeys.KEY_CALL_FLAG)
         isOneToOneCall = extras.getBoolean(KEY_ROOM_ONE_TO_ONE)
@@ -165,9 +166,15 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     private fun setupNotificationCanceledRoutine() {
+        val notificationId = notificationTimestamp
+        if (notificationId == null) {
+            // no notification backs this window, so there is no call to show
+            finish()
+            return
+        }
         handler.post(object : Runnable {
             override fun run() {
-                val extras = NotificationUtils.getActiveNotificationExtras(context, notificationTimestamp!!)
+                val extras = NotificationUtils.getActiveNotificationExtras(context, notificationId)
                 if (extras == null) {
                     finish()
                 } else {
@@ -218,12 +225,8 @@ class CallNotificationActivity : CallBaseActivity() {
     }
 
     private fun hangup() {
-        cancelCallNotification()
+        dismissCallNotification()
         finish()
-    }
-
-    private fun cancelCallNotification() {
-        notificationTimestamp?.let { NotificationManagerCompat.from(context).cancel(it) }
     }
 
     private fun proceedToCall() {
@@ -231,17 +234,22 @@ class CallNotificationActivity : CallBaseActivity() {
         intent.putExtra(KEY_ROOM_ONE_TO_ONE, isOneToOneCall)
         callIntent.putExtras(intent.extras!!)
         startActivity(callIntent)
+        // stops the ringing, the notification check then closes this window
+        dismissCallNotification()
+    }
+
+    private fun dismissCallNotification() {
+        notificationTimestamp?.let { NotificationManagerCompat.from(context).cancel(it) }
     }
 
     public override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
         // closing the picture in picture window finishes the window on older Android versions
         if (isFinishing && isInPipMode) {
-            cancelCallNotification()
+            dismissCallNotification()
         }
         if (isFinishing) {
             notificationTimestamp?.let { PushDiag.cancel(context, "call-window-finishing", it) }
-        }
         }
         super.onDestroy()
     }
@@ -276,5 +284,13 @@ class CallNotificationActivity : CallBaseActivity() {
     companion object {
         private val TAG = CallNotificationActivity::class.simpleName
         const val ONE_SECOND: Long = 1000
+
+        /**
+         * The call notification id is the push message timestamp (always a positive value). A missing
+         * KEY_NOTIFICATION_TIMESTAMP extra decodes to 0 via Bundle.getInt(), which is not a real notification,
+         * so treat it as "no notification backs this window" instead of cancelling an unrelated id 0.
+         */
+        @VisibleForTesting
+        fun notificationIdOrNull(rawTimestamp: Int): Int? = rawTimestamp.takeIf { it != 0 }
     }
 }
