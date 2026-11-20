@@ -52,6 +52,7 @@ How to translate with transifex:
     <string name="nc_deep_link_join">Join</string>
     <string name="nc_contact_chat_start_title">Start conversation?</string>
     <string name="nc_contact_chat_start_message">You have no conversation with %1$s yet. Starting one adds it to the conversation list of both of you.</string>
+    <!-- Verb: confirm button of the "Start conversation?" dialog. It starts the conversation with the contact. -->
     <string name="nc_contact_chat_start">Start</string>
 
     <!-- Bottom Navigation -->
@@ -129,6 +130,7 @@ How to translate with transifex:
     <string name="nc_settings_other_notifications_ringtone">Messages</string>
     <string name="nc_settings_default_ringtone" translatable="false">Librem by feandesign</string>
     <string name="nc_settings_no_ringtone">No sound</string>
+    <string name="nc_settings_other_sound">Other sound…</string>
     <string name="nc_settings_server_notification_app_not_installed_title">Server notifications app not installed</string>
     <string name="nc_settings_contact_admin_of">Please contact the administrator of</string>
     <string name="battery_optimization_title">Battery settings</string>
@@ -671,6 +673,7 @@ How to translate with transifex:
     <string name="nc_room_retention">Room is retained successfully</string>
 
     <string name="share">Share</string>
+    <!-- Used as search hint when picking the conversation (one-to-one or group) to send shared content to, and as title of the Android share dialog when sharing from Talk to another app. -->
     <string name="send_to">Send to</string>
     <string name="send_to_three_dots">Send to …</string>
     <string name="read_storage_no_permission">Sharing files from storage is not possible without permissions</string>
@@ -993,6 +996,7 @@ How to translate with transifex:
     <string name="nc_classified_conversation_description">Locked down conversation for confidential topics, with public access, guests, SIP and recordings disabled</string>
     <string name="nc_conversation_type_defaults">Default settings of this conversation type:</string>
     <string name="nc_conversation_type_defaults_hint">These settings can be changed once the conversation is created</string>
+    <!-- %1$s is a duration from nc_expire_message_*: "4 weeks", "1 week", "1 day", "8 hours" or "1 hour". These strings are also shown on their own in the message expiration setting. -->
     <string name="nc_conversation_type_message_expiration">Messages expire after %1$s</string>
     <string name="nc_conversation_type_message_expiration_custom">Message expiration is enabled</string>
     <string name="nc_conversation_type_lobby">Lobby enabled, restricting the conversation to moderators</string>
@@ -1104,6 +1108,10 @@ How to translate with transifex:
     <string name="archive_hint">Once a conversation is archived, it will be hidden by default. Select the filter \"Archived\" to view archived conversations. Direct mentions will still be received.</string>
     <string name="unarchive_hint">Once a conversation is unarchived, it will be shown by default again.</string>
     <string name="nc_conversation_tags_filter_all">All</string>
+    <plurals name="nc_conversation_tags_unread_conversations">
+        <item quantity="one">%d conversation with unread messages</item>
+        <item quantity="other">%d conversations with unread messages</item>
+    </plurals>
     <string name="nc_conversation_tags">Tags</string>
     <string name="nc_conversation_tags_manage">Manage tags</string>
     <string name="nc_conversation_tags_new">New tag</string>
