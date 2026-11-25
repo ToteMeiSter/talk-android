@@ -13,7 +13,7 @@ plugins {
     id("org.jetbrains.kotlin.plugin.compose") version "2.4.21"
     id("com.android.built-in-kotlin")
     id("com.android.legacy-kapt")
-    id("com.google.devtools.ksp") version "2.3.13"
+    id("com.google.devtools.ksp") version "2.3.14"
     id("com.android.application")
     id("kotlin-parcelize")
     id("com.github.spotbugs")
@@ -62,8 +62,8 @@ android {
 
         // mayor.minor.hotfix.increment (for increment: 01-50=Alpha / 51-89=RC / 90-99=stable)
         // xx   .xxx  .xx    .xx
-        versionCode = 260000008
-        versionName = "26.0.0 Alpha 08"
+        versionCode = 260000009
+        versionName = "26.0.0 Alpha 09"
 
         vectorDrawables.useSupportLibrary = true
 
@@ -402,7 +402,7 @@ dependencies {
     testImplementation("com.squareup.okhttp3:mockwebserver3:$okhttpVersion")
     testImplementation("com.squareup.okhttp3:okhttp-tls:$okhttpVersion")
     testImplementation("com.google.dagger:hilt-android-testing:2.60.1")
-    testImplementation("org.robolectric:robolectric:4.17")
+    testImplementation("org.robolectric:robolectric:4.18")
     // conscrypt-android provides Android JNI libs only; the openjdk-uber variant bundles
     // JVM host natives so Robolectric can initialise the security provider without crashing.
     testImplementation("org.conscrypt:conscrypt-openjdk-uber:2.7.0")

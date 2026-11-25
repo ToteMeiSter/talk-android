@@ -349,6 +349,7 @@
     <string name="nc_filter">Фильтровать обсуждения</string>
     <string name="nc_following_link">Пользователь, вошедший по публичной ссылке</string>
     <string name="nc_formatted_message_you">Вы: %1$s</string>
+    <string name="nc_formatted_message_you_prefix">Вы:</string>
     <string name="nc_forward_message">Переслать</string>
     <string name="nc_chat_selected_count">Выбрано: %1$d</string>
     <string name="nc_chat_forward_nothing">Выбранные сообщения нельзя переслать: среди них нет текстовых сообщений и файлов</string>
