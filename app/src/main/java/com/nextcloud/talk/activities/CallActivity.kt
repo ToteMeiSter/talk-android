@@ -2096,16 +2096,7 @@ class CallActivity : CallBaseActivity() {
         // another chat is open: joining the call room with that session makes the signaling server close the
         // signaling session. Only the session of this room and this account is reused.
         val holder = ApplicationWideCurrentRoomHolder.getInstance()
-        callSession = if (canReuseHolderSession(isIncomingCallFromNotification)) {
-            holder.getSessionForRoom(roomToken, conversationUser.id)
-        } else {
-            // When a call is answered from a notification while the chat of the very room is open, ChatActivity
-            // leaves the room at the same moment (an HPB "leave room" plus the backend DELETE of the session),
-            // so the cached session is stale or is being torn down while the call would join with it. A fresh
-            // session from the joinRoom API is valid after that teardown.
-            Log.d(TAG, "Call answered from a notification, not reusing the session of the holder")
-            ""
-        }
+        callSession = holder.getSessionForRoom(roomToken, conversationUser.id)
         if (TextUtils.isEmpty(callSession) && !TextUtils.isEmpty(holder.session)) {
             Log.d(
                 TAG,
@@ -4562,19 +4553,6 @@ class CallActivity : CallBaseActivity() {
             val retryable = setOf(HTTP_NOT_FOUND, HTTP_REQUEST_TIMEOUT, HTTP_TOO_MANY_REQUESTS)
             return code !in HTTP_CLIENT_ERROR_MIN..HTTP_CLIENT_ERROR_MAX || code in retryable
         }
-
-        /**
-         * Whether the session cached in [ApplicationWideCurrentRoomHolder] may be reused to join the call.
-         *
-         * A call answered from a notification must fetch a fresh session via the joinRoom API instead, even when
-         * the cached session belongs to the very room being called: with that chat open, ChatActivity leaves the
-         * room at the same moment as the call starts (an HPB "leave room" and the backend DELETE of the session
-         * fire from its onPause, while the call has not claimed the holder yet), so the cached session is stale
-         * or is being torn down. A join with such a session is rejected by the signaling server and nothing
-         * retries it, which leaves the call connected with no media in either direction.
-         */
-        internal fun canReuseHolderSession(isIncomingCallFromNotification: Boolean): Boolean =
-            !isIncomingCallFromNotification
 
         private const val DELAY_ON_ERROR_STOP_THRESHOLD: Int = 16
 
