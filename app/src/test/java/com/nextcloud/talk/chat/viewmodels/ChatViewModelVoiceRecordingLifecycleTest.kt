@@ -12,6 +12,9 @@ import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
+import androidx.work.testing.WorkManagerTestInitHelper
+import com.nextcloud.talk.application.NextcloudTalkApplication
+import com.nextcloud.talk.chat.data.ChatMessageRepository
 import com.nextcloud.talk.chat.data.io.AudioFocusRequestManager
 import com.nextcloud.talk.chat.data.io.MediaRecorderManager
 import com.nextcloud.talk.chat.data.io.MediaRecorderManager.MediaRecorderState
@@ -19,6 +22,8 @@ import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.models.domain.ConversationModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.emptyFlow
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Before
@@ -34,6 +39,7 @@ import org.mockito.kotlin.never
 import org.mockito.kotlin.verify
 import org.mockito.kotlin.whenever
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
 
@@ -48,16 +54,36 @@ class ChatViewModelVoiceRecordingLifecycleTest {
 
     private val mediaRecorderManager: MediaRecorderManager = mock()
     private val audioFocusRequestManager: AudioFocusRequestManager = mock()
+    private val chatRepository: ChatMessageRepository = mock(defaultAnswer = RETURNS_DEEP_STUBS)
     private val viewModelStore = ViewModelStore()
     private lateinit var viewModel: ChatViewModel
 
+    // the setter of the singleton is protected: only the real application sets it
+    private val sharedApplicationField = NextcloudTalkApplication::class.java
+        .getDeclaredField("sharedApplication")
+        .apply { isAccessible = true }
+    private var previousApplication: NextcloudTalkApplication? = null
+
     @Before
     fun setUp() {
+        // ChatViewModel's init reconnects to running uploads through WorkManager and the application singleton.
+        whenever(chatRepository.getUploadPlaceholders(any())).thenReturn(emptyFlow())
+        val context = RuntimeEnvironment.getApplication()
+        WorkManagerTestInitHelper.initializeTestWorkManager(context)
+        previousApplication = sharedApplicationField.get(null) as NextcloudTalkApplication?
+        val application = mock<NextcloudTalkApplication>()
+        whenever(application.applicationContext).thenReturn(context)
+        sharedApplicationField.set(null, application)
         whenever(mediaRecorderManager.mediaRecorderState).thenReturn(MediaRecorderState.RECORDING)
         whenever(mediaRecorderManager.currentVoiceRecordFile).thenReturn("recording.mp3")
         doAnswer { (it.arguments[2] as () -> Unit).invoke() }
             .whenever(audioFocusRequestManager).audioFocusRequest(any(), any(), any())
         viewModel = newViewModel()
+    }
+
+    @After
+    fun tearDown() {
+        sharedApplicationField.set(null, previousApplication)
     }
 
     @Test
@@ -169,7 +195,7 @@ class ChatViewModelVoiceRecordingLifecycleTest {
             logger = mock(),
             appPreferences = mock(defaultAnswer = RETURNS_DEEP_STUBS),
             chatNetworkDataSource = mock(defaultAnswer = RETURNS_DEEP_STUBS),
-            chatRepository = mock(defaultAnswer = RETURNS_DEEP_STUBS),
+            chatRepository = chatRepository,
             threadsRepository = mock(defaultAnswer = RETURNS_DEEP_STUBS),
             conversationRepository = mock(defaultAnswer = RETURNS_DEEP_STUBS),
             reactionsRepository = mock(defaultAnswer = RETURNS_DEEP_STUBS),

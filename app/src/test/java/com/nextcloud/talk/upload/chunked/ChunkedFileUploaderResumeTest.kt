@@ -473,6 +473,13 @@ class ChunkedFileUploaderResumeTest {
     }
 
     @Test
+    fun `a file whose size is an exact multiple of the chunk size gets no empty trailing part`() {
+        val missing = uploader.checkMissingChunks(emptyList(), 2L * CHUNK)
+
+        assertEquals(listOf(Chunk(0, CHUNK - 1L), Chunk(CHUNK.toLong(), 2L * CHUNK - 1)), missing)
+    }
+
+    @Test
     fun `only well formed parts of the right size are accepted`() {
         val length = FILE_SIZE.toLong()
         assertEquals(Chunk(0, CHUNK - 1L), uploader.parseUploadedChunk(PART_0, CHUNK.toLong(), length))
