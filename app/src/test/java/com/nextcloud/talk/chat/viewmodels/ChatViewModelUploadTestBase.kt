@@ -128,6 +128,8 @@ abstract class ChatViewModelUploadTestBase {
 
         SlowProvider.reset()
         Robolectric.buildContentProvider(SlowProvider::class.java).create(AUTHORITY)
+        // ChatViewModel's init combines the running uploads with this flow; a plain mock would return null.
+        whenever(chatRepository.getUploadPlaceholders(any())).thenReturn(flowOf(emptyMap()))
         runBlocking {
             whenever(chatRepository.addUploadPlaceholderMessage(any(), any(), any(), anyOrNull(), any(), any()))
                 .thenAnswer {

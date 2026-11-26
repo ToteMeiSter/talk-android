@@ -9,6 +9,7 @@ package com.nextcloud.talk.chat.viewmodels
 
 import android.app.Application
 import androidx.arch.core.executor.testing.InstantTaskExecutorRule
+import androidx.work.testing.WorkManagerTestInitHelper
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -16,6 +17,7 @@ import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
+import com.nextcloud.talk.application.NextcloudTalkApplication
 import com.nextcloud.talk.chat.data.ChatMessageRepository
 import com.nextcloud.talk.chat.data.io.AudioFocusRequestManager
 import com.nextcloud.talk.chat.data.io.MediaRecorderManager
@@ -87,6 +89,7 @@ import org.mockito.kotlin.verify
 import org.mockito.kotlin.verifyBlocking
 import org.mockito.kotlin.whenever
 import org.mockito.kotlin.wheneverBlocking
+import org.robolectric.RuntimeEnvironment
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
 
@@ -126,6 +129,13 @@ class ChatViewModelRoomJoinTest {
     private val viewModelJobs = mutableListOf<Job>()
     private val appScope = CoroutineScope(SupervisorJob() + UnconfinedTestDispatcher())
 
+    // ChatViewModel's init reconnects to running uploads through WorkManager and the application singleton;
+    // the setter of the singleton is protected: only the real application sets it
+    private val sharedApplicationField = NextcloudTalkApplication::class.java
+        .getDeclaredField("sharedApplication")
+        .apply { isAccessible = true }
+    private var previousApplication: NextcloudTalkApplication? = null
+
     private class TestOwner : LifecycleOwner {
         private val registry = LifecycleRegistry(this)
         override val lifecycle: Lifecycle get() = registry
@@ -138,6 +148,13 @@ class ChatViewModelRoomJoinTest {
         Dispatchers.setMain(UnconfinedTestDispatcher())
         RxJavaPlugins.setIoSchedulerHandler { Schedulers.trampoline() }
         RxAndroidPlugins.setMainThreadSchedulerHandler { Schedulers.trampoline() }
+
+        val context = RuntimeEnvironment.getApplication()
+        WorkManagerTestInitHelper.initializeTestWorkManager(context)
+        previousApplication = sharedApplicationField.get(null) as NextcloudTalkApplication?
+        val application = mock<NextcloudTalkApplication>()
+        whenever(application.applicationContext).thenReturn(context)
+        sharedApplicationField.set(null, application)
 
         val userManager: UserManager = mock()
         whenever(userManager.userFlow(USER.id!!)).thenReturn(MutableStateFlow(USER))
@@ -217,6 +234,7 @@ class ChatViewModelRoomJoinTest {
         // it may still be finishing there: wait for it, or it uses Main while resetMain() below replaces it.
         runBlocking { withTimeout(FLOW_TIMEOUT_MS) { viewModelJobs.joinAll() } }
         appScope.cancel()
+        sharedApplicationField.set(null, previousApplication)
         RxJavaPlugins.reset()
         RxAndroidPlugins.reset()
         Dispatchers.resetMain()
