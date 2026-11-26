@@ -16,6 +16,7 @@ import org.junit.Test
 import org.junit.rules.TemporaryFolder
 import java.io.BufferedReader
 import java.io.File
+import java.io.IOException
 import java.io.InputStreamReader
 
 /**
@@ -45,7 +46,17 @@ class ProcessLogcatLauncherTest {
         fakeLogcat.setExecutable(true)
     }
 
-    private fun alive(pid: Int) = File("/proc/$pid").exists() && !File("/proc/$pid/stat").readText().contains(") Z ")
+    /**
+     * One read decides: the process may vanish between an `exists()` check and the read itself, and both
+     * mean "gone". An unreadable stat (`IOException`, including `FileNotFoundException`) and a zombie
+     * state are both "the process has ended".
+     */
+    private fun alive(pid: Int): Boolean =
+        try {
+            !File("/proc/$pid/stat").readText().contains(") Z ")
+        } catch (_: IOException) {
+            false
+        }
 
     @Test
     fun `the wrapper passes the arguments and stop ends logcat`() {
