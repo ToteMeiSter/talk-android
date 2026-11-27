@@ -19,6 +19,7 @@ import com.nextcloud.talk.models.domain.ConversationModel
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.cancel
+
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.emptyFlow
@@ -182,11 +183,11 @@ class ChatViewModelReadMarkerTest {
             storedMarker(invocation.arguments[0] as Int)
             return Unit
         }
-        return if (invocation.method.returnType == Flow::class.java) {
-            emptyFlow<Any>()
-        } else {
-            Mockito.RETURNS_DEFAULTS.answer(invocation)
+        // a null flow would make the collectors of the view model fail after the test, in viewModelScope
+        if (Flow::class.java.isAssignableFrom(invocation.method.returnType)) {
+            return emptyFlow<Any>()
         }
+        return Mockito.RETURNS_DEFAULTS.answer(invocation)
     }
 
     private fun newViewModel(): ChatViewModel =

@@ -28,6 +28,7 @@ import com.nextcloud.talk.chat.audio.ChatAudioMetadata
 import com.nextcloud.talk.chat.audio.ChatAudioPlaybackState
 import com.nextcloud.talk.chat.ui.model.ChatMessageUi
 import com.nextcloud.talk.chat.ui.model.MessageTypeContent
+import com.nextcloud.talk.chat.viewmodels.isSelectable
 import com.nextcloud.talk.ui.PlaybackSpeed
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -120,7 +121,8 @@ fun ChatMessageView(
     ) {
         SwipeToReplyContainer(
             replyable = message.replyable && context.hasChatPermission,
-            onSwipeReply = { callbacks.onSwipeReply?.invoke(message.id) }
+            onSwipeReply = { callbacks.onSwipeReply?.invoke(message.id) },
+            swipeEnabled = !context.selectionActive
         ) {
             val onSelectionToggle = callbacks.onSelectionToggle
             MessageRowFrame(

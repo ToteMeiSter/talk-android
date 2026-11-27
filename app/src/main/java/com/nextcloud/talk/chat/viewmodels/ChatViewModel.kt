@@ -33,6 +33,7 @@ import com.nextcloud.talk.arbitrarystorage.ArbitraryStorageManager
 import com.nextcloud.talk.chat.RecordInputMode
 import com.nextcloud.talk.chat.releasesVideoAudioFocusOnClear
 import com.nextcloud.talk.chat.data.ChatMessageRepository
+import com.nextcloud.talk.chat.data.LinkPreviewCache
 import com.nextcloud.talk.chat.data.io.AudioFocusRequestManager
 import com.nextcloud.talk.chat.VideoMessageRecorder
 import com.nextcloud.talk.chat.data.io.MediaRecorderManager
@@ -418,8 +419,9 @@ class ChatViewModel @AssistedInject constructor(
     // the work must not be attached again
     private val cancelledUploadReferenceIds = mutableSetOf<String>()
 
-    // Maps referenceId -> the order files were sent in during this screen's session, assigned the
-    // moment each upload starts. Deliberately session-local and never persisted or sent anywhere:
+    // Maps referenceId -> the order files and text messages were sent in during this screen's session,
+    // assigned the moment each upload starts or each text message is stored for sending. Deliberately session-local and never persisted or sent anywhere:
+
     // uploads within a conversation are chained sequentially (see UploadAndShareFilesWorker.upload),
     // so a file can still be mid-upload when an earlier one in the same batch has already synced
     // back with its real, server-assigned timestamp - which, purely because of how long the earlier
@@ -431,25 +433,15 @@ class ChatViewModel @AssistedInject constructor(
     private val referenceIdSendSequence = mutableMapOf<String, Long>()
     private var nextSendSequenceValue = 0L
 
-    // Corrects the relative order of messages we know the local send sequence for (see
-    // referenceIdSendSequence above), leaving every other message's position untouched - so this
-    // never reorders anything relative to messages with no known hint (other users' messages,
-    // messages sent before this screen session, older history, ...), only fixes the relative order
-    // among messages from the SAME batch while some are still catching up on syncing. Applied the
-    // same way as applyMessageGrouping()/applySystemMessageGrouping() above it: in place, on the raw
-    // ChatMessage list, before it's mapped to ChatMessageUi.
-    @Suppress("Detekt.ReturnCount")
-    private fun reorderKnownSendSequence(messages: MutableList<ChatMessage>) {
-        if (referenceIdSendSequence.isEmpty()) return
-
-        val hintedIndices = messages.indices.filter { referenceIdSendSequence.containsKey(messages[it].referenceId) }
-        if (hintedIndices.size < 2) return
-
-        val hintedItems = hintedIndices.map { messages[it] }
-        val sortedItems = hintedItems.sortedBy { referenceIdSendSequence[it.referenceId] }
-        if (sortedItems == hintedItems) return
-
-        hintedIndices.forEachIndexed { position, index -> messages[index] = sortedItems[position] }
+    /**
+     * Records that the message with [referenceId] was sent from this chat now, after the ones recorded before. Its
+     * server copy has the server timestamp and a positive id, which sort it below the messages of the same batch still
+     * pending; the sequence keeps it in place, see [reorderKnownSendSequence].
+     */
+    fun registerSendSequence(referenceId: String) {
+        synchronized(referenceIdSendSequence) {
+            referenceIdSendSequence[referenceId] = nextSendSequenceValue++
+        }
     }
 
     fun cancelUpload(referenceId: String) {
@@ -478,8 +470,8 @@ class ChatViewModel @AssistedInject constructor(
      * The locally known media (image/video) groups for the media viewer, oldest first - every
      * already-synced MessageItem/MediaGroupItem currently loaded in this chat. This is what lets
      * the viewer navigate toward newer items instantly (bounded by what's already loaded here) and
-     * toward older items without a network round trip until this local knowledge is exhausted -
-     * see MediaViewerViewModel.loadOlderGroups(). The caller locates the tapped message's own
+     * toward older items, which MediaViewerViewModel.loadOlderGroups() extends from the network
+     * before this local knowledge is exhausted. The caller locates the tapped message's own
      * position within the result.
      */
     fun mediaViewerSeed(): List<MediaViewerGroup> =
@@ -708,6 +700,14 @@ class ChatViewModel @AssistedInject constructor(
     val actionFailures: SharedFlow<Int> = _actionFailures
 
     private val reactionLocks = mutableMapOf<Int, Mutex>()
+
+    private val linkPreviews = LinkPreviewCache(viewModelScope, LINK_PREVIEW_CACHE_SIZE) { url ->
+        withContext(Dispatchers.IO) {
+            chatNetworkDataSource
+                .getOpenGraph(currentUser.getCredentials(), currentUser.baseUrl!!, url)
+                ?.openGraphObject
+        }
+    }
 
     @Volatile private var firstUnreadMessageId: Int? = null
 
@@ -1321,7 +1321,9 @@ class ChatViewModel @AssistedInject constructor(
                 val authHeader = ApiUtils.getCredentials(user.username, user.token)
                 applyMessageGrouping(messages)
                 applySystemMessageGrouping(messages)
-                reorderKnownSendSequence(messages)
+                synchronized(referenceIdSendSequence) {
+                    reorderKnownSendSequence(messages, referenceIdSendSequence)
+                }
                 val uiMessages = messages.map { message ->
                     val parent: ChatMessage? = combinedMap[message.parentMessageId]
                     message.toUiModel(
@@ -1353,7 +1355,7 @@ class ChatViewModel @AssistedInject constructor(
                 _uiState.update { current ->
                     current.copy(items = items)
                 }
-                messageSelection.retainOnly(items.flatMapTo(HashSet()) { it.messageIds() })
+                messageSelection.retainOnly(items.flatMapTo(HashSet()) { it.selectableMessageIds() })
             }
             .launchIn(viewModelScope)
     }
@@ -2064,6 +2066,12 @@ class ChatViewModel @AssistedInject constructor(
 
     fun messageIdsToDelete(messageId: Int): List<Int> = messageIdsToDelete(_uiState.value.items, messageId)
 
+    fun messageIdsToForward(selectedIds: Collection<Int>): List<Int> =
+        messageIdsToForward(_uiState.value.items, selectedIds)
+
+    fun selectedIdOfRow(selectedIds: Set<Int>, messageId: Int): Int? =
+        selectedIdOfRow(_uiState.value.items, selectedIds, messageId)
+
     fun deleteChatMessages(credentials: String, urlsByMessageId: Map<Int, String>) {
         val deletedPlaceholder = NextcloudTalkApplication.sharedApplication!!
             .getString(R.string.message_deleted_by_you)
@@ -2592,7 +2600,7 @@ class ChatViewModel @AssistedInject constructor(
 
         val referenceId = SendMessageUtils().generateGroupedReferenceId(uploadId ?: UUID.randomUUID().toString(), order)
         metaDataMap["referenceId"] = referenceId
-        referenceIdSendSequence[referenceId] = nextSendSequenceValue++
+        registerSendSequence(referenceId)
 
         val metaData = Gson().toJson(metaDataMap)
 
@@ -2877,16 +2885,7 @@ class ChatViewModel @AssistedInject constructor(
         }
     }
 
-    suspend fun fetchOpenGraph(url: String): OpenGraphObjectDto? =
-        withContext(Dispatchers.IO) {
-            runCatching {
-                chatNetworkDataSource.getOpenGraph(
-                    currentUser.getCredentials(),
-                    currentUser.baseUrl!!,
-                    url
-                )?.openGraphObject
-            }.getOrNull()
-        }
+    suspend fun fetchOpenGraph(url: String): OpenGraphObjectDto? = linkPreviews.get(url)
 
     suspend fun updateMessageDraft() {
         val model = conversationRepository.getLocallyStoredConversation(
@@ -2973,6 +2972,27 @@ class ChatViewModel @AssistedInject constructor(
     }
 
     companion object {
+        // Corrects the relative order of messages we know the local send sequence for (see
+        // referenceIdSendSequence), leaving every other message's position untouched - so this
+        // never reorders anything relative to messages with no known hint (other users' messages,
+        // messages sent before this screen session, older history, ...), only fixes the relative order
+        // among messages from the SAME batch while some are still catching up on syncing. Applied the
+        // same way as applyMessageGrouping()/applySystemMessageGrouping(): in place, on the raw
+        // ChatMessage list, before it's mapped to ChatMessageUi.
+        @Suppress("Detekt.ReturnCount")
+        internal fun reorderKnownSendSequence(messages: MutableList<ChatMessage>, sequence: Map<String, Long>) {
+            if (sequence.isEmpty()) return
+
+            val hintedIndices = messages.indices.filter { sequence.containsKey(messages[it].referenceId) }
+            if (hintedIndices.size < 2) return
+
+            val hintedItems = hintedIndices.map { messages[it] }
+            val sortedItems = hintedItems.sortedBy { sequence[it.referenceId] }
+            if (sortedItems == hintedItems) return
+
+            hintedIndices.forEachIndexed { position, index -> messages[index] = sortedItems[position] }
+        }
+
         private val TAG = ChatViewModel::class.java.simpleName
         private const val MILLIS_PER_SECOND = 1000L
 
@@ -3053,6 +3073,26 @@ class ChatViewModel @AssistedInject constructor(
                 ?: listOf(messageId)
 
         /**
+         * Ids to forward for the selected [selectedIds]: a selected media group file stands for its whole group
+         * (same expansion as a delete), each message once, oldest first.
+         */
+        internal fun messageIdsToForward(items: List<ChatItem>, selectedIds: Collection<Int>): List<Int> =
+            selectedIds.flatMap { messageIdsToDelete(items, it) }.distinct().sorted()
+
+        /**
+         * The selected id of the row [messageId] is shown in, or null when the row is not selected. A media group
+         * row is selected by any one of its files, so a toggle of another file of it must not select it twice.
+         */
+        internal fun selectedIdOfRow(items: List<ChatItem>, selectedIds: Set<Int>, messageId: Int): Int? =
+            items
+                .filterIsInstance<ChatItem.MediaGroupItem>()
+                .firstOrNull { group -> group.messages.any { it.id == messageId } }
+                ?.messages
+                ?.firstOrNull { it.id in selectedIds }
+                ?.id
+                ?: messageId.takeIf { it in selectedIds }
+
+        /**
          * Returns the read marker that makes [messageId] the first unread message: the id of the
          * message right before it, or 0 when it is the oldest message there is, which marks the whole
          * conversation as unread. Returns null when the message is not part of [items] at all.
@@ -3095,6 +3135,7 @@ class ChatViewModel @AssistedInject constructor(
         private const val CONVERSATION_AND_USER_FLOW_SHARING_TIMEOUT_MS = 5_000L
         private const val WEBSOCKET_CONNECT_TIMEOUT_MS = 3000L
         private const val RECENT_THREADS_LIMIT = 50
+        private const val LINK_PREVIEW_CACHE_SIZE = 100
         private const val WEBSOCKET_POLL_INTERVAL_MS = 50L
         private const val ROOM_REFRESH_DEBOUNCE_MS = 500L
         private const val MESSAGES_REBUILD_WINDOW_MS = 200L
@@ -3164,11 +3205,19 @@ class ChatViewModel @AssistedInject constructor(
 
         fun containsMessage(messageId: Int): Boolean = messageId in messageIds()
 
-        /** Whether the row of this item shows the checkmark of a selection. A media group is selected by its last. */
+        /** Ids of the messages of this item that can be selected, see [isSelectable]. */
+        fun selectableMessageIds(): List<Int> =
+            when (this) {
+                is MessageItem -> listOf(uiMessage.id).filter { uiMessage.isSelectable() }
+                is MediaGroupItem -> messages.filter { it.isSelectable() }.map { it.id }
+                else -> emptyList()
+            }
+
+        /** Whether the row shows the checkmark of a selection. A media group shows it for any selected file of it. */
         fun isChecked(selectedMessageIds: Set<Int>): Boolean =
             when (this) {
                 is MessageItem -> uiMessage.id in selectedMessageIds
-                is MediaGroupItem -> messages.last().id in selectedMessageIds
+                is MediaGroupItem -> messages.any { it.id in selectedMessageIds }
                 else -> false
             }
 

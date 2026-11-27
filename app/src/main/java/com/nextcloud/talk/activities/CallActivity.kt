@@ -86,6 +86,7 @@ import com.nextcloud.talk.call.MediaConstraintsHelper
 import com.nextcloud.talk.call.MessageSender
 import com.nextcloud.talk.call.MessageSenderMcu
 import com.nextcloud.talk.call.MessageSenderNoMcu
+import com.nextcloud.talk.call.PhoneCallMediaPause
 import com.nextcloud.talk.call.e2ee.CallEncryption
 import com.nextcloud.talk.call.e2ee.FrameKeyRing
 import com.nextcloud.talk.call.MutableLocalCallParticipantModel
@@ -300,6 +301,8 @@ class CallActivity : CallBaseActivity() {
     private var videoOn = false
     private var microphoneOn = false
     private val callHoldState = CallHoldState()
+    private val phoneCallMediaPause = PhoneCallMediaPause()
+    private var isProximityNear = false
     var isVoiceOnlyCall = false
     private var isCallWithoutNotification = false
     private var isIncomingCallFromNotification = false
@@ -1312,6 +1315,7 @@ class CallActivity : CallBaseActivity() {
         // Create and audio manager that will take care of audio routing,
         // audio modes, audio device enumeration etc.
         audioManager = WebRtcAudioManager.create(applicationContext, isVoiceOnlyCall)
+        audioManager!!.setPhoneCallListener(::onPhoneCallStateChanged)
         // Store existing audio settings and change audio mode to
         // MODE_IN_COMMUNICATION for best possible VoIP performance.
         Log.d(TAG, "Starting the audio manager...")
@@ -1556,7 +1560,7 @@ class CallActivity : CallBaseActivity() {
                 CallForegroundService.AvatarInfo(roomToken, baseUrl, credentials, isOneToOneConversation)
             )
 
-            if (!microphoneOn && !appPreferences.callMicrophoneMuted) {
+            if (!microphoneOn && !appPreferences.callMicrophoneMuted && !phoneCallMediaPause.holdBackMicrophone()) {
                 onMicrophoneClick()
             }
         } else {
@@ -1569,10 +1573,14 @@ class CallActivity : CallBaseActivity() {
 
             CallPushPayload.CameraAtStart.ON -> {
                 binding!!.selfVideoViewWrapper.visibility = View.VISIBLE
-                // answered by "video" (window or notification) or dialled as a video call: the camera is on
-                onCameraClick()
-                if (cameraEnumerator!!.deviceNames.isEmpty()) {
-                    binding!!.cameraButton.visibility = View.GONE
+                // fork K7: the camera turns on when the call is answered by "video" (window or
+                // notification) or dialled as a video call — except while a phone call is ongoing
+                // (master's phoneCallMediaPause mechanism)
+                if (!phoneCallMediaPause.holdBackCamera()) {
+                    onCameraClick()
+                    if (cameraEnumerator!!.deviceNames.isEmpty()) {
+                        binding!!.cameraButton.visibility = View.GONE
+                    }
                 }
             }
 
@@ -1770,23 +1778,8 @@ class CallActivity : CallBaseActivity() {
         }
         if (permissionUtil!!.isMicrophonePermissionGranted()) {
             if (!isPushToTalkActive) {
-                microphoneOn = !microphoneOn
-                if (microphoneOn) {
-                    binding!!.microphoneButton.setImageResource(R.drawable.ic_mic_white_24px)
-                    updatePictureInPictureActions(
-                        R.drawable.ic_mic_white_24px,
-                        resources.getString(R.string.nc_pip_microphone_mute),
-                        MICROPHONE_PIP_REQUEST_MUTE
-                    )
-                } else {
-                    binding!!.microphoneButton.setImageResource(R.drawable.ic_mic_off_white_24px)
-                    updatePictureInPictureActions(
-                        R.drawable.ic_mic_off_white_24px,
-                        resources.getString(R.string.nc_pip_microphone_unmute),
-                        MICROPHONE_PIP_REQUEST_UNMUTE
-                    )
-                }
-                toggleMedia(microphoneOn, false)
+                phoneCallMediaPause.onMicrophoneChangedByUser()
+                setMicrophoneOn(!microphoneOn)
                 appPreferences.callMicrophoneMuted = !microphoneOn
             } else {
                 binding!!.microphoneButton.setImageResource(R.drawable.ic_mic_white_24px)
@@ -1810,14 +1803,11 @@ class CallActivity : CallBaseActivity() {
             return
         }
         if (permissionUtil!!.isCameraPermissionGranted()) {
-            videoOn = !videoOn
+            phoneCallMediaPause.onCameraChangedByUser()
             if (videoOn) {
-                binding!!.cameraButton.setImageResource(R.drawable.ic_videocam_white_24px)
-            } else {
-                binding!!.cameraButton.setImageResource(R.drawable.ic_videocam_off_white_24px)
                 blurBackgroundViewModel.turnOffBlur()
             }
-            toggleMedia(videoOn, true)
+            setCameraOn(!videoOn)
         } else if (shouldShowRequestPermissionRationale(Manifest.permission.CAMERA)) {
             showRationaleDialog(
                 Manifest.permission.CAMERA,
@@ -1825,6 +1815,64 @@ class CallActivity : CallBaseActivity() {
             )
         } else {
             requestPermissionLauncher.launch(PERMISSIONS_CAMERA)
+        }
+    }
+
+    private fun setMicrophoneOn(on: Boolean) {
+        microphoneOn = on
+        if (microphoneOn) {
+            binding!!.microphoneButton.setImageResource(R.drawable.ic_mic_white_24px)
+            updatePictureInPictureActions(
+                R.drawable.ic_mic_white_24px,
+                resources.getString(R.string.nc_pip_microphone_mute),
+                MICROPHONE_PIP_REQUEST_MUTE
+            )
+        } else {
+            binding!!.microphoneButton.setImageResource(R.drawable.ic_mic_off_white_24px)
+            updatePictureInPictureActions(
+                R.drawable.ic_mic_off_white_24px,
+                resources.getString(R.string.nc_pip_microphone_unmute),
+                MICROPHONE_PIP_REQUEST_UNMUTE
+            )
+        }
+        toggleMedia(microphoneOn, false)
+    }
+
+    private fun setCameraOn(on: Boolean) {
+        videoOn = on
+        if (videoOn) {
+            binding!!.cameraButton.setImageResource(R.drawable.ic_videocam_white_24px)
+        } else {
+            binding!!.cameraButton.setImageResource(R.drawable.ic_videocam_off_white_24px)
+        }
+        toggleMedia(videoOn && !isProximityNear, true)
+    }
+
+    /**
+     * Turns the microphone and camera off while a cellular phone call is active, so the other participants do not
+     * receive them, and turns them on again when the phone call ends, see [PhoneCallMediaPause].
+     */
+    private fun onPhoneCallStateChanged(isActive: Boolean) {
+        stopPushToTalk()
+        val current = PhoneCallMediaPause.Media(microphone = microphoneOn, camera = videoOn)
+        if (isActive) {
+            val paused = phoneCallMediaPause.onPhoneCallStarted(current)
+            Log.i(TAG, "Phone call active, pausing microphone=${paused.microphone} camera=${paused.camera}")
+            if (paused.microphone) {
+                setMicrophoneOn(false)
+            }
+            if (paused.camera) {
+                setCameraOn(false)
+            }
+        } else {
+            val restored = phoneCallMediaPause.onPhoneCallEnded(current)
+            Log.i(TAG, "Phone call ended, restoring microphone=${restored.microphone} camera=${restored.camera}")
+            if (restored.microphone) {
+                setMicrophoneOn(true)
+            }
+            if (restored.camera) {
+                setCameraOn(true)
+            }
         }
     }
 
@@ -1875,7 +1923,10 @@ class CallActivity : CallBaseActivity() {
                 localCallParticipantModel.isVideoEnabled = enable
             }
             isSelfVideoEnabled = enable
-            if (enable) {
+            if (enable && isInPipMode) {
+                pipUiInitialized = false
+                updateUiForPipMode()
+            } else if (enable) {
                 binding!!.selfVideoViewWrapper.visibility = View.VISIBLE
                 binding!!.pipSelfVideoRenderer.visibility = View.VISIBLE
 
@@ -2685,6 +2736,7 @@ class CallActivity : CallBaseActivity() {
                 audioManager!!.stop()
                 audioManager = null
             }
+            phoneCallMediaPause.reset()
         }
         if (videoSource != null) {
             videoSource = null
@@ -3324,7 +3376,9 @@ class CallActivity : CallBaseActivity() {
 
     @Subscribe(threadMode = ThreadMode.MAIN)
     fun onMessageEvent(proximitySensorEvent: ProximitySensorEvent) {
-        if (hasOwnCamera) {
+        isProximityNear =
+            proximitySensorEvent.proximitySensorEventType == ProximitySensorEvent.ProximitySensorEventType.SENSOR_NEAR
+        if (hasOwnCamera && !isVoiceOnlyCall) {
             val enableVideo = proximitySensorEvent.proximitySensorEventType ==
                 ProximitySensorEvent.ProximitySensorEventType.SENSOR_FAR &&
                 videoOn

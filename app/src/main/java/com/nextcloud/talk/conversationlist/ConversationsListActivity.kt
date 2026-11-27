@@ -79,6 +79,7 @@ import com.nextcloud.talk.conversationlist.viewmodels.ConversationsListViewModel
 import com.nextcloud.talk.conversationtags.viewmodels.ConversationTagsViewModel
 import com.nextcloud.talk.dagger.modules.assistedViewModels
 import com.nextcloud.talk.data.network.NetworkMonitor
+import com.nextcloud.talk.data.network.ServerConnectionInterceptor
 import com.nextcloud.talk.data.user.model.User
 import com.nextcloud.talk.events.ConversationsListFetchDataEvent
 import com.nextcloud.talk.events.EventStatus
@@ -220,7 +221,6 @@ class ConversationsListActivity : BaseActivity() {
     // checked when the list is created, not again when it is recreated, e.g. after a rotation
     private var isLocalNetworkCheckDue = false
     private val snackbarHostState = SnackbarHostState()
-    private val isMaintenanceModeState = MutableStateFlow(false)
     private val showUnreadBubbleState = MutableStateFlow(false)
     private val isFabVisibleState = MutableStateFlow(true)
     private val showNotificationWarningState = MutableStateFlow(false)
@@ -482,7 +482,6 @@ class ConversationsListActivity : BaseActivity() {
             viewThemeUtils = viewThemeUtils,
             showEcosystemFlow = showEcosystemState,
             snackbarHostState = snackbarHostState,
-            isMaintenanceModeFlow = isMaintenanceModeState,
             isOnlineFlow = networkMonitor.isOnline,
             showUnreadBubbleFlow = showUnreadBubbleState,
             isFabVisibleFlow = isFabVisibleState,
@@ -507,7 +506,6 @@ class ConversationsListActivity : BaseActivity() {
             onContactClick = { contactsViewModel.createRoom(ROOM_TYPE_ONE_ONE, null, it.actorId!!, null) },
             onLoadMoreClick = { conversationsListViewModel.loadMoreMessages(context) },
             onRefresh = {
-                isMaintenanceModeState.value = false
                 isRefreshingState.value = true
                 appPreferences.setConversationListPositionAndOffset(0, 0)
                 fetchRooms(forceFullSync = true)
@@ -1060,7 +1058,8 @@ class ConversationsListActivity : BaseActivity() {
             when (throwable.code()) {
                 HTTP_UNAUTHORIZED -> handleUnauthorized()
                 HTTP_CLIENT_UPGRADE_REQUIRED -> showOutdatedClientDialog()
-                HTTP_SERVICE_UNAVAILABLE -> showServiceUnavailableDialog(throwable)
+                // The status banner of BaseActivity shows the maintenance mode.
+                HTTP_SERVICE_UNAVAILABLE -> if (!isMaintenanceMode(throwable)) showErrorDialog()
                 else -> {
                     Log.e(TAG, "Http Exception in ConversationListActivity", throwable)
                     showErrorDialog()
@@ -1189,7 +1188,9 @@ class ConversationsListActivity : BaseActivity() {
             } else if (forwardMessage) {
                 val forwardFileKeys = intent.getStringArrayListExtra(KEY_FORWARD_FILE_KEYS).orEmpty()
                     .ifEmpty { listOfNotNull(intent.getStringExtra(KEY_FORWARD_FILE_KEY)) }
-                val canSend = hasChatPermission && !isReadOnlyConversation(selectedConversation!!)
+                val canSend = hasChatPermission &&
+                    !isReadOnlyConversation(selectedConversation!!) &&
+                    !shouldShowLobby(selectedConversation!!)
                 if (canSend && forwardFileKeys.isNotEmpty()) {
                     confirmForwardFile(forwardFileKeys, intent.getStringArrayListExtra(KEY_FORWARD_MSG_TEXTS))
                 } else if (canSend) {
@@ -1967,13 +1968,8 @@ class ConversationsListActivity : BaseActivity() {
         )
     }
 
-    private fun showServiceUnavailableDialog(httpException: HttpException) {
-        if (httpException.response()?.headers()?.get(MAINTENANCE_MODE_HEADER_KEY) == "1") {
-            isMaintenanceModeState.value = true
-        } else {
-            showErrorDialog()
-        }
-    }
+    private fun isMaintenanceMode(httpException: HttpException): Boolean =
+        ServerConnectionInterceptor.isMaintenanceMode(httpException.code(), httpException.response()?.headers())
 
     private fun showServerEOLDialog() {
         val dialogBuilder = MaterialAlertDialogBuilder(this)
@@ -2212,7 +2208,6 @@ class ConversationsListActivity : BaseActivity() {
         const val CLIENT_UPGRADE_MARKET_LINK = "market://details?id="
         const val CLIENT_UPGRADE_GPLAY_LINK = "https://play.google.com/store/apps/details?id="
         const val HTTP_SERVICE_UNAVAILABLE = 503
-        const val MAINTENANCE_MODE_HEADER_KEY = "X-Nextcloud-Maintenance-Mode"
         const val REQUEST_POST_NOTIFICATIONS_PERMISSION = 111
         const val DAYS_FOR_NOTIFICATION_WARNING = 5L
         const val NOTIFICATION_WARNING_DATE_NOT_SET = 0L

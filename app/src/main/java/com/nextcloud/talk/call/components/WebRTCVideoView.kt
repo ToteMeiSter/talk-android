@@ -14,7 +14,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import org.webrtc.EglBase
 import org.webrtc.MediaStream
-import org.webrtc.SurfaceViewRenderer
 
 @Composable
 fun WebRTCVideoView(mediaStream: MediaStream, eglBase: EglBase?) {
@@ -29,7 +28,7 @@ fun WebRTCVideoView(mediaStream: MediaStream, eglBase: EglBase?) {
 private fun WebRTCVideoViewForStream(mediaStream: MediaStream, eglBase: EglBase?) {
     AndroidView(
         factory = { context ->
-            SurfaceViewRenderer(context).apply {
+            SafeSurfaceViewRenderer(context).apply {
                 init(eglBase?.eglBaseContext, null)
                 setEnableHardwareScaler(true)
                 setMirror(false)

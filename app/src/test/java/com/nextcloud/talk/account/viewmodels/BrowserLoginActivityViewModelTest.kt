@@ -109,6 +109,20 @@ class BrowserLoginActivityViewModelTest {
     }
 
     @Test
+    fun `returning to the app polls right away once the login page is opened`() {
+        wheneverBlocking { repository.startLoginFlow(any(), any(), anyOrNull()) }.thenReturn(loginResponse)
+        wheneverBlocking { repository.pollLogin(any(), any(), any()) }.thenReturn(null)
+
+        viewModel.startWebBrowserLogin(BASE_URL)
+        viewModel.pollNow()
+        verify(repository, never()).pollNow()
+
+        viewModel.onLoginPageOpened()
+        viewModel.pollNow()
+        verify(repository, times(1)).pollNow()
+    }
+
+    @Test
     fun `a QR code login is not started twice either`() {
         wheneverBlocking { repository.startOTPLoginFlow(any(), any(), anyOrNull()) }.thenReturn(null)
 

@@ -61,6 +61,11 @@ public abstract class CallBaseActivity extends BaseActivity {
         }
     };
 
+    @Override
+    protected boolean getShowsStatusBanner() {
+        return false;
+    }
+
     @SuppressLint("ClickableViewAccessibility")
     @Override
     public void onCreate(Bundle savedInstanceState) {

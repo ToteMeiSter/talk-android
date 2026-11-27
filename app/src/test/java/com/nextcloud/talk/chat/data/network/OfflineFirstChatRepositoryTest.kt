@@ -601,8 +601,8 @@ class OfflineFirstChatRepositoryTest {
     @Test
     fun `temporary messages added in a burst keep their own rows`() =
         runTest {
-            // a forward of several messages adds them one after the other, often within one millisecond; a row key
-            // made of the clock made the later message overwrite the earlier one, which was then never sent
+            // a forward of several messages adds them one after the other, often within one millisecond; each needs
+            // its own row and its own id, which the chat list uses as key and sorts by within the same second
 
             repeat(BURST_SIZE) { index ->
                 repository.addTemporaryMessage(
@@ -617,6 +617,10 @@ class OfflineFirstChatRepositoryTest {
             val entityCaptor = argumentCaptor<ChatMessageEntity>()
             verifyBlocking(chatDao, times(BURST_SIZE)) { upsertChatMessage(entityCaptor.capture()) }
             assertEquals(BURST_SIZE, entityCaptor.allValues.map { it.internalId }.toSet().size)
+            val ids = entityCaptor.allValues.map { it.id }
+            assertEquals(BURST_SIZE, ids.toSet().size)
+            assertEquals("later messages sort after earlier ones", ids.sorted(), ids)
+            assertTrue("temporary ids stay negative", ids.all { it < 0 })
         }
 
     @Test
@@ -845,6 +849,22 @@ class OfflineFirstChatRepositoryTest {
 
             repository.editChatMessage(CREDENTIALS, MESSAGE_URL, MESSAGE_ID, EDITED_TEXT)
 
+            assertEquals(SERVER_TEXT, entity.message)
+            assertEquals(1234L, entity.lastEditTimestamp)
+        }
+
+    @Test
+    fun `editChatMessage keeps the edit when the server accepts it for a bot or Matterbridge`() =
+        runTest {
+            val entity = messageEntity(MESSAGE_ID)
+            givenCachedMessage(entity)
+            wheneverBlocking { network.editChatMessage(any(), any(), any()) } doSuspendableAnswer {
+                editedResponse(SERVER_TEXT, statusCode = HTTP_ACCEPTED, lastEditTimestamp = 1234L)
+            }
+
+            val result = repository.editChatMessage(CREDENTIALS, MESSAGE_URL, MESSAGE_ID, EDITED_TEXT)
+
+            assertTrue(result.isSuccess)
             assertEquals(SERVER_TEXT, entity.message)
             assertEquals(1234L, entity.lastEditTimestamp)
         }
@@ -1192,6 +1212,7 @@ class OfflineFirstChatRepositoryTest {
         private const val MESSAGE_URL = "$CHAT_URL/42"
         private const val DELETED_PLACEHOLDER = "Message deleted by you"
         private const val HTTP_OK = 200
+        private const val HTTP_ACCEPTED = 202
         private const val HTTP_BAD_REQUEST = 400
         private const val HTTP_NOT_FOUND = 404
         private const val HTTP_METHOD_NOT_ALLOWED = 405

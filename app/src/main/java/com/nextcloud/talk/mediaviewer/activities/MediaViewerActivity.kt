@@ -57,6 +57,9 @@ import androidx.compose.runtime.CompositionLocalProvider
 @AutoInjector(NextcloudTalkApplication::class)
 class MediaViewerActivity : BaseActivity() {
 
+    override val showsStatusBanner: Boolean
+        get() = false
+
     @Inject
     lateinit var viewModelFactory: ViewModelProvider.Factory
 

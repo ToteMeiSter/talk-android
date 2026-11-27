@@ -64,6 +64,7 @@ import com.nextcloud.talk.chat.data.model.decodeBlurhashPlaceholder
 import com.nextcloud.talk.chat.ui.model.ChatMessageUi
 import com.nextcloud.talk.chat.ui.model.MessageStatusIcon
 import com.nextcloud.talk.chat.ui.model.MessageTypeContent
+import com.nextcloud.talk.chat.viewmodels.isSelectable
 import com.nextcloud.talk.contacts.load
 import com.nextcloud.talk.ui.theme.mimetypeIconTint
 import com.nextcloud.talk.utils.DrawableUtils
@@ -140,7 +141,8 @@ fun MediaGroupMessage(
     ) {
         SwipeToReplyContainer(
             replyable = representative.replyable && context.hasChatPermission,
-            onSwipeReply = { callbacks.onSwipeReply?.invoke(representative.id) }
+            onSwipeReply = { callbacks.onSwipeReply?.invoke(representative.id) },
+            swipeEnabled = !context.selectionActive
         ) {
             val onSelectionToggle = callbacks.onSelectionToggle
             MessageRowFrame(

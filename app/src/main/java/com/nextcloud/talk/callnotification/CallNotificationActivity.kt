@@ -238,6 +238,10 @@ class CallNotificationActivity : CallBaseActivity() {
         finish()
     }
 
+    private fun dismissCallNotification() {
+        notificationTimestamp?.let { NotificationManagerCompat.from(context).cancel(it) }
+    }
+
     private fun proceedToCall() {
         val callIntent = Intent(this, CallActivity::class.java)
         intent.putExtra(KEY_ROOM_ONE_TO_ONE, isOneToOneCall)
@@ -245,10 +249,6 @@ class CallNotificationActivity : CallBaseActivity() {
         startActivity(callIntent)
         // stops the ringing, the notification check then closes this window
         dismissCallNotification()
-    }
-
-    private fun dismissCallNotification() {
-        notificationTimestamp?.let { NotificationManagerCompat.from(context).cancel(it) }
     }
 
     public override fun onDestroy() {

@@ -8,6 +8,9 @@
 package com.nextcloud.talk.chat.viewmodels
 
 import com.nextcloud.talk.chat.data.model.ChatMessage
+import com.nextcloud.talk.chat.ui.model.ChatMessageUi
+import com.nextcloud.talk.chat.ui.model.MessageTypeContent
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.update
@@ -60,10 +63,13 @@ class MessageSelection {
         _ids.value = emptySet()
     }
 
-    /** Drops the ids that are not in [existing] any more, e.g. a pending message replaced by its server copy. */
-    fun retainOnly(existing: Set<Int>) {
-        forwardTextLengths.keys.retainAll(existing)
-        _ids.update { ids -> ids.filterTo(HashSet()) { it in existing } }
+    /**
+     * Drops the ids that are not in [selectable] any more, e.g. a pending message replaced by its server copy or a
+     * message deleted meanwhile, which could neither be deselected nor forwarded.
+     */
+    fun retainOnly(selectable: Set<Int>) {
+        forwardTextLengths.keys.retainAll(selectable)
+        _ids.update { ids -> ids.filterTo(HashSet()) { it in selectable } }
     }
 
     /** Ends an active selection for the back action. Returns false, when there is none and back is not handled. */
@@ -118,3 +124,31 @@ fun isSelectableMessageId(messageId: Int): Boolean = messageId > 0
 /** Whether a message can be selected: not a system or deleted one, and not pending. Used by the row and the menu. */
 fun isSelectableMessage(isSystemMessage: Boolean, isDeleted: Boolean, messageId: Int): Boolean =
     !isSystemMessage && !isDeleted && isSelectableMessageId(messageId)
+
+fun ChatMessageUi.isSelectable(): Boolean =
+    isSelectableMessage(
+        isSystemMessage = content == MessageTypeContent.SystemMessage,
+        isDeleted = isDeleted,
+        messageId = id
+    )
+
+/**
+ * Loads the selected messages with [load] in the order of [ids]. A message that cannot be loaded, e.g. one deleted
+ * meanwhile, is left out instead of failing the whole selection and reported to [onFailure].
+ */
+@Suppress("TooGenericExceptionCaught")
+suspend fun <T> loadSelected(
+    ids: Collection<Int>,
+    onFailure: (Int, Exception) -> Unit = { _, _ -> },
+    load: suspend (Int) -> T
+): List<T> =
+    ids.mapNotNull { id ->
+        try {
+            load(id)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            onFailure(id, e)
+            null
+        }
+    }

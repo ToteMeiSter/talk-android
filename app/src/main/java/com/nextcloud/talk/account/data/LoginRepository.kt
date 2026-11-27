@@ -20,8 +20,9 @@ import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_TOKEN
 import com.nextcloud.talk.utils.bundle.BundleKeys.KEY_USERNAME
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.delay
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Credentials
 import java.io.IOException
 import java.net.URLDecoder
@@ -35,8 +36,15 @@ class LoginRepository(
 
     companion object {
         val TAG: String = LoginRepository::class.java.simpleName
-        private const val INTERVAL = 250L
+
+        /** The delay between two poll requests. */
+        private const val INTERVAL = 1000L
+
+        /** The longer delay after a poll request failed, e.g. because the network is unavailable. */
         private const val NETWORK_ERROR_INTERVAL = 3000L
+
+        /** How long the credentials are polled for. The server drops a login flow after 20 minutes. */
+        private const val POLL_TIMEOUT = 20 * 60 * 1000L
         private const val HTTP_OK = 200
 
         /** The status of a [LoginCompletion] for a login the server refused because of too many failed logins. */
@@ -68,17 +76,25 @@ class LoginRepository(
 
     private var shouldReauthorizeUser = false
     private var accountToReauthorize: Long? = null
+
+    @Volatile
     private var shouldLoop = true
 
+    private val pollNowRequests = Channel<Unit>(Channel.CONFLATED)
+
     /**
-     * Polls until the login is confirmed. Responses other than 200 mean "not confirmed yet", and so does a failed
-     * request (no network, interrupted connection), which is retried after a longer pause. The poll ends with null
-     * when the server answers 200 with an unusable body, when the login is canceled, or when [keepPolling] is false.
-     * It is checked again after every pause.
+     * Polls for the credentials until the user granted access in the browser, the login is cancelled or the server
+     * dropped the login flow. Returns null if no credentials were received.
      *
-     * The server hands out the login data only once, and the blocking request is not interrupted when the caller is
-     * canceled. [onConfirmed] is therefore called with the data as soon as it arrived, before the cancellation of
-     * the caller can discard it.
+     * A failed poll request doesn't end the polling. The app is in the background while the user logs in in the
+     * browser, and some devices block the network access of apps in the background after a few seconds, until the
+     * app is shown again.
+     *
+     * The poll ends with null when the server answers 200 with an unusable body: the server hands out the login
+     * data only once, retrying cannot succeed. The poll ends with null as well when [keepPolling] is false; it is
+     * checked again after every pause. The blocking request is not interrupted when the caller is canceled.
+     * [onConfirmed] is therefore called with the data as soon as it arrived, before the cancellation of the caller
+     * can discard it.
      */
     suspend fun pollLogin(
         response: LoginResponse,
@@ -86,23 +102,33 @@ class LoginRepository(
         keepPolling: () -> Boolean = { true }
     ): LoginCompletion? =
         withContext(ioDispatcher) {
-            while (shouldLoop && keepPolling()) {
-                val pause = try {
-                    val loginData = network.performLoginFlowV2(response) ?: return@withContext null
-                    if (loginData.status == HTTP_OK) {
-                        onConfirmed(loginData)
-                        return@withContext loginData
+            withTimeoutOrNull(POLL_TIMEOUT) {
+                while (shouldLoop && keepPolling()) {
+                    val pause = try {
+                        // Null for a 200 answer without usable login data: the poll is over.
+                        val loginData = network.performLoginFlowV2(response) ?: return@withTimeoutOrNull null
+                        if (loginData.status == HTTP_OK) {
+                            onConfirmed(loginData)
+                            return@withTimeoutOrNull loginData
+                        }
+                        INTERVAL // Not confirmed yet, retry
+                    } catch (e: IOException) {
+                        Log.w(TAG, "Polling the login failed, retrying: $e")
+                        NETWORK_ERROR_INTERVAL
                     }
-                    INTERVAL // No response yet, retry
-                } catch (e: IOException) {
-                    Log.w(TAG, "Polling the login failed, retrying: $e")
-                    NETWORK_ERROR_INTERVAL
+                    withTimeoutOrNull(pause) { pollNowRequests.receive() }
                 }
-
-                delay(pause)
+                null
             }
-            return@withContext null
         }
+
+    /**
+     * Polls for the credentials right away instead of after the delay between two polls, e.g. when the user returns
+     * from the browser.
+     */
+    fun pollNow() {
+        pollNowRequests.trySend(Unit)
+    }
 
     /**
      * Entry point for QR scanner

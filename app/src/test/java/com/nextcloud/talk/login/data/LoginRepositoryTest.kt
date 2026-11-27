@@ -20,10 +20,12 @@ import junit.framework.TestCase.assertNotNull
 import junit.framework.TestCase.assertNull
 import junit.framework.TestCase.assertTrue
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.async
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
+import kotlinx.coroutines.test.currentTime
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Before
@@ -62,6 +64,18 @@ class LoginRepositoryTest {
     lateinit var liveData: LiveData<WorkInfo?>
 
     lateinit var repo: LoginRepository
+
+    private companion object {
+        /** How long the server keeps a login flow. */
+        const val LOGIN_FLOW_LIFETIME = 20 * 60 * 1000L
+
+        /** The delay between two polls. */
+        const val POLL_INTERVAL = 1000L
+        const val SHORTER_THAN_POLL_INTERVAL = 100L
+
+        /** The delay after a failed request. */
+        const val RETRY_PAUSE = 3000L
+    }
 
     @Before
     fun setup() {
@@ -109,6 +123,68 @@ class LoginRepositoryTest {
 
             // Assert
             assertNull(result)
+            verify(networkLoginDataSource, times(1)).performLoginFlowV2(mockResponse)
+        }
+
+    @Test
+    fun `pollLogin retries after a failed request and returns the login`() =
+        runTest {
+            // The network of an app in the background is blocked, so poll requests fail until it is shown again
+            val mockResponse = LoginResponse("token123", "https://server.com/poll", "https://server.com/login")
+            val successfulLoginData = LoginCompletion(200, "https://server.com", "testuser", "apppass123")
+            whenever(networkLoginDataSource.performLoginFlowV2(mockResponse))
+                .thenThrow(SSLException("Read error"))
+                .thenThrow(IOException("no network"))
+                .thenReturn(successfulLoginData)
+
+            val result = virtualTimeRepo().pollLogin(mockResponse)
+
+            assertEquals(successfulLoginData, result)
+            verify(networkLoginDataSource, times(3)).performLoginFlowV2(mockResponse)
+        }
+
+    @Test
+    fun `pollNow polls right away instead of after the delay between two polls`() =
+        runTest {
+            val repo = LoginRepository(
+                networkLoginDataSource,
+                localLoginDataSource,
+                StandardTestDispatcher(testScheduler)
+            )
+            val mockResponse = LoginResponse("token123", "https://server.com/poll", "https://server.com/login")
+            val pendingLoginData = LoginCompletion(404, "", "", "")
+            val successfulLoginData = LoginCompletion(200, "https://server.com", "testuser", "apppass123")
+            whenever(networkLoginDataSource.performLoginFlowV2(mockResponse))
+                .thenReturn(pendingLoginData)
+                .thenReturn(successfulLoginData)
+
+            val result = async { repo.pollLogin(mockResponse) }
+            runCurrent()
+            verify(networkLoginDataSource, times(1)).performLoginFlowV2(mockResponse)
+
+            advanceTimeBy(SHORTER_THAN_POLL_INTERVAL)
+            repo.pollNow()
+
+            assertEquals(successfulLoginData, result.await())
+            assertTrue(currentTime < POLL_INTERVAL)
+        }
+
+    @Test
+    fun `pollLogin gives up when the poll timeout expires during the retries`() =
+        runTest {
+            val repo = LoginRepository(
+                networkLoginDataSource,
+                localLoginDataSource,
+                StandardTestDispatcher(testScheduler)
+            )
+            val mockResponse = LoginResponse("token123", "https://server.com/poll", "https://server.com/login")
+            whenever(networkLoginDataSource.performLoginFlowV2(mockResponse))
+                .thenThrow(IOException("no network"))
+
+            val result = repo.pollLogin(mockResponse)
+
+            assertNull(result)
+            assertTrue(currentTime >= LOGIN_FLOW_LIFETIME)
         }
 
     @Test
@@ -204,22 +280,6 @@ class LoginRepositoryTest {
         }
 
     @Test
-    fun `pollLogin retries after a failed request and returns the login`() =
-        runTest {
-            val mockResponse = LoginResponse("token123", "https://server.com/poll", "https://server.com/login")
-            val successfulLoginData = LoginCompletion(200, "https://server.com", "testuser", "apppass123")
-            whenever(networkLoginDataSource.performLoginFlowV2(mockResponse))
-                .thenThrow(SSLException("Read error"))
-                .thenThrow(IOException("no network"))
-                .thenReturn(successfulLoginData)
-
-            val result = virtualTimeRepo().pollLogin(mockResponse)
-
-            assertEquals(successfulLoginData, result)
-            verify(networkLoginDataSource, times(3)).performLoginFlowV2(mockResponse)
-        }
-
-    @Test
     fun `pollLogin pauses between retries of a failed request`() =
         runTest {
             val mockResponse = LoginResponse("token123", "https://server.com/poll", "https://server.com/login")
@@ -229,9 +289,14 @@ class LoginRepositoryTest {
             val job = backgroundScope.launch { repository.pollLogin(mockResponse) }
             runCurrent()
             verify(networkLoginDataSource, times(1)).performLoginFlowV2(mockResponse)
-            advanceTimeBy(1000)
+            advanceTimeBy(SHORTER_THAN_POLL_INTERVAL)
+            runCurrent()
             verify(networkLoginDataSource, times(1)).performLoginFlowV2(mockResponse)
-            advanceTimeBy(3000)
+            advanceTimeBy(POLL_INTERVAL)
+            runCurrent()
+            // Still within the network error interval: the failed request is retried less eagerly than pending ones.
+            verify(networkLoginDataSource, times(1)).performLoginFlowV2(mockResponse)
+            advanceTimeBy(RETRY_PAUSE - POLL_INTERVAL - SHORTER_THAN_POLL_INTERVAL)
             runCurrent()
             verify(networkLoginDataSource, times(2)).performLoginFlowV2(mockResponse)
             job.cancel()

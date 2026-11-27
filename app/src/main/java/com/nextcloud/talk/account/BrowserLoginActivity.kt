@@ -44,6 +44,9 @@ import javax.inject.Inject
 @AutoInjector(NextcloudTalkApplication::class)
 class BrowserLoginActivity : BaseActivity() {
 
+    override val showsStatusBanner: Boolean
+        get() = false
+
     private lateinit var binding: ActivityWebViewLoginBinding
 
     @Inject
@@ -81,6 +84,13 @@ class BrowserLoginActivity : BaseActivity() {
 
     init {
         sharedApplication!!.componentApplication.inject(this)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The user may come back from the browser after granting access, and the network may have been blocked
+        // while the app was in the background.
+        viewModel.pollNow()
     }
 
     private fun observe() {
